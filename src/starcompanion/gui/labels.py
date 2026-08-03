@@ -42,21 +42,33 @@ STYLE_PREVIEW_DEFAULT = "<span style='background:palette(highlight); color:palet
 
 EXACT_PREVIEW = frozenset(STYLE_PREVIEW_HTML)
 
-PREVIEW_EXACT_NOTE = "This is exactly how it appears."
+PREVIEW_EXACT_NOTE = "This is exactly how it will look."
 PREVIEW_APPROXIMATE_NOTE = (
-    "Approximate — Star Citizen draws its Highlight styles with its own colours, "
-    "so check how it reads in game."
+    "The four Highlight styles look different from each other in game, but "
+    "Star Citizen draws them itself and does not say how, so this app cannot "
+    "show you. Highlight 4 is the one contract packs normally use. To compare "
+    "them, apply one and look at a contract in game."
 )
 
 
+def can_preview(tag: str) -> bool:
+    """Whether the app can honestly show what this style looks like.
+
+    Only bold and italic. The Highlight styles are drawn by Star Citizen's own
+    interface, and searching the installed files turns up no definition for
+    them, so any preview would be invented -- and showing four identical boxes
+    would imply the four styles are the same, which they are not.
+    """
+    return tag in EXACT_PREVIEW
+
+
 def preview_html(tag: str, text: str) -> str:
-    """A sample of the styled text, for showing beside the picker."""
-    template = STYLE_PREVIEW_HTML.get(tag, STYLE_PREVIEW_DEFAULT)
-    return template.format(text=text)
+    """A sample of the styled text. Only call when `can_preview(tag)`."""
+    return STYLE_PREVIEW_HTML[tag].format(text=text)
 
 
 def preview_note(tag: str) -> str:
-    return PREVIEW_EXACT_NOTE if tag in EXACT_PREVIEW else PREVIEW_APPROXIMATE_NOTE
+    return PREVIEW_EXACT_NOTE if can_preview(tag) else PREVIEW_APPROXIMATE_NOTE
 
 # Which piece of information each style setting applies to.
 FIELD_NAMES: dict[str, str] = {

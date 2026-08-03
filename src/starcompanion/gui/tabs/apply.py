@@ -34,9 +34,26 @@ from ...inject import (
 )
 from ..state import AppState
 
+INTRO = (
+    "You do not need this tab for normal use — 'Update my game' on the Start "
+    "tab does the same job. It is here for three situations:\n"
+    "\n"
+    "  •  updating a second copy of the game, such as PTU, that was not "
+    "found automatically\n"
+    "  •  going back to an older backup rather than the most recent one\n"
+    "  •  starting from a clean file, when another contract pack is already "
+    "installed and you want it gone"
+)
+
 MODES = (
-    (MergeMode.MERGE, "Merge — only touch our keys, leave other edits alone"),
-    (MergeMode.OVERWRITE, "Overwrite — rebuild from a pristine global.ini"),
+    (
+        MergeMode.MERGE,
+        "Change only the contracts — leave anything else in the file alone",
+    ),
+    (
+        MergeMode.OVERWRITE,
+        "Start from a clean copy of the file, discarding other packs' changes",
+    ),
 )
 
 
@@ -46,13 +63,15 @@ class ApplyTab(QWidget):
         self.state = state
 
         self.target_edit = QLineEdit()
-        self.target_edit.setPlaceholderText("global.ini to modify")
+        self.target_edit.setPlaceholderText("the game text file to change")
         self.target_edit.textChanged.connect(self._target_changed)
         target_browse = QPushButton("Browse…")
         target_browse.clicked.connect(self._browse_target)
 
         self.stock_edit = QLineEdit()
-        self.stock_edit.setPlaceholderText("pristine global.ini (overwrite mode only)")
+        self.stock_edit.setPlaceholderText(
+            "a clean, unmodified copy of the file (only needed for the second option)"
+        )
         self.stock_edit.textChanged.connect(self._stock_changed)
         stock_browse = QPushButton("Browse…")
         stock_browse.clicked.connect(self._browse_stock)
@@ -66,46 +85,50 @@ class ApplyTab(QWidget):
         self.install_warning.setWordWrap(True)
         self.install_warning.setVisible(False)
 
-        target_box = QGroupBox("Target")
+        target_box = QGroupBox("Which file to change")
         target_layout = QVBoxLayout(target_box)
         row = QHBoxLayout()
-        row.addWidget(QLabel("File"))
+        row.addWidget(QLabel("File to change"))
         row.addWidget(self.target_edit, 1)
         row.addWidget(target_browse)
         target_layout.addLayout(row)
         row = QHBoxLayout()
-        row.addWidget(QLabel("Stock"))
+        row.addWidget(QLabel("Clean copy"))
         row.addWidget(self.stock_edit, 1)
         row.addWidget(stock_browse)
         target_layout.addLayout(row)
         target_layout.addWidget(self.mode)
         target_layout.addWidget(self.install_warning)
 
-        refresh = QPushButton("Refresh plan")
+        refresh = QPushButton("Check what would change")
         refresh.clicked.connect(self.refresh_plan)
-        self.plan_label = QLabel("No plan yet.")
+        self.plan_label = QLabel("Press the button above to see what would change.")
         self.plan_label.setWordWrap(True)
         self.plan_detail = QListWidget()
 
-        plan_box = QGroupBox("Plan (nothing is written)")
+        plan_box = QGroupBox("What would change (nothing is written yet)")
         plan_layout = QVBoxLayout(plan_box)
         plan_layout.addWidget(refresh)
         plan_layout.addWidget(self.plan_label)
         plan_layout.addWidget(self.plan_detail)
 
-        self.apply_button = QPushButton("Apply to global.ini…")
+        self.apply_button = QPushButton("Change this file…")
         self.apply_button.clicked.connect(self.apply_changes)
 
         self.backups = QListWidget()
-        restore_button = QPushButton("Restore selected backup")
+        restore_button = QPushButton("Go back to the selected version")
         restore_button.clicked.connect(self.restore_backup)
 
-        backup_box = QGroupBox("Backups")
+        backup_box = QGroupBox("Previous versions you can go back to")
         backup_layout = QVBoxLayout(backup_box)
         backup_layout.addWidget(self.backups)
         backup_layout.addWidget(restore_button)
 
+        intro = QLabel(INTRO)
+        intro.setWordWrap(True)
+
         layout = QVBoxLayout(self)
+        layout.addWidget(intro)
         layout.addWidget(target_box)
         layout.addWidget(plan_box, 1)
         layout.addWidget(self.apply_button)
@@ -163,10 +186,10 @@ class ApplyTab(QWidget):
         self.plan_detail.clear()
 
         if self.state.contracts is None:
-            self.plan_label.setText("Load contract data on the Source tab first.")
+            self.plan_label.setText("Read your contracts on the Start tab first.")
             return None
         if not self.state.target or not self.state.target.is_file():
-            self.plan_label.setText("Choose a global.ini to modify.")
+            self.plan_label.setText("Choose which file to change, above.")
             return None
 
         rendered = self.state.render()
@@ -197,8 +220,9 @@ class ApplyTab(QWidget):
         mode = self.state.profile.injection.merge_mode
         if mode is MergeMode.OVERWRITE and not self.state.stock:
             QMessageBox.warning(
-                self, "Stock file needed",
-                "Overwrite mode rebuilds from a pristine global.ini. Choose one first.",
+                self, "A clean copy is needed",
+                "Starting from a clean copy needs an unmodified version of the "
+                "file. Choose one above, or switch back to the first option.",
             )
             return
 

@@ -344,14 +344,14 @@ def test_plan_without_a_target_explains_rather_than_failing(window):
     window.apply.target_edit.setText("")
     window.state.set_target(None)
     assert window.apply.refresh_plan() is None
-    assert "Choose a global.ini" in window.apply.plan_label.text()
+    assert "Choose which file to change" in window.apply.plan_label.text()
 
 
 def test_plan_without_contracts_explains(qapp, target):
     window = MainWindow()
     window.apply.target_edit.setText(str(target))
     assert window.apply.refresh_plan() is None
-    assert "Source tab" in window.apply.plan_label.text()
+    assert "Start tab" in window.apply.plan_label.text()
 
 
 def test_declining_the_confirmation_writes_nothing(window, target, monkeypatch):
@@ -663,29 +663,30 @@ def test_step_two_only_talks_about_reward_numbers(community_rewards, window, fak
 # --- explaining what things do -----------------------------------------------
 
 
-def test_style_picker_shows_a_worked_example(window):
-    """A name like "Highlight 4" says nothing on its own."""
-    combo = window.formatting.default_tag
-    combo.setCurrentIndex(combo.findData("EM4"))
-
-    example = window.formatting.example.text()
-    assert "Reputation Awarded: 250" in example
-    assert "contract description" in example.lower()
-
-
-def test_bold_and_italic_examples_are_exact(window):
-    """Those two are ordinary formatting, so the example is truthful."""
+def test_bold_and_italic_show_a_real_example(window):
+    """Those two are ordinary formatting, so an example can be truthful."""
     combo = window.formatting.default_tag
     for tag in ("b", "i"):
         combo.setCurrentIndex(combo.findData(tag))
-        assert "exactly how it appears" in window.formatting.example_note.text()
+        assert window.formatting.example.isVisibleTo(window.formatting)
+        assert "Reputation Awarded: 250" in window.formatting.example.text()
+        assert "exactly how it will look" in window.formatting.example_note.text()
 
 
-def test_highlight_examples_are_marked_approximate(window):
-    """The game draws these itself, so the example must not overclaim."""
+def test_highlight_styles_show_no_example_at_all(window):
+    """Four identical boxes would suggest the four styles are identical.
+
+    The game draws them and does not say how, so the app says so instead of
+    inventing a preview.
+    """
     combo = window.formatting.default_tag
-    combo.setCurrentIndex(combo.findData("EM3"))
-    assert "Approximate" in window.formatting.example_note.text()
+    for tag in ("EM", "EM1", "EM2", "EM3", "EM4"):
+        combo.setCurrentIndex(combo.findData(tag))
+        assert not window.formatting.example.isVisibleTo(window.formatting)
+
+    note = window.formatting.example_note.text()
+    assert "cannot show you" in note
+    assert "Highlight 4" in note, "should still point at the sensible default"
 
 
 def test_custom_wording_explains_itself(window):
@@ -702,3 +703,22 @@ def test_custom_wording_explains_itself(window):
 def test_custom_wording_is_labelled_advanced(window):
     tabs = [window.tabs.tabText(i) for i in range(window.tabs.count())]
     assert "Advanced: custom wording" in tabs
+
+
+def test_advanced_apply_says_what_it_is_for(window):
+    """A tab called "Advanced: apply" needs to explain when to use it."""
+    from PySide6.QtWidgets import QLabel
+
+    intro = next(
+        l.text() for l in window.apply.findChildren(QLabel)
+        if l.text().startswith("You do not need this tab")
+    )
+    assert "PTU" in intro
+    assert "older backup" in intro
+    assert "Update my game" in intro, "should point at the simple path instead"
+
+
+def test_merge_modes_are_described_by_consequence(window):
+    shown = [window.apply.mode.itemText(i) for i in range(window.apply.mode.count())]
+    assert not any("global.ini" in text for text in shown)
+    assert any("leave anything else in the file alone" in text for text in shown)

@@ -31,6 +31,7 @@ from ..labels import (
     STYLE_CAPTION,
     TEXT_STYLES,
     TITLE_PREFIXES,
+    can_preview,
     preview_html,
     preview_note,
 )
@@ -117,17 +118,24 @@ class FormattingTab(QWidget):
         self.state.touch_profile()
 
     def _update_example(self, tag: str | None) -> None:
-        """Show a real contract line in the chosen style."""
+        """Show the chosen style, but only when that can be done truthfully."""
         if not tag:
             return
 
+        self.example_note.setText(preview_note(tag))
+
+        if not can_preview(tag):
+            # Four identical boxes would suggest the four styles are the same.
+            self.example.setVisible(False)
+            return
+
         styled = preview_html(tag, "Reputation Awarded: 250")
+        self.example.setVisible(True)
         self.example.setText(
             "A contract description would read:<br><br>"
             "Deal with the outlaws at Shubin Mining Facility.<br><br>"
             f"{styled}"
         )
-        self.example_note.setText(preview_note(tag))
 
     def _toggle_per_field(self, checked: bool) -> None:
         self.per_field.setVisible(checked)
