@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "name": "minimal",
+  "description": "Rep and blueprint flag in titles only; descriptions left as CIG wrote them.",
+  "fields": {
+    "reputation": false,
+    "blueprints": false,
+    "scenario_points": false,
+    "scrip": false,
+    "rank_gates": false,
+    "regional_variants": false,
+    "caveats": false
+  },
+  "formatting": {
+    "emphasis": "EM4",
+    "by_field": {},
+    "max_pool_items": null,
+    "title": {
+      "bracket_rep": true,
+      "bracket_bp": true,
+      "prefix": "none"
+    }
+  },
+  "templates": {},
+  "injection": {
+    "mode": "merge",
+    "backup": true
+  }
+}

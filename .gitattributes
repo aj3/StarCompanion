@@ -1,0 +1,9 @@
+# Normalise to LF in the repository so Windows and CI agree.
+* text=auto eol=lf
+
+# Never treat game or build data as text.
+*.p4k binary
+*.dcb binary
+*.exe binary
+*.zip binary
+*.dds binary

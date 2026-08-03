@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+
+# Never commit extracted game data or user game files
+*.p4k
+*.dcb
+cache/
+backups/
+
+# Test fixtures are copies of CIG/community strings, sourced locally by the
+# developer. Tests that need them skip when absent. See tests/samples/README.md
+tests/samples/*.ini
+
+# packaging build output
+build/
+dist/
+*.spec.bak

@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      # No game install on CI: fixtures are built from the format spec, and
+      # tests needing real data skip themselves.
+      - name: Test
+        run: pytest -q
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+      - name: Confirm no game data is committed
+        shell: bash
+        run: |
+          if git ls-files | grep -E '\.(p4k|dcb)$|tests/samples/.*\.ini$'; then
+            echo "::error::game data must not be committed"
+            exit 1
+          fi
+
+  build:
+    needs: test
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          pip install -e .
+          pip install pyinstaller
+
+      - name: Build one-file executable
+        run: pyinstaller packaging/starcompanion.spec
+
+      - name: Smoke test the CLI entry point
+        run: python -m starcompanion profiles
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: StarCompanion-windows
+          path: dist/StarCompanion.exe
+          if-no-files-found: error

@@ -1,0 +1,37 @@
+[project]
+name = "starcompanion"
+version = "0.1.0"
+description = "Datamine Star Citizen contract data and build a customizable global.ini localization override"
+requires-python = ">=3.12"
+dependencies = [
+    "PySide6>=6.7",
+    "Jinja2>=3.1",
+    "pydantic>=2.7",
+    "zstandard>=0.22",
+    "cryptography>=42",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+starcompanion = "starcompanion.__main__:main"
+
+[project.gui-scripts]
+starcompanion-gui = "starcompanion.gui.app:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+starcompanion = ["templates/**/*.j2", "profiles/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]

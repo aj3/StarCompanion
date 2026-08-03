@@ -1,0 +1,3 @@
+{% from "macros.j2" import title_tags, title_prefix %}
+{%- set prefix = title_prefix(contract, opts) -%}
+{{- prefix }}{% if prefix %} {% endif %}{{ base }}{{ title_tags(contract, reward, opts, em) }}

@@ -1,0 +1,89 @@
+{# Shared building blocks. Import into an org override to reuse the defaults:
+   {% from "macros.j2" import reward_block, title_tags %} #}
+
+{% macro rank_tag(contract) -%}
+{%- if contract.rank %}[{{ contract.rank }}]{% endif -%}
+{%- endmacro %}
+
+{% macro title_tags(contract, reward, opts, em) -%}
+{%- set tags = [] -%}
+{%- if opts.title_bracket_rep and reward.reputation -%}
+{%- set _ = tags.append("[" ~ reward.reputation_compact ~ " Rep]") -%}
+{%- endif -%}
+{%- if opts.title_bracket_bp and reward.awards_blueprints -%}
+{#- a trailing * means the pool is gated and may not drop for you -#}
+{%- set _ = tags.append("[BP]*" if reward.blueprints_conditional else "[BP]") -%}
+{%- endif -%}
+{%- if tags %} {{ em(tags | join(" "), "title") }}{% endif -%}
+{%- endmacro %}
+
+{% macro title_prefix(contract, opts) -%}
+{%- if opts.title_prefix == "org" -%}
+[{{ contract.org.name }}]
+{%- elif opts.title_prefix == "rank" and contract.rank -%}
+[{{ contract.rank }}]
+{%- elif opts.title_prefix == "org_rank" -%}
+[{{ contract.org.name }}{% if contract.rank %} {{ contract.rank }}{% endif %}]
+{%- endif -%}
+{%- endmacro %}
+
+{# Non-rank gates ride in the header parenthetical; rank gates get their own
+   line. Matches how the source data phrases them. #}
+{% macro gate_suffix(pool, GateKind) -%}
+{%- set qualifiers = pool.gates | rejectattr("kind", "equalto", GateKind.RANK)
+                                | map(attribute="label") | list -%}
+{%- if qualifiers %} ({{ qualifiers | join(", ") }} Only){% endif -%}
+{%- endmacro %}
+
+{% macro pool_block(pool, opts, em, GateKind) %}
+{% if pool.label %}
+{{ em(pool.label, "pools") }}
+{% endif %}
+{% if pool.example_locations and opts.show_regional_variants %}
+{{ em("[Regional Variants] example locations: " ~ pool.example_locations | join(", "), "regional") }}
+{% endif %}
+{% set ranks = pool.gates | selectattr("kind", "equalto", GateKind.RANK)
+                          | map(attribute="label") | list %}
+{% if opts.show_rank_gates and ranks %}
+{{ em("Awarded from " ~ ranks | join(" / ") ~ " level variants", "gates") }}
+{% endif %}
+{#- an inline expression, not {% if %}: trim_blocks would eat the line break
+    after a block tag and run every bullet together -#}
+{% for item in pool.items %}
+- {{ item }}{{ " [Owned]" if opts.show_owned and pool.is_owned(item) else "" }}
+{% endfor %}
+{% if pool.caveat and opts.show_caveats %}
+
+{{ pool.caveat }}
+{% endif %}
+{% endmacro %}
+
+{% macro reward_block(reward, pools, opts, em, GateKind) %}
+{% if opts.show_reputation and reward.reputation %}
+{{ em("Reputation Awarded" ~ (" (by difficulty):" if reward.reputation_varies else ":"), "reputation") }} {{ reward.reputation_display }}
+{% endif %}
+{% if opts.show_scrip and reward.scrip %}
+{{ em("MG Scrip:", "scrip") }} awarded (amount varies)
+{% endif %}
+{% if opts.show_scenario_points %}
+{% for points in reward.scenario_points %}
+{{ em("Scenario Progress Points " ~ "{:,}".format(points.amount) ~ (" (Split)" if points.split else ""), "scenario") }}
+{% endfor %}
+{% endif %}
+{#- Labelled pools are genuinely separate draws and get the plural heading;
+    regional variants are one pool shown per region, so they share a heading. -#}
+{% set labelled = pools | selectattr("label") | list %}
+{% if labelled %}
+
+{{ em("Multiple Blueprint Pools", "pools") }}
+{% for pool in pools %}
+{{ pool_block(pool, opts, em, GateKind) | trim }}
+{% endfor %}
+{% elif pools %}
+
+{{ em("Potential Blueprints" ~ gate_suffix(pools[0], GateKind), "pools") }}
+{% for pool in pools %}
+{{ pool_block(pool, opts, em, GateKind) | trim }}
+{% endfor %}
+{% endif %}
+{% endmacro %}

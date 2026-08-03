@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "name": "rank-first",
+  "description": "Org and difficulty rank lead every title so a flat contract list scans by tier. Rep is emphasised harder than gate notes.",
+  "fields": {
+    "reputation": true,
+    "blueprints": true,
+    "scenario_points": true,
+    "scrip": true,
+    "rank_gates": true,
+    "regional_variants": false,
+    "caveats": true
+  },
+  "formatting": {
+    "emphasis": "EM4",
+    "by_field": {
+      "reputation": "EM4",
+      "gates": "EM3",
+      "regional": "EM3",
+      "scrip": "EM3"
+    },
+    "max_pool_items": 12,
+    "title": {
+      "bracket_rep": true,
+      "bracket_bp": true,
+      "prefix": "org_rank"
+    }
+  },
+  "templates": {},
+  "injection": {
+    "mode": "merge",
+    "backup": true
+  }
+}

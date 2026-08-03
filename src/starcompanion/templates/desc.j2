@@ -1,0 +1,7 @@
+{% from "macros.j2" import reward_block %}
+{{- base }}
+{% set block = reward_block(reward, pools, opts, em, GateKind) | trim %}
+{% if block %}
+
+{{ block }}
+{% endif %}
