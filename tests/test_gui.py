@@ -12,9 +12,18 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("PySide6")
-
-from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
+# An explicit guard rather than pytest.importorskip: PySide6 itself imports
+# fine without Qt's system libraries, and loading QtWidgets then fails with a
+# plain ImportError ("libEGL.so.1: cannot open shared object file"). pytest
+# re-raises non-ModuleNotFoundError import failures, so importorskip would
+# still break collection here.
+try:
+    from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
+except ImportError as exc:  # pragma: no cover - depends on the machine
+    pytest.skip(
+        f"PySide6 widgets unavailable, skipping GUI tests: {exc}",
+        allow_module_level=True,
+    )
 
 from starcompanion.config import Profile, load_builtin  # noqa: E402
 from starcompanion.gui import AppState, MainWindow  # noqa: E402
