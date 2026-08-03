@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QCheckBox, QGroupBox, QLabel, QVBoxLayout, QWidget
 
+from ...features import community_rewards_enabled
 from ..state import AppState
 
 # (profile field, what it is called, what it actually adds, needs reward data)
@@ -78,7 +79,12 @@ class FieldsTab(QWidget):
         box = QGroupBox("Add this to contract descriptions")
         inner = QVBoxLayout(box)
 
-        for name, label, hint, _needs_rewards in TOGGLES:
+        for name, label, hint, needs_rewards in TOGGLES:
+            if needs_rewards and not community_rewards_enabled():
+                # Hidden rather than shown-and-inert: a tick box that provably
+                # cannot do anything reads as a broken feature.
+                continue
+
             check = QCheckBox(label)
             check.toggled.connect(lambda checked, n=name: self._set(n, checked))
             self.boxes[name] = check
@@ -115,6 +121,14 @@ class FieldsTab(QWidget):
         finally:
             self._loading = False
 
+        if not community_rewards_enabled():
+            self.notice.setText(
+                "Reputation amounts and blueprint lists are not stored on your "
+                "computer — Star Citizen's servers decide them — so they cannot "
+                "be shown from your game files alone."
+            )
+            return
+
         contracts = self.state.contracts
         has_rewards = bool(
             contracts and any(not c.reward.is_empty for c in contracts.contracts)
@@ -123,8 +137,7 @@ class FieldsTab(QWidget):
             ""
             if has_rewards
             else (
-                "None of these can be shown yet. Star Citizen does not store "
-                "reward information on your computer, so it has to come from a "
-                "contract list — see step 2 on the Start tab."
+                "None of these can be shown yet — add a contract list in step 2 "
+                "on the Start tab."
             )
         )

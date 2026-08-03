@@ -34,7 +34,9 @@ from PySide6.QtWidgets import (
 
 from ... import install as installs
 from ... import store
+from ...features import community_rewards_enabled
 from ...config import load_builtin
+from ..labels import PREFIX_CAPTION, TITLE_PREFIXES
 from ...ini import LocalizationFile
 from ...inject import apply as apply_changes
 from ...inject import plan as plan_injection
@@ -65,16 +67,19 @@ class StartTab(QWidget):
         self.load_error: str | None = None
 
         layout = QVBoxLayout(self)
-        layout.addWidget(_heading("Add reward information to your Star Citizen contracts"))
+        layout.addWidget(_heading("Make your Star Citizen contract list easier to read"))
         layout.addWidget(
             _muted(
-                "Star Citizen does not tell you how much reputation a contract pays, "
-                "or which blueprints it can drop. This adds that to the contract text."
+                "Reads the contracts out of your own game files and rewrites their "
+                "titles, so a long list can be scanned by mission giver and "
+                "difficulty instead of read line by line."
             )
         )
 
         layout.addWidget(self._build_game_step())
-        layout.addWidget(self._build_data_step())
+        self.data_step = self._build_data_step()
+        self.data_step.setVisible(community_rewards_enabled())
+        layout.addWidget(self.data_step)
         layout.addWidget(self._build_look_step())
 
         self.go = QPushButton("Update my game")
@@ -276,23 +281,34 @@ class StartTab(QWidget):
     # --- step 3: the look ----------------------------------------------------
 
     def _build_look_step(self) -> QGroupBox:
-        box = QGroupBox("Step 3 — How much detail")
+        # Numbered at build time: with step 2 hidden this must read "Step 2",
+        # not leave a gap in the sequence.
+        number = 3 if community_rewards_enabled() else 2
+        box = QGroupBox(f"Step {number} — How to label each contract")
         inner = QVBoxLayout(box)
 
         self.look = QComboBox()
-        for name, label, hint in LOOKS:
-            self.look.addItem(label, name)
+        for value, label, _hint in TITLE_PREFIXES:
+            self.look.addItem(label, value)
         self.look.currentIndexChanged.connect(self._look_changed)
         inner.addWidget(self.look)
 
-        self.look_hint = _muted(LOOKS[0][2])
+        self.look_hint = _muted(TITLE_PREFIXES[0][2])
         inner.addWidget(self.look_hint)
+        inner.addWidget(_muted(PREFIX_CAPTION))
+
+        # "Both" is the useful default: it is what makes a long list scannable.
+        self.look.setCurrentIndex(self.look.findData("org_rank"))
 
         return box
 
     def _look_changed(self, index: int) -> None:
-        self.look_hint.setText(LOOKS[index][2])
-        self.state.set_profile(load_builtin(self.look.itemData(index)))
+        value = self.look.itemData(index)
+        self.look_hint.setText(
+            next(hint for v, _n, hint in TITLE_PREFIXES if v == value)
+        )
+        self.state.profile.formatting.title.prefix = value
+        self.state.touch_profile()
 
     # --- doing it ------------------------------------------------------------
 

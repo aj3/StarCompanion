@@ -31,6 +31,7 @@ from ..labels import (
     TEXT_STYLES,
     TITLE_PREFIXES,
 )
+from ...features import community_rewards_enabled
 from ..state import AppState
 
 
@@ -43,7 +44,9 @@ class FormattingTab(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(self._build_style_box())
         layout.addWidget(self._build_title_box())
-        layout.addWidget(self._build_length_box())
+        self.length_box = self._build_length_box()
+        self.length_box.setVisible(community_rewards_enabled())
+        layout.addWidget(self.length_box)
         layout.addStretch(1)
 
         state.profileChanged.connect(self.refresh)
@@ -144,13 +147,16 @@ class FormattingTab(QWidget):
 
         self.bracket_rep = QCheckBox("Also show the reputation number in the title")
         self.bracket_rep.toggled.connect(lambda v: self._set_title("bracket_rep", v))
+        self.bracket_rep.setVisible(community_rewards_enabled())
         layout.addWidget(self.bracket_rep)
 
         self.bracket_bp = QCheckBox("Also mark titles that can award a blueprint")
         self.bracket_bp.toggled.connect(lambda v: self._set_title("bracket_bp", v))
+        self.bracket_bp.setVisible(community_rewards_enabled())
         layout.addWidget(self.bracket_bp)
 
         self.reward_note = _muted("")
+        self.reward_note.setVisible(community_rewards_enabled())
         layout.addWidget(self.reward_note)
 
         return box

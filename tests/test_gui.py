@@ -48,6 +48,12 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
+@pytest.fixture
+def community_rewards(monkeypatch):
+    """Turn on the hidden community-rewards capability for tests that need it."""
+    monkeypatch.setenv("STARCOMPANION_COMMUNITY_REWARDS", "1")
+
+
 @pytest.fixture(autouse=True)
 def no_real_game(monkeypatch, tmp_path):
     """Keep tests off the developer's actual install.
@@ -100,16 +106,16 @@ def test_sample_contract_prefers_one_with_rewards(window):
 # --- source tab --------------------------------------------------------------
 
 
-def test_source_summary_reports_what_was_loaded(window):
+def test_source_summary_reports_what_was_loaded(community_rewards, window):
     text = window.source.summary_text()
     assert "1 contracts" in text and "2 localization keys" in text
 
 
-def test_source_summary_before_loading(qapp):
+def test_source_summary_before_loading(community_rewards, qapp):
     assert "No contract data" in MainWindow().source.summary_text()
 
 
-def test_loading_bad_path_does_not_crash(window, tmp_path, monkeypatch):
+def test_loading_bad_path_does_not_crash(community_rewards, window, tmp_path, monkeypatch):
     monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
     window.source.path_edit.setText(str(tmp_path / "nope.ini"))
     window.source.load_contracts()
@@ -119,7 +125,7 @@ def test_loading_bad_path_does_not_crash(window, tmp_path, monkeypatch):
 # --- fields tab --------------------------------------------------------------
 
 
-def test_field_checkboxes_reflect_the_profile(window):
+def test_field_checkboxes_reflect_the_profile(community_rewards, window):
     window.state.set_profile(load_builtin("minimal"))
     assert not window.fields.boxes["reputation"].isChecked()
 
@@ -127,7 +133,7 @@ def test_field_checkboxes_reflect_the_profile(window):
     assert window.fields.boxes["reputation"].isChecked()
 
 
-def test_toggling_a_checkbox_updates_the_profile_and_output(window):
+def test_toggling_a_checkbox_updates_the_profile_and_output(community_rewards, window):
     assert "Reputation Awarded" in window.state.render().values["Org_x_desc"]
 
     window.fields.boxes["reputation"].setChecked(False)
@@ -136,7 +142,7 @@ def test_toggling_a_checkbox_updates_the_profile_and_output(window):
     assert "Reputation Awarded" not in window.state.render().values["Org_x_desc"]
 
 
-def test_every_toggle_is_bound(window):
+def test_every_toggle_is_bound(community_rewards, window):
     for name, box in window.fields.boxes.items():
         before = getattr(window.state.profile.fields, name)
         box.setChecked(not before)
@@ -205,6 +211,37 @@ def test_title_prefix_choices_avoid_jargon(window):
     combo = window.formatting.prefix
     shown = [combo.itemText(i) for i in range(combo.count())]
     assert shown == ["Nothing", "Who is offering it", "How hard it is", "Both"]
+
+
+def test_community_rewards_are_hidden_by_default(qapp):
+    """The project reads the game; someone else's download is not the main flow."""
+    fresh = MainWindow()
+    tabs = [fresh.tabs.tabText(i) for i in range(fresh.tabs.count())]
+
+    assert "What to show" not in tabs
+    assert "Advanced: data" not in tabs
+    assert not fresh.start.data_step.isVisibleTo(fresh.start)
+
+
+def test_community_rewards_can_be_switched_back_on(community_rewards, qapp):
+    """Hidden, not removed: the code path is intact behind an environment flag."""
+    fresh = MainWindow()
+    tabs = [fresh.tabs.tabText(i) for i in range(fresh.tabs.count())]
+
+    assert "What to show" in tabs
+    assert fresh.start.data_step.isVisibleTo(fresh.start)
+
+
+def test_step_numbering_has_no_gap_when_step_two_is_hidden(qapp):
+    from PySide6.QtWidgets import QGroupBox
+
+    fresh = MainWindow()
+    titles = [
+        b.title() for b in fresh.start.findChildren(QGroupBox)
+        if b.isVisibleTo(fresh.start)
+    ]
+    assert titles[0].startswith("Step 1")
+    assert titles[1].startswith("Step 2"), "must not jump from 1 to 3"
 
 
 def test_title_prefix_changes_rendered_titles(window):
@@ -394,7 +431,7 @@ def test_overwrite_without_stock_warns_instead_of_writing(window, target, monkey
 # --- profile management ------------------------------------------------------
 
 
-def test_loading_a_builtin_updates_every_tab(window):
+def test_loading_a_builtin_updates_every_tab(community_rewards, window):
     window.load_builtin_profile("minimal")
 
     assert window.state.profile.name == "minimal"
@@ -402,7 +439,7 @@ def test_loading_a_builtin_updates_every_tab(window):
     assert window.windowTitle().endswith("minimal")
 
 
-def test_profile_save_and_load_round_trips_through_the_ui(window, tmp_path):
+def test_profile_save_and_load_round_trips_through_the_ui(community_rewards, window, tmp_path):
     window.fields.boxes["scrip"].setChecked(False)
     combo = window.formatting.default_tag
     combo.setCurrentIndex(combo.findData("EM2"))
@@ -524,11 +561,12 @@ def test_language_warning_clears_once_configured(window, fake_game):
     assert not window.start.language_warning.isVisibleTo(window.start)
 
 
-def test_choosing_a_look_switches_profile(window):
-    index = window.start.look.findData("minimal")
-    window.start.look.setCurrentIndex(index)
+def test_choosing_a_label_style_sets_the_title_prefix(window):
+    window.start.look.setCurrentIndex(window.start.look.findData("org"))
+    assert window.state.profile.formatting.title.prefix == "org"
 
-    assert window.state.profile.name == "minimal"
+    window.start.look.setCurrentIndex(window.start.look.findData("none"))
+    assert window.state.profile.formatting.title.prefix == "none"
 
 
 def test_update_without_a_game_explains_rather_than_failing(window, monkeypatch):
@@ -615,7 +653,7 @@ def test_contracts_status_reports_what_was_read(window, fake_game):
     assert "Read 1 contracts" in window.start.contracts_status_text()
 
 
-def test_step_two_only_talks_about_reward_numbers(window, fake_game):
+def test_step_two_only_talks_about_reward_numbers(community_rewards, window, fake_game):
     window.start.install = fake_game
     window.start.refresh()
     text = window.start.data_status_text()

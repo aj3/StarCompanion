@@ -4,10 +4,7 @@ Reads Star Citizen's own game files and builds a **customisable** `global.ini`
 localization override — so contract titles and descriptions show the reward
 information the game leaves out, formatted the way *you* want it.
 
-Inspired by [MrKraken's StarStrings](https://github.com/MrKraken/StarStrings),
-which pioneered the idea. The difference is that formatting here is yours to
-change: which fields appear, how they are emphasised, and per-mission-giver
-templates you can edit live.
+Everything it shows is read from your own installation. Nothing is downloaded.
 
 > [!IMPORTANT]
 > Unofficial fan project. Not affiliated with, endorsed by, or approved by
@@ -65,12 +62,10 @@ starcompanion-gui          # or: python -m starcompanion.gui.app
 
 It opens on **Start here**, which is the whole job in three steps:
 
-1. **Your game** — found automatically. You are never asked to type a path, and
-   the contracts are read from the game itself.
-2. **Reward numbers** — *optional*. Reputation amounts and blueprint lists are
-   not stored anywhere on your computer, so showing those needs a community
-   list. Everything else works without it.
-3. **How much detail** — three presets in plain language.
+1. **Your game** — found automatically. You are never asked to type a path.
+   One button reads the contracts out of it.
+2. **How to label each contract** — put the mission giver, the difficulty, or
+   both at the front of every title.
 
 Then one button: **Update my game**. It says how many contracts will change,
 takes a backup, and there is an **Undo my last change** button beside it.
@@ -189,6 +184,25 @@ cached per game build, so a patch re-reads automatically.
 Every rendered value passes the validator before it can be written; anything
 that would break in game is skipped rather than emitted, even if your own
 template produced it.
+
+## Community reward data (switched off)
+
+Reputation amounts and blueprint lists are **not on your computer** — Star
+Citizen's servers decide them, proven by scanning every text-like file in the
+archive (see [docs/format-notes.md](docs/format-notes.md) §4). Showing them
+therefore means trusting a community-maintained list.
+
+That is deliberately **hidden**, because the point of this project is to read
+the game rather than re-publish someone else's file. The code is intact and
+tested — `sources/contracts_ini.py`, `sources/scmdb.py`, `sources/merge.py` —
+and can be switched back on:
+
+```bash
+STARCOMPANION_COMMUNITY_REWARDS=1 starcompanion-gui
+```
+
+The command line always keeps `--contracts` and the `scmdb` command: those are
+explicit opt-ins nobody meets by accident.
 
 ## Current limitations
 
