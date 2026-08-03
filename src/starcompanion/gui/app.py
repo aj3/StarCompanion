@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 
 from ..config import Profile, UnsupportedProfileVersion, builtin_profiles, load_builtin
 from .state import AppState
-from .tabs import ApplyTab, FieldsTab, FormattingTab, SourceTab, TemplatesTab
+from .tabs import ApplyTab, FieldsTab, FormattingTab, SourceTab, StartTab, TemplatesTab
 
 
 class MainWindow(QMainWindow):
@@ -25,6 +25,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("StarCompanion")
         self.resize(900, 700)
 
+        self.start = StartTab(self.state)
         self.source = SourceTab(self.state)
         self.fields = FieldsTab(self.state)
         self.formatting = FormattingTab(self.state)
@@ -32,11 +33,14 @@ class MainWindow(QMainWindow):
         self.apply = ApplyTab(self.state)
 
         tabs = QTabWidget()
-        tabs.addTab(self.source, "Source")
-        tabs.addTab(self.fields, "Fields")
-        tabs.addTab(self.formatting, "Formatting")
-        tabs.addTab(self.templates, "Templates")
-        tabs.addTab(self.apply, "Apply")
+        # Start first and selected: everything needed for the common case is
+        # there, and the rest is for people who want to tune the output.
+        tabs.addTab(self.start, "Start here")
+        tabs.addTab(self.fields, "What to show")
+        tabs.addTab(self.formatting, "Appearance")
+        tabs.addTab(self.templates, "Custom wording")
+        tabs.addTab(self.source, "Advanced: data")
+        tabs.addTab(self.apply, "Advanced: apply")
         self.setCentralWidget(tabs)
         self.tabs = tabs
 

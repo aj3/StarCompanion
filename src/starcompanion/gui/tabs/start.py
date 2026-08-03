@@ -1,0 +1,389 @@
+"""The Start tab: the whole job in three steps, for someone who has never
+used a tool like this.
+
+Design rules here, deliberately different from the other tabs:
+
+- **Never ask for a path we can work out.** The game is found automatically;
+  the file to modify is derived from it.
+- **Say what things are, not what they are called.** "Your Star Citizen game",
+  not "target global.ini".
+- **One obvious button.** Everything else is optional.
+- **Explain the consequence before it happens**, not in a dialog afterwards.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices, QFont
+from PySide6.QtWidgets import (
+    QComboBox,
+    QFileDialog,
+    QFrame,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QProgressDialog,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ... import install as installs
+from ...config import load_builtin
+from ...ini import LocalizationFile
+from ...inject import apply as apply_changes
+from ...inject import plan as plan_injection
+from ...inject import restore as restore_backup
+from ...sources import contracts_ini
+from ..state import AppState
+
+CONTRACTS_URL = (
+    "https://github.com/MrKraken/StarStrings/blob/master/src/For_Tool_Creators/contracts.ini"
+)
+
+OK = "✅"
+TODO = "⬜"
+WARN = "⚠"
+
+LOOKS = (
+    ("default", "Show everything", "Reputation, blueprints and event points on every contract."),
+    ("minimal", "Just the essentials", "Only a rep number and a blueprint marker in the title."),
+    ("rank-first", "Sort-friendly", "Puts the mission giver and difficulty at the front of every title."),
+)
+
+
+class StartTab(QWidget):
+    def __init__(self, state: AppState, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.state = state
+        self.install: installs.GameInstall | None = None
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(_heading("Add reward information to your Star Citizen contracts"))
+        layout.addWidget(
+            _muted(
+                "Star Citizen does not tell you how much reputation a contract pays, "
+                "or which blueprints it can drop. This adds that to the contract text."
+            )
+        )
+
+        layout.addWidget(self._build_game_step())
+        layout.addWidget(self._build_data_step())
+        layout.addWidget(self._build_look_step())
+
+        self.go = QPushButton("Update my game")
+        self.go.setMinimumHeight(44)
+        font = self.go.font()
+        font.setPointSize(font.pointSize() + 2)
+        font.setBold(True)
+        self.go.setFont(font)
+        self.go.clicked.connect(self.update_game)
+        layout.addWidget(self.go)
+
+        self.footer = QLabel()
+        self.footer.setWordWrap(True)
+        self.footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.footer)
+
+        undo_row = QHBoxLayout()
+        undo_row.addStretch(1)
+        self.undo = QPushButton("Undo my last change")
+        self.undo.clicked.connect(self.undo_last)
+        undo_row.addWidget(self.undo)
+        undo_row.addStretch(1)
+        layout.addLayout(undo_row)
+
+        layout.addStretch(1)
+
+        state.contractsChanged.connect(self.refresh)
+        self.detect_game()
+        self.refresh()
+
+    # --- step 1: the game ----------------------------------------------------
+
+    def _build_game_step(self) -> QGroupBox:
+        box = QGroupBox("Step 1 — Your game")
+        inner = QVBoxLayout(box)
+
+        self.game_status = QLabel()
+        self.game_status.setWordWrap(True)
+        inner.addWidget(self.game_status)
+
+        self.language_warning = QLabel()
+        self.language_warning.setWordWrap(True)
+        self.language_warning.setVisible(False)
+        inner.addWidget(self.language_warning)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        again = QPushButton("Search again")
+        again.clicked.connect(lambda: (self.detect_game(), self.refresh()))
+        row.addWidget(again)
+        choose = QPushButton("Choose folder…")
+        choose.clicked.connect(self.choose_game)
+        row.addWidget(choose)
+        inner.addLayout(row)
+
+        return box
+
+    def detect_game(self) -> None:
+        self.install = installs.find_default()
+        self._adopt_install()
+
+    def choose_game(self) -> None:
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Find your Star Citizen folder (the one containing Data.p4k)"
+        )
+        if not chosen:
+            return
+
+        found = installs.identify(Path(chosen))
+        if found is None:
+            QMessageBox.warning(
+                self,
+                "That does not look like Star Citizen",
+                "No Data.p4k was found there.\n\n"
+                "Look for a folder called LIVE, usually inside\n"
+                "Roberts Space Industries\\StarCitizen.",
+            )
+            return
+
+        self.install = found
+        self._adopt_install()
+        self.refresh()
+
+    def _adopt_install(self) -> None:
+        """Derive everything else from the install so nothing else is asked."""
+        if self.install is None:
+            self.state.set_target(None)
+            return
+        self.state.set_target(self.install.localization())
+
+    # --- step 2: contract data -----------------------------------------------
+
+    def _build_data_step(self) -> QGroupBox:
+        box = QGroupBox("Step 2 — Contract information")
+        inner = QVBoxLayout(box)
+
+        self.data_status = QLabel()
+        self.data_status.setWordWrap(True)
+        inner.addWidget(self.data_status)
+
+        inner.addWidget(
+            _muted(
+                "Reward values are not stored in the game files, so they come from "
+                "the community's contract list. Download it once, then pick it here."
+            )
+        )
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        download = QPushButton("Get the file…")
+        download.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(CONTRACTS_URL)))
+        row.addWidget(download)
+        pick = QPushButton("I have it — choose file…")
+        pick.clicked.connect(self.choose_contracts)
+        row.addWidget(pick)
+        inner.addLayout(row)
+
+        return box
+
+    def choose_contracts(self) -> None:
+        chosen, _ = QFileDialog.getOpenFileName(
+            self, "Choose contracts.ini", "", "Contract list (*.ini);;All files (*)"
+        )
+        if not chosen:
+            return
+
+        try:
+            self.state.set_contracts(contracts_ini.load(Path(chosen)))
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(
+                self, "Could not read that file",
+                f"{exc}\n\nIt should be the contracts.ini from StarStrings.",
+            )
+
+    # --- step 3: the look ----------------------------------------------------
+
+    def _build_look_step(self) -> QGroupBox:
+        box = QGroupBox("Step 3 — How much detail")
+        inner = QVBoxLayout(box)
+
+        self.look = QComboBox()
+        for name, label, hint in LOOKS:
+            self.look.addItem(label, name)
+        self.look.currentIndexChanged.connect(self._look_changed)
+        inner.addWidget(self.look)
+
+        self.look_hint = _muted(LOOKS[0][2])
+        inner.addWidget(self.look_hint)
+
+        return box
+
+    def _look_changed(self, index: int) -> None:
+        self.look_hint.setText(LOOKS[index][2])
+        self.state.set_profile(load_builtin(self.look.itemData(index)))
+
+    # --- doing it ------------------------------------------------------------
+
+    def update_game(self) -> None:
+        if self.install is None:
+            QMessageBox.information(
+                self, "Find your game first",
+                "StarCompanion could not find Star Citizen automatically.\n\n"
+                "Use 'Choose folder…' in Step 1.",
+            )
+            return
+        if self.state.contracts is None:
+            QMessageBox.information(
+                self, "Contract information needed",
+                "Download the contract list in Step 2, then choose the file.",
+            )
+            return
+
+        target = self.install.localization()
+        progress = QProgressDialog("Preparing your contracts…", "", 0, 0, self)
+        progress.setCancelButton(None)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.show()
+        try:
+            rendered = self.state.render()
+            result = plan_injection(LocalizationFile.load(target), rendered.values)
+        except (OSError, ValueError) as exc:
+            progress.close()
+            QMessageBox.critical(self, "Something went wrong", str(exc))
+            return
+        finally:
+            progress.close()
+
+        if not result.updated:
+            QMessageBox.information(
+                self, "Nothing to change",
+                "Your game text already matches these settings.",
+            )
+            return
+
+        confirmed = QMessageBox.question(
+            self,
+            "Ready to update your game?",
+            f"{result.updated:,} contracts will show extra reward information.\n\n"
+            f"Game: {self.install.channel}\n"
+            f"A backup is saved first, and 'Undo my last change' puts it back.\n\n"
+            f"Star Citizen must be closed.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if confirmed != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            written = apply_changes(
+                target,
+                rendered.values,
+                confirmed=True,
+                mode=self.state.profile.injection.merge_mode,
+                backup_dir=self.state.backup_dir,
+            )
+        except Exception as exc:  # surfaced, never swallowed
+            QMessageBox.critical(
+                self, "Could not update your game",
+                f"{exc}\n\nYour game text was not changed.",
+            )
+            return
+
+        self.refresh()
+        QMessageBox.information(
+            self,
+            "Done",
+            f"{written.updated:,} contracts updated.\n\n"
+            f"Start Star Citizen and open the contract manager to see it.\n\n"
+            f"Remember: run this again after every game patch.",
+        )
+
+    def undo_last(self) -> None:
+        backups = self.state.backups()
+        if not backups:
+            QMessageBox.information(
+                self, "Nothing to undo",
+                "No backup was found, so there is nothing to put back.",
+            )
+            return
+        if self.state.target is None:
+            return
+
+        newest = backups[0]
+        if QMessageBox.question(
+            self, "Undo the last change?",
+            f"This restores your game text from:\n{newest.name}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+
+        restore_backup(newest, self.state.target)
+        self.refresh()
+        QMessageBox.information(self, "Undone", "Your game text was put back.")
+
+    # --- display -------------------------------------------------------------
+
+    def refresh(self) -> None:
+        self.game_status.setText(self.game_status_text())
+        self.data_status.setText(self.data_status_text())
+
+        needs_language = self.install is not None and not self.install.language_configured
+        self.language_warning.setVisible(needs_language)
+        if needs_language:
+            self.language_warning.setText(
+                f"{WARN} Your game needs one setting before it will show custom text.\n"
+                f"Add this line to {self.install.user_cfg.name} in your game folder:\n"
+                f"    g_language = english"
+            )
+
+        self.go.setEnabled(self.install is not None and self.state.contracts is not None)
+        self.undo.setEnabled(bool(self.state.backups()))
+        self.footer.setText(
+            "Nothing is changed until you confirm, and a backup is always saved first."
+        )
+
+    def game_status_text(self) -> str:
+        if self.install is None:
+            return (
+                f"{WARN} Star Citizen was not found automatically.\n"
+                f"Use 'Choose folder…' and pick your LIVE folder."
+            )
+
+        modified = " — already has custom text" if self.install.has_override else ""
+        version = f" {self.install.version}" if self.install.version else ""
+        return (
+            f"{OK} Found Star Citizen {self.install.channel}{version}{modified}\n"
+            f"{self.install.root}"
+        )
+
+    def data_status_text(self) -> str:
+        contracts = self.state.contracts
+        if contracts is None:
+            return f"{TODO} Not loaded yet."
+        return (
+            f"{OK} {len(contracts.contracts):,} contracts loaded "
+            f"from {len(contracts.orgs):,} mission givers."
+        )
+
+
+def _heading(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setWordWrap(True)
+    font = label.font()
+    font.setPointSize(font.pointSize() + 3)
+    font.setBold(True)
+    label.setFont(font)
+    return label
+
+
+def _muted(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setWordWrap(True)
+    label.setEnabled(False)
+    return label

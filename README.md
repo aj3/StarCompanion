@@ -63,9 +63,21 @@ python -m starcompanion --help
 starcompanion-gui          # or: python -m starcompanion.gui.app
 ```
 
-Five tabs: pick your contract data, choose which fields appear, set formatting,
-edit per-giver templates with a live preview, then review the plan and apply.
-Nothing is written until you confirm.
+It opens on **Start here**, which is the whole job in three steps:
+
+1. **Your game** — found automatically. You are never asked to type a path.
+2. **Contract information** — a button to download the community contract list,
+   and a button to pick it once you have it.
+3. **How much detail** — three presets in plain language.
+
+Then one button: **Update my game**. It says how many contracts will change,
+takes a backup, and there is an **Undo my last change** button beside it.
+
+It also warns if your `USER.cfg` is missing `g_language`, since without that
+setting the game ignores the override entirely and nothing appears to happen.
+
+The remaining tabs are optional: *What to show*, *Appearance*, *Custom wording*,
+and two *Advanced* tabs for driving the pipeline by hand.
 
 ### The command line
 
@@ -191,8 +203,12 @@ pip install pyinstaller
 pyinstaller packaging/starcompanion.spec
 ```
 
-Produces a single `dist/StarCompanion.exe` (~59 MB) with the templates and
-profiles bundled inside.
+Produces two executables in `dist/`, with templates and profiles bundled inside:
+
+| File | What it is |
+|---|---|
+| `StarCompanion.exe` (~56 MB) | The window. Double-click it. |
+| `starcompanion-cli.exe` (~18 MB) | The command line. Smaller because it needs no Qt. |
 
 ## Development
 

@@ -21,3 +21,7 @@ tests/samples/*.ini
 build/
 dist/
 *.spec.bak
+
+# Build logs and downloaded CI artifacts
+*.log
+StarCompanion-windows/

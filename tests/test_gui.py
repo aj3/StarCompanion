@@ -251,6 +251,9 @@ def test_plan_reports_counts_and_writes_nothing(window, target):
 
 
 def test_plan_without_a_target_explains_rather_than_failing(window):
+    # Start now auto-detects a real install, so clear it to test this path.
+    window.apply.target_edit.setText("")
+    window.state.set_target(None)
     assert window.apply.refresh_plan() is None
     assert "Choose a global.ini" in window.apply.plan_label.text()
 
@@ -390,3 +393,120 @@ def test_real_corpus_drives_the_window(qapp):
     assert window.templates.preview.toPlainText()
 
     assert len(window.state.render().values) == 1449
+
+
+# --- start tab (the guided flow) ---------------------------------------------
+
+
+@pytest.fixture
+def fake_game(tmp_path):
+    from starcompanion import install as installs
+
+    game = tmp_path / "Roberts Space Industries" / "StarCitizen" / "LIVE"
+    (game / "data" / "Localization" / "english").mkdir(parents=True)
+    (game / installs.ARCHIVE_NAME).write_bytes(b"archive")
+    (game / "data" / "Localization" / "english" / "global.ini").write_bytes(
+        STOCK.encode("utf-8")
+    )
+    return installs.identify(game)
+
+
+def test_start_tab_is_first_and_selected(window):
+    assert window.tabs.tabText(0) == "Start here"
+    assert window.tabs.currentIndex() == 0
+
+
+def test_start_explains_when_no_game_is_found(window):
+    window.start.install = None
+    window.start.refresh()
+
+    text = window.start.game_status_text()
+    assert "not found" in text.lower()
+    assert "Choose folder" in text
+
+
+def test_start_reports_a_found_game_in_plain_language(window, fake_game):
+    window.start.install = fake_game
+    window.start.refresh()
+
+    text = window.start.game_status_text()
+    assert "Found Star Citizen" in text and "LIVE" in text
+
+
+def test_choosing_a_game_derives_the_file_to_modify(window, fake_game):
+    """The user never types a path to global.ini."""
+    window.start.install = fake_game
+    window.start._adopt_install()
+
+    assert window.state.target == fake_game.localization()
+
+
+def test_update_button_is_disabled_until_both_steps_are_done(qapp, fake_game):
+    fresh = MainWindow()
+    fresh.start.install = None
+    fresh.start.refresh()
+    assert not fresh.start.go.isEnabled()
+
+    fresh.start.install = fake_game
+    fresh.start.refresh()
+    assert not fresh.start.go.isEnabled(), "still needs contract data"
+
+
+def test_update_button_enables_once_ready(window, fake_game):
+    window.start.install = fake_game
+    window.start.refresh()
+    assert window.start.go.isEnabled()
+
+
+def test_missing_language_setting_is_warned_about(window, fake_game):
+    """Without g_language the override is silently ignored in game."""
+    window.start.install = fake_game
+    window.start.refresh()
+
+    assert window.start.language_warning.isVisibleTo(window.start)
+    assert "g_language" in window.start.language_warning.text()
+
+
+def test_language_warning_clears_once_configured(window, fake_game):
+    fake_game.user_cfg.write_text("g_language = english\n")
+    window.start.install = fake_game
+    window.start.refresh()
+
+    assert not window.start.language_warning.isVisibleTo(window.start)
+
+
+def test_choosing_a_look_switches_profile(window):
+    index = window.start.look.findData("minimal")
+    window.start.look.setCurrentIndex(index)
+
+    assert window.state.profile.name == "minimal"
+
+
+def test_update_without_a_game_explains_rather_than_failing(window, monkeypatch):
+    window.start.install = None
+    shown = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: shown.append(a))
+
+    window.start.update_game()
+
+    assert shown and "Choose folder" in shown[0][2]
+
+
+def test_update_without_contract_data_explains(qapp, fake_game, monkeypatch):
+    fresh = MainWindow()
+    fresh.start.install = fake_game
+    shown = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: shown.append(a))
+
+    fresh.start.update_game()
+
+    assert shown and "contract list" in shown[0][2].lower()
+
+
+def test_undo_reports_when_there_is_nothing_to_undo(window, monkeypatch):
+    shown = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: shown.append(a))
+
+    window.start.undo_last()
+
+    assert shown and "nothing" in shown[0][1].lower()

@@ -61,3 +61,52 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
+
+
+# ── Command line build ───────────────────────────────────────────────────────
+# A second executable, console=True so --help and command output are visible.
+# The GUI build has no console attached and cannot print.
+
+cli_analysis = Analysis(
+    [str(Path(SPECPATH) / "entry_cli.py")],
+    pathex=[str(SRC)],
+    binaries=[],
+    datas=datas,
+    hiddenimports=[
+        "starcompanion.sources.contracts_ini",
+        "starcompanion.sources.datacore_source",
+        "starcompanion.sources.scmdb",
+    ],
+    hookspath=[],
+    runtime_hooks=[],
+    excludes=[
+        # The CLI never opens a window, so Qt can go entirely.
+        "PySide6", "shiboken6",
+        "tkinter", "matplotlib", "numpy",
+    ],
+    noarchive=False,
+)
+
+cli_pyz = PYZ(cli_analysis.pure)
+
+cli_exe = EXE(
+    cli_pyz,
+    cli_analysis.scripts,
+    cli_analysis.binaries,
+    cli_analysis.datas,
+    [],
+    # Not "starcompanion": Windows filenames are case-insensitive, so that
+    # collides with StarCompanion.exe and silently overwrites the GUI build.
+    name="starcompanion-cli",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    runtime_tmpdir=None,
+    console=True,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)

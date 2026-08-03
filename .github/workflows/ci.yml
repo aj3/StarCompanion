@@ -67,11 +67,17 @@ jobs:
       - name: Build one-file executable
         run: pyinstaller packaging/starcompanion.spec
 
-      - name: Smoke test the CLI entry point
-        run: python -m starcompanion profiles
+      # Run the built CLI itself, not the source: this proves the frozen
+      # bundle can find its templates and profiles.
+      - name: Smoke test the built CLI
+        run: |
+          dist\starcompanion-cli.exe profiles
+          dist\starcompanion-cli.exe --help
 
       - uses: actions/upload-artifact@v7
         with:
           name: StarCompanion-windows
-          path: dist/StarCompanion.exe
+          path: |
+            dist/StarCompanion.exe
+            dist/starcompanion-cli.exe
           if-no-files-found: error
