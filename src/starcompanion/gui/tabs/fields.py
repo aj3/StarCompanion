@@ -1,4 +1,9 @@
-"""Fields tab: which reward information appears at all."""
+"""What to show tab: which pieces of information get added.
+
+Each option is named for what the player sees in game, not for the field it
+maps to. Options that cannot do anything yet say so, rather than sitting there
+ticked and apparently doing nothing.
+"""
 
 from __future__ import annotations
 
@@ -6,15 +11,58 @@ from PySide6.QtWidgets import QCheckBox, QGroupBox, QLabel, QVBoxLayout, QWidget
 
 from ..state import AppState
 
-# (profile attribute, label, why you might turn it off)
-TOGGLES = (
-    ("reputation", "Reputation awarded", "Rep amount gained on completion"),
-    ("blueprints", "Blueprint pools", "Items the contract can drop"),
-    ("scenario_points", "Scenario progress points", "Event contributions, e.g. XenoThreat"),
-    ("scrip", "MG Scrip", "Flags contracts paying Scrip; amount is dynamic"),
-    ("rank_gates", "Rank gates", "Which reputation tier a pool actually drops at"),
-    ("regional_variants", "Regional variants", "Pools that differ by system; verbose"),
-    ("caveats", "Data caveats", "Warnings that a pool may be mis-assigned by CIG"),
+# (profile field, what it is called, what it actually adds, needs reward data)
+TOGGLES: tuple[tuple[str, str, str, bool], ...] = (
+    (
+        "reputation",
+        "Reputation earned",
+        "How much standing the contract pays with its mission giver.",
+        True,
+    ),
+    (
+        "blueprints",
+        "Blueprints it can drop",
+        "The list of blueprints a contract can award.",
+        True,
+    ),
+    (
+        "owned",
+        "Mark blueprints you already have",
+        "Needs your collection exported from SCMDB.",
+        True,
+    ),
+    (
+        "rank_gates",
+        "Which rank a blueprint needs",
+        "Some drops only happen once you have enough standing.",
+        True,
+    ),
+    (
+        "regional_variants",
+        "Differences by location",
+        "The same contract can drop different items in different systems. "
+        "Detailed, and makes descriptions longer.",
+        True,
+    ),
+    (
+        "scenario_points",
+        "Event contribution points",
+        "For limited-time events, such as XenoThreat.",
+        True,
+    ),
+    (
+        "scrip",
+        "MG Scrip",
+        "Flags contracts that pay Scrip. The amount changes, so only the fact "
+        "is shown.",
+        True,
+    ),
+    (
+        "caveats",
+        "Warnings about unreliable data",
+        "Notes when a blueprint list is known to be wrong or disputed.",
+        True,
+    ),
 )
 
 
@@ -25,26 +73,32 @@ class FieldsTab(QWidget):
         self._loading = False
         self.boxes: dict[str, QCheckBox] = {}
 
-        box = QGroupBox("Show in contract text")
+        layout = QVBoxLayout(self)
+
+        box = QGroupBox("Add this to contract descriptions")
         inner = QVBoxLayout(box)
 
-        for name, label, hint in TOGGLES:
+        for name, label, hint, _needs_rewards in TOGGLES:
             check = QCheckBox(label)
-            check.setToolTip(hint)
             check.toggled.connect(lambda checked, n=name: self._set(n, checked))
             self.boxes[name] = check
             inner.addWidget(check)
 
             caption = QLabel(hint)
+            caption.setWordWrap(True)
             caption.setEnabled(False)
             caption.setIndent(24)
             inner.addWidget(caption)
 
-        layout = QVBoxLayout(self)
         layout.addWidget(box)
+
+        self.notice = QLabel()
+        self.notice.setWordWrap(True)
+        layout.addWidget(self.notice)
         layout.addStretch(1)
 
         state.profileChanged.connect(self.refresh)
+        state.contractsChanged.connect(self.refresh)
         self.refresh()
 
     def _set(self, name: str, checked: bool) -> None:
@@ -60,3 +114,17 @@ class FieldsTab(QWidget):
                 check.setChecked(getattr(self.state.profile.fields, name))
         finally:
             self._loading = False
+
+        contracts = self.state.contracts
+        has_rewards = bool(
+            contracts and any(not c.reward.is_empty for c in contracts.contracts)
+        )
+        self.notice.setText(
+            ""
+            if has_rewards
+            else (
+                "None of these can be shown yet. Star Citizen does not store "
+                "reward information on your computer, so it has to come from a "
+                "contract list — see step 2 on the Start tab."
+            )
+        )

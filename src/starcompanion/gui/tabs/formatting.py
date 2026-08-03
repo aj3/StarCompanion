@@ -1,8 +1,11 @@
-"""Formatting tab: emphasis tags, title tags, and pool length.
+"""Appearance tab: how the added information looks.
 
-The tag list is deliberately short because it is the complete set the game can
-render -- there is no arbitrary colour, so this is as close to colour-coding as
-a localization override can get.
+Everything here is phrased for someone who has never opened `global.ini`. The
+game's tag names (`EM4`, `b`, …) are an implementation detail and never appear
+on screen -- see `gui/labels.py`.
+
+The per-field styling is real but rarely wanted, so it starts collapsed rather
+than presenting seven dropdowns to someone who just wants it to look sensible.
 """
 
 from __future__ import annotations
@@ -18,32 +21,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...render.renderer import Field, TitlePrefix
-from ...validate import EMPHASIS_TAGS
+from ...render.renderer import TitlePrefix
+from ..labels import (
+    FIELD_NAMES,
+    INHERIT,
+    PREFIX_CAPTION,
+    STYLE_CAPTION,
+    STYLE_NAMES,
+    TEXT_STYLES,
+    TITLE_PREFIXES,
+)
 from ..state import AppState
-
-INHERIT = "(same as default)"
-
-PREFIXES = (
-    (TitlePrefix.NONE, "None"),
-    (TitlePrefix.ORG, "Mission giver"),
-    (TitlePrefix.RANK, "Difficulty rank"),
-    (TitlePrefix.ORG_RANK, "Mission giver + rank"),
-)
-
-FIELD_LABELS = (
-    (Field.REPUTATION, "Reputation"),
-    (Field.POOLS, "Blueprint pools"),
-    (Field.GATES, "Rank gates"),
-    (Field.REGIONAL, "Regional variants"),
-    (Field.SCENARIO, "Scenario points"),
-    (Field.SCRIP, "MG Scrip"),
-    (Field.TITLE, "Title tags"),
-)
-
-
-def _tags() -> list[str]:
-    return sorted(EMPHASIS_TAGS)
 
 
 class FormattingTab(QWidget):
@@ -52,91 +40,129 @@ class FormattingTab(QWidget):
         self.state = state
         self._loading = False
 
-        self.default_tag = QComboBox()
-        self.default_tag.addItems(_tags())
-        self.default_tag.currentTextChanged.connect(self._set_default_tag)
-
-        self.field_tags: dict[str, QComboBox] = {}
-        per_field = QFormLayout()
-        for name, label in FIELD_LABELS:
-            combo = QComboBox()
-            combo.addItem(INHERIT)
-            combo.addItems(_tags())
-            combo.currentTextChanged.connect(lambda text, n=name: self._set_field_tag(n, text))
-            self.field_tags[name] = combo
-            per_field.addRow(label, combo)
-
-        emphasis_box = QGroupBox("Emphasis")
-        emphasis_layout = QFormLayout(emphasis_box)
-        emphasis_layout.addRow("Default tag", self.default_tag)
-        note = QLabel(
-            "These are the only tags Star Citizen renders. There is no custom "
-            "colour, so emphasis level is the closest available substitute."
-        )
-        note.setWordWrap(True)
-        note.setEnabled(False)
-        emphasis_layout.addRow(note)
-        emphasis_layout.addRow(QLabel("Per-field overrides:"))
-        emphasis_layout.addRow(_wrap(per_field))
-
-        self.bracket_rep = QCheckBox("Show rep in title, e.g. [100 Rep]")
-        self.bracket_rep.toggled.connect(lambda v: self._set_title("bracket_rep", v))
-        self.bracket_bp = QCheckBox("Show blueprint flag in title, e.g. [BP]")
-        self.bracket_bp.toggled.connect(lambda v: self._set_title("bracket_bp", v))
-
-        self.prefix = QComboBox()
-        for value, label in PREFIXES:
-            self.prefix.addItem(label, value)
-        self.prefix.currentIndexChanged.connect(self._set_prefix)
-
-        title_box = QGroupBox("Titles")
-        title_layout = QFormLayout(title_box)
-        title_layout.addRow(self.bracket_rep)
-        title_layout.addRow(self.bracket_bp)
-        title_layout.addRow("Prefix", self.prefix)
-        prefix_note = QLabel(
-            "A prefix cannot re-sort the in-game contract list, but it makes a "
-            "flat list scannable by giver or tier."
-        )
-        prefix_note.setWordWrap(True)
-        prefix_note.setEnabled(False)
-        title_layout.addRow(prefix_note)
-
-        self.max_items = QSpinBox()
-        self.max_items.setRange(0, 500)
-        self.max_items.setSpecialValueText("No limit")
-        self.max_items.valueChanged.connect(self._set_max_items)
-
-        length_box = QGroupBox("Length")
-        length_layout = QFormLayout(length_box)
-        length_layout.addRow("Max blueprint items per pool", self.max_items)
-
         layout = QVBoxLayout(self)
-        layout.addWidget(emphasis_box)
-        layout.addWidget(title_box)
-        layout.addWidget(length_box)
+        layout.addWidget(self._build_style_box())
+        layout.addWidget(self._build_title_box())
+        layout.addWidget(self._build_length_box())
         layout.addStretch(1)
 
         state.profileChanged.connect(self.refresh)
         self.refresh()
 
-    # --- edits ---------------------------------------------------------------
+    # --- text style ----------------------------------------------------------
 
-    def _set_default_tag(self, tag: str) -> None:
+    def _build_style_box(self) -> QGroupBox:
+        box = QGroupBox("How the added text looks")
+        layout = QVBoxLayout(box)
+
+        self.default_tag = QComboBox()
+        for tag, name, _hint in TEXT_STYLES:
+            self.default_tag.addItem(name, tag)
+        self.default_tag.currentIndexChanged.connect(self._set_default_style)
+
+        form = QFormLayout()
+        form.addRow("Style", self.default_tag)
+        layout.addLayout(form)
+        layout.addWidget(_muted(STYLE_CAPTION))
+
+        self.per_field_toggle = QCheckBox(
+            "Use a different style for each kind of information"
+        )
+        self.per_field_toggle.toggled.connect(self._toggle_per_field)
+        layout.addWidget(self.per_field_toggle)
+
+        self.per_field = QWidget()
+        per_field_form = QFormLayout(self.per_field)
+        per_field_form.setContentsMargins(24, 0, 0, 0)
+
+        self.field_tags: dict[str, QComboBox] = {}
+        for name, label in FIELD_NAMES.items():
+            combo = QComboBox()
+            combo.addItem(INHERIT, None)
+            for tag, shown, _hint in TEXT_STYLES:
+                combo.addItem(shown, tag)
+            combo.currentIndexChanged.connect(
+                lambda _index, field=name: self._set_field_style(field)
+            )
+            self.field_tags[name] = combo
+            per_field_form.addRow(label, combo)
+
+        self.per_field.setVisible(False)
+        layout.addWidget(self.per_field)
+
+        return box
+
+    def _set_default_style(self, index: int) -> None:
         if self._loading:
             return
-        self.state.profile.formatting.emphasis = tag
+        self.state.profile.formatting.emphasis = self.default_tag.itemData(index)
         self.state.touch_profile()
 
-    def _set_field_tag(self, name: str, text: str) -> None:
+    def _toggle_per_field(self, checked: bool) -> None:
+        self.per_field.setVisible(checked)
+        if self._loading or checked:
+            return
+
+        # Unticking means "just use the one style everywhere".
+        if self.state.profile.formatting.by_field:
+            self.state.profile.formatting.by_field = {}
+            self.state.touch_profile()
+            self.refresh()
+
+    def _set_field_style(self, field: str) -> None:
         if self._loading:
             return
+
         by_field = dict(self.state.profile.formatting.by_field)
-        if text == INHERIT:
-            by_field.pop(name, None)
+        tag = self.field_tags[field].currentData()
+        if tag is None:
+            by_field.pop(field, None)
         else:
-            by_field[name] = text
+            by_field[field] = tag
+
         self.state.profile.formatting.by_field = by_field
+        self.state.touch_profile()
+
+    # --- titles --------------------------------------------------------------
+
+    def _build_title_box(self) -> QGroupBox:
+        box = QGroupBox("Contract titles")
+        layout = QVBoxLayout(box)
+
+        self.prefix = QComboBox()
+        for value, name, _hint in TITLE_PREFIXES:
+            self.prefix.addItem(name, value)
+        self.prefix.currentIndexChanged.connect(self._set_prefix)
+
+        form = QFormLayout()
+        form.addRow("Show at the front of each title", self.prefix)
+        layout.addLayout(form)
+
+        self.prefix_hint = _muted("")
+        layout.addWidget(self.prefix_hint)
+        layout.addWidget(_muted(PREFIX_CAPTION))
+
+        self.bracket_rep = QCheckBox("Also show the reputation number in the title")
+        self.bracket_rep.toggled.connect(lambda v: self._set_title("bracket_rep", v))
+        layout.addWidget(self.bracket_rep)
+
+        self.bracket_bp = QCheckBox("Also mark titles that can award a blueprint")
+        self.bracket_bp.toggled.connect(lambda v: self._set_title("bracket_bp", v))
+        layout.addWidget(self.bracket_bp)
+
+        self.reward_note = _muted("")
+        layout.addWidget(self.reward_note)
+
+        return box
+
+    def _set_prefix(self, index: int) -> None:
+        value = self.prefix.itemData(index)
+        self.prefix_hint.setText(
+            next(hint for v, _n, hint in TITLE_PREFIXES if v == value)
+        )
+        if self._loading:
+            return
+        self.state.profile.formatting.title.prefix = value
         self.state.touch_profile()
 
     def _set_title(self, name: str, value: bool) -> None:
@@ -145,11 +171,25 @@ class FormattingTab(QWidget):
         setattr(self.state.profile.formatting.title, name, value)
         self.state.touch_profile()
 
-    def _set_prefix(self, index: int) -> None:
-        if self._loading:
-            return
-        self.state.profile.formatting.title.prefix = self.prefix.itemData(index)
-        self.state.touch_profile()
+    # --- length --------------------------------------------------------------
+
+    def _build_length_box(self) -> QGroupBox:
+        box = QGroupBox("Keep it short")
+        layout = QFormLayout(box)
+
+        self.max_items = QSpinBox()
+        self.max_items.setRange(0, 500)
+        self.max_items.setSpecialValueText("Show them all")
+        self.max_items.valueChanged.connect(self._set_max_items)
+        layout.addRow("Most blueprints to list per contract", self.max_items)
+        layout.addRow(
+            _muted(
+                "Some contracts can drop dozens of blueprints. Limiting the list "
+                "keeps the description readable in game."
+            )
+        )
+
+        return box
 
     def _set_max_items(self, value: int) -> None:
         if self._loading:
@@ -163,18 +203,54 @@ class FormattingTab(QWidget):
         self._loading = True
         try:
             formatting = self.state.profile.formatting
-            self.default_tag.setCurrentText(formatting.emphasis)
+
+            self.default_tag.setCurrentIndex(
+                max(0, self.default_tag.findData(formatting.emphasis))
+            )
+
+            has_overrides = bool(formatting.by_field)
+            self.per_field_toggle.setChecked(has_overrides)
+            self.per_field.setVisible(has_overrides)
             for name, combo in self.field_tags.items():
-                combo.setCurrentText(formatting.by_field.get(name, INHERIT))
+                tag = formatting.by_field.get(name)
+                combo.setCurrentIndex(max(0, combo.findData(tag)))
+
+            index = self.prefix.findData(formatting.title.prefix)
+            self.prefix.setCurrentIndex(max(0, index))
+            self.prefix_hint.setText(
+                next(
+                    hint
+                    for value, _name, hint in TITLE_PREFIXES
+                    if value == formatting.title.prefix
+                )
+            )
+
             self.bracket_rep.setChecked(formatting.title.bracket_rep)
             self.bracket_bp.setChecked(formatting.title.bracket_bp)
-            self.prefix.setCurrentIndex(self.prefix.findData(formatting.title.prefix))
             self.max_items.setValue(formatting.max_pool_items or 0)
         finally:
             self._loading = False
 
+        self._update_reward_note()
 
-def _wrap(layout) -> QWidget:
-    widget = QWidget()
-    widget.setLayout(layout)
-    return widget
+    def _update_reward_note(self) -> None:
+        """Say when a setting cannot do anything yet, rather than letting it
+        look broken."""
+        contracts = self.state.contracts
+        has_rewards = bool(
+            contracts and any(not c.reward.is_empty for c in contracts.contracts)
+        )
+        if has_rewards:
+            self.reward_note.setText("")
+        else:
+            self.reward_note.setText(
+                "These two need reward numbers, which are not in your game files. "
+                "Add a contract list on the Start tab to use them."
+            )
+
+
+def _muted(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setWordWrap(True)
+    label.setEnabled(False)
+    return label

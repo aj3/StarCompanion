@@ -147,32 +147,70 @@ def test_every_toggle_is_bound(window):
 
 
 def test_default_emphasis_flows_into_output(window):
-    window.formatting.default_tag.setCurrentText("EM3")
+    combo = window.formatting.default_tag
+    combo.setCurrentIndex(combo.findData("EM3"))
     assert window.state.profile.formatting.emphasis == "EM3"
     assert "<EM3>Reputation Awarded:</EM3>" in window.state.render().values["Org_x_desc"]
 
 
 def test_per_field_emphasis_override_and_inherit(window):
-    window.formatting.field_tags["reputation"].setCurrentText("EM")
+    combo = window.formatting.field_tags["reputation"]
+    combo.setCurrentIndex(combo.findData("EM"))
     assert window.state.profile.formatting.by_field == {"reputation": "EM"}
     assert "<EM>Reputation Awarded:</EM>" in window.state.render().values["Org_x_desc"]
 
-    window.formatting.field_tags["reputation"].setCurrentText("(same as default)")
+    combo.setCurrentIndex(combo.findData(None))
     assert window.state.profile.formatting.by_field == {}
 
 
 def test_only_renderable_tags_are_offered(window):
-    offered = {
-        window.formatting.default_tag.itemText(i)
-        for i in range(window.formatting.default_tag.count())
-    }
-    assert "None" not in offered, "void tag cannot wrap text"
-    assert offered == {"EM", "EM1", "EM2", "EM3", "EM4", "b", "i"}
+    combo = window.formatting.default_tag
+    tags = {combo.itemData(i) for i in range(combo.count())}
+    assert tags == {"EM", "EM1", "EM2", "EM3", "EM4", "b", "i"}
+    assert None not in tags, "the main style always has a value"
+
+
+def test_style_choices_are_shown_in_plain_language(window):
+    """Raw game tags must not reach the screen."""
+    combo = window.formatting.default_tag
+    shown = [combo.itemText(i) for i in range(combo.count())]
+
+    assert not any(text.startswith("EM") for text in shown)
+    assert any("Highlight" in text for text in shown)
+    assert "Bold" in shown and "Italic" in shown
+
+
+def test_per_field_styling_starts_hidden(qapp):
+    """Seven dropdowns should not greet someone who wants sensible defaults."""
+    fresh = MainWindow()
+    assert not fresh.formatting.per_field_toggle.isChecked()
+    assert not fresh.formatting.per_field.isVisibleTo(fresh.formatting)
+
+
+def test_per_field_styling_appears_when_asked_for(window):
+    window.formatting.per_field_toggle.setChecked(True)
+    assert window.formatting.per_field.isVisibleTo(window.formatting)
+
+
+def test_unticking_per_field_styling_clears_the_overrides(window):
+    combo = window.formatting.field_tags["reputation"]
+    combo.setCurrentIndex(combo.findData("EM"))
+    assert window.state.profile.formatting.by_field
+
+    window.formatting.per_field_toggle.setChecked(False)
+    assert window.state.profile.formatting.by_field == {}
+
+
+def test_title_prefix_choices_avoid_jargon(window):
+    combo = window.formatting.prefix
+    shown = [combo.itemText(i) for i in range(combo.count())]
+    assert shown == ["Nothing", "Who is offering it", "How hard it is", "Both"]
 
 
 def test_title_prefix_changes_rendered_titles(window):
     index = window.formatting.prefix.findData("org_rank")
     window.formatting.prefix.setCurrentIndex(index)
+    assert window.state.profile.formatting.title.prefix == "org_rank"
     assert window.state.render().values["Org_x_title"].startswith("[Org")
 
 
@@ -366,7 +404,8 @@ def test_loading_a_builtin_updates_every_tab(window):
 
 def test_profile_save_and_load_round_trips_through_the_ui(window, tmp_path):
     window.fields.boxes["scrip"].setChecked(False)
-    window.formatting.default_tag.setCurrentText("EM2")
+    combo = window.formatting.default_tag
+    combo.setCurrentIndex(combo.findData("EM2"))
 
     path = tmp_path / "p.json"
     window.state.profile.save(path)
@@ -375,7 +414,7 @@ def test_profile_save_and_load_round_trips_through_the_ui(window, tmp_path):
     fresh.load_profile(path)
 
     assert fresh.state.profile.fields.scrip is False
-    assert fresh.formatting.default_tag.currentText() == "EM2"
+    assert fresh.formatting.default_tag.currentData() == "EM2"
 
 
 def test_unreadable_profile_warns_rather_than_crashing(window, tmp_path, monkeypatch):
