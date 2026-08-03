@@ -115,6 +115,11 @@ class StartTab(QWidget):
         self.game_status.setWordWrap(True)
         inner.addWidget(self.game_status)
 
+        # The read status lives here, beside the button that performs it.
+        self.contracts_status = QLabel()
+        self.contracts_status.setWordWrap(True)
+        inner.addWidget(self.contracts_status)
+
         self.language_warning = QLabel()
         self.language_warning.setWordWrap(True)
         self.language_warning.setVisible(False)
@@ -122,10 +127,10 @@ class StartTab(QWidget):
 
         row = QHBoxLayout()
         row.addStretch(1)
-        self.read_button = QPushButton("Read my contracts")
-        self.read_button.clicked.connect(self.read_game)
+        self.read_button = QPushButton("Read contracts from my game")
+        self.read_button.clicked.connect(lambda: self.read_game(force=True))
         row.addWidget(self.read_button)
-        again = QPushButton("Search again")
+        again = QPushButton("Find my game again")
         again.clicked.connect(lambda: (self.detect_game(), self.refresh()))
         row.addWidget(again)
         choose = QPushButton("Choose folder…")
@@ -180,10 +185,23 @@ class StartTab(QWidget):
             self.state.set_contracts(cached)
             self.load_error = None
 
-    def read_game(self) -> None:
-        """Read contracts from the archive, with progress, and cache them."""
+    def read_game(self, *, force: bool = False) -> None:
+        """Read contracts from the archive, with progress, and cache them.
+
+        `force` re-reads even when a cached copy exists, which is what the
+        button does: if someone presses it deliberately, they want the archive
+        looked at again.
+        """
         if self.install is None:
             return
+
+        if not force:
+            cached = store.load(self.install)
+            if cached is not None:
+                self.state.set_contracts(cached)
+                self.load_error = None
+                self.refresh()
+                return
 
         progress = QProgressDialog(
             "Reading your game files. This takes about half a minute the "
@@ -378,7 +396,12 @@ class StartTab(QWidget):
 
     def refresh(self) -> None:
         self.game_status.setText(self.game_status_text())
+        self.contracts_status.setText(self.contracts_status_text())
         self.data_status.setText(self.data_status_text())
+
+        self.read_button.setText(
+            "Read my game again" if self.state.contracts else "Read contracts from my game"
+        )
 
         needs_language = self.install is not None and not self.install.language_configured
         self.language_warning.setVisible(needs_language)
@@ -410,26 +433,39 @@ class StartTab(QWidget):
             f"{self.install.root}"
         )
 
-    def data_status_text(self) -> str:
+    def contracts_status_text(self) -> str:
+        """Whether the game's own contracts have been read yet."""
+        if self.install is None:
+            return ""
+        if self.load_error:
+            return f"{WARN} {self.load_error}"
+
         contracts = self.state.contracts
         if contracts is None:
-            if self.load_error:
-                return f"{WARN} {self.load_error}"
             return (
-                f"{TODO} Not read yet — press 'Read my contracts', or just press "
-                f"'Update my game' and it happens automatically."
+                f"{TODO} Contracts not read yet. Press 'Read contracts from my "
+                f"game' below — it takes about half a minute the first time."
             )
 
-        with_rewards = sum(1 for c in contracts.contracts if not c.reward.is_empty)
-        found = (
-            f"{OK} Read {len(contracts.contracts):,} contracts from your game files, "
-            f"across {len(contracts.orgs):,} mission givers."
+        return (
+            f"{OK} Read {len(contracts.contracts):,} contracts from your game "
+            f"files, across {len(contracts.orgs):,} mission givers."
+        )
+
+    def data_status_text(self) -> str:
+        """Only about the optional reward numbers."""
+        contracts = self.state.contracts
+        with_rewards = (
+            sum(1 for c in contracts.contracts if not c.reward.is_empty)
+            if contracts
+            else 0
         )
         if with_rewards:
-            extra = f"{OK} Reward numbers added for {with_rewards:,} of them."
-        else:
-            extra = f"{TODO} No reward numbers yet — optional, see below."
-        return found + "\n" + extra
+            return f"{OK} Reward numbers added for {with_rewards:,} contracts."
+        return (
+            f"{TODO} Not added. Reputation and blueprint numbers will not "
+            f"appear without these."
+        )
 
 
 def _heading(text: str) -> QLabel:

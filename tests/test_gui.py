@@ -562,3 +562,61 @@ def test_undo_reports_when_there_is_nothing_to_undo(window, monkeypatch):
     window.start.undo_last()
 
     assert shown and "nothing" in shown[0][1].lower()
+
+
+def test_read_button_and_its_instruction_are_in_the_same_step(qapp, fake_game):
+    """The button to read the game and the text telling you to press it must
+    not live under different headings."""
+    fresh = MainWindow()
+    fresh.start.install = fake_game
+    fresh.start.refresh()
+
+    assert "Read contracts from my game" in fresh.start.read_button.text()
+    assert "Read contracts from my game" in fresh.start.contracts_status_text()
+    # Step 2 is only about the optional reward numbers.
+    assert "Read contracts" not in fresh.start.data_status_text()
+
+
+def test_read_button_offers_a_re_read_once_contracts_are_loaded(window, fake_game):
+    window.start.install = fake_game
+    window.start.refresh()
+    assert "again" in window.start.read_button.text()
+
+
+def test_reading_again_bypasses_the_cache(qapp, fake_game, monkeypatch):
+    """Pressing the button deliberately should look at the archive again."""
+    from starcompanion import store
+    from starcompanion.sources import game_strings
+
+    fresh = MainWindow()
+    fresh.start.install = fake_game
+
+    monkeypatch.setattr(store, "load", lambda install: pytest.fail("cache was used"))
+    calls = []
+    monkeypatch.setattr(
+        game_strings, "from_install",
+        lambda install, language="english": calls.append(install) or _empty_set(),
+    )
+    monkeypatch.setattr(store, "save", lambda install, contracts: None)
+
+    fresh.start.read_game(force=True)
+    assert calls, "the archive should have been read"
+
+
+def _empty_set():
+    from starcompanion.model import ContractSet
+
+    return ContractSet()
+
+
+def test_contracts_status_reports_what_was_read(window, fake_game):
+    window.start.install = fake_game
+    window.start.refresh()
+    assert "Read 1 contracts" in window.start.contracts_status_text()
+
+
+def test_step_two_only_talks_about_reward_numbers(window, fake_game):
+    window.start.install = fake_game
+    window.start.refresh()
+    text = window.start.data_status_text()
+    assert "Reward numbers" in text or "reward" in text.lower()
