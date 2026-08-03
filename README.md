@@ -65,9 +65,11 @@ starcompanion-gui          # or: python -m starcompanion.gui.app
 
 It opens on **Start here**, which is the whole job in three steps:
 
-1. **Your game** — found automatically. You are never asked to type a path.
-2. **Contract information** — a button to download the community contract list,
-   and a button to pick it once you have it.
+1. **Your game** — found automatically. You are never asked to type a path, and
+   the contracts are read from the game itself.
+2. **Reward numbers** — *optional*. Reputation amounts and blueprint lists are
+   not stored anywhere on your computer, so showing those needs a community
+   list. Everything else works without it.
 3. **How much detail** — three presets in plain language.
 
 Then one button: **Update my game**. It says how many contracts will change,
@@ -82,7 +84,8 @@ and two *Advanced* tabs for driving the pipeline by hand.
 ### The command line
 
 ```bash
-starcompanion import --contracts contracts.ini --out cache.json
+# reads your game; finds the install by itself
+starcompanion import --out cache.json
 starcompanion render --cache cache.json --profile rank-first --out rendered.json
 starcompanion plan   --rendered rendered.json --target <path to global.ini>
 starcompanion apply  --rendered rendered.json --target <path to global.ini> --confirm
@@ -168,14 +171,20 @@ wrong — blank contracts after a patch are the most common case.
 ## How it works
 
 ```
-Data.p4k ──► p4k reader ──► Game2.dcb ──► DataCore parser ──┐
-                        └─► stock global.ini                ├─► domain model
-contracts.ini ─────────────► importer ──────────────────────┘        │
-                                                                     ▼
+Data.p4k ──► p4k reader ──► stock global.ini ──► contract discovery ──┐
+                                                                      ├─► domain model
+optional: contracts.ini / SCMDB export ──► reward values ─────────────┘        │
+                                                                               ▼
                         profile ──► Jinja templates ──► renderer ──► validator
-                                                                     │
-                                            backup ──► injector ◄────┘
+                                                                               │
+                                            backup ──► injector ◄──────────────┘
 ```
+
+Contracts are discovered from your own game files by the naming convention CIG
+uses for contract strings, filtered by content so item names and UI labels are
+never rewritten. Reward values are the only thing that has to come from
+elsewhere. The first read of the archive takes about half a minute and is then
+cached per game build, so a patch re-reads automatically.
 
 Every rendered value passes the validator before it can be written; anything
 that would break in game is skipped rather than emitted, even if your own
@@ -183,11 +192,11 @@ template produced it.
 
 ## Current limitations
 
-- **Reward values come from StarStrings' `contracts.ini`, and cannot come from
-  anywhere else.** Contract *discovery* is fully independent — 2,492 contracts
-  read from your own `Game2.dcb`, ~900 of which StarStrings does not cover — but
-  reputation amounts and blueprint pools are **not present in the client
-  install**. The reward structs exist in the DataCore with zero instances, none
+- **Reward values are the only thing not read from your game.** Contract
+  discovery is fully independent — around 1,750 contracts across 160+ mission
+  givers, read from your own install, covering ~84% of StarStrings' curated set
+  plus thousands they do not list. But reputation amounts and blueprint pools
+  are **not present in the client at all**. The reward structs exist in the DataCore with zero instances, none
   of the 465 mission files mention a single contract key, and the mission
   modules they reference are absent from the archive: that logic is
   server-authoritative. Evidence in

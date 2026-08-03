@@ -48,6 +48,20 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
+@pytest.fixture(autouse=True)
+def no_real_game(monkeypatch, tmp_path):
+    """Keep tests off the developer's actual install.
+
+    Without this, constructing a window finds the real game and any code path
+    that reads it opens a multi-gigabyte archive -- slow, and it would make
+    results depend on whose machine the suite runs on.
+    """
+    from starcompanion import install as installs
+
+    monkeypatch.setattr(installs, "find_default", lambda: None)
+    monkeypatch.setenv("STARCOMPANION_CACHE", str(tmp_path / "cache"))
+
+
 @pytest.fixture
 def contracts(tmp_path):
     path = tmp_path / "contracts.ini"
@@ -418,6 +432,7 @@ def test_start_tab_is_first_and_selected(window):
 
 def test_start_explains_when_no_game_is_found(window):
     window.start.install = None
+    window.start.load_error = None
     window.start.refresh()
 
     text = window.start.game_status_text()
@@ -441,7 +456,8 @@ def test_choosing_a_game_derives_the_file_to_modify(window, fake_game):
     assert window.state.target == fake_game.localization()
 
 
-def test_update_button_is_disabled_until_both_steps_are_done(qapp, fake_game):
+def test_update_button_needs_only_a_game(qapp, fake_game):
+    """Contract data comes from the game itself, so nothing else is required."""
     fresh = MainWindow()
     fresh.start.install = None
     fresh.start.refresh()
@@ -449,13 +465,7 @@ def test_update_button_is_disabled_until_both_steps_are_done(qapp, fake_game):
 
     fresh.start.install = fake_game
     fresh.start.refresh()
-    assert not fresh.start.go.isEnabled(), "still needs contract data"
-
-
-def test_update_button_enables_once_ready(window, fake_game):
-    window.start.install = fake_game
-    window.start.refresh()
-    assert window.start.go.isEnabled()
+    assert fresh.start.go.isEnabled()
 
 
 def test_missing_language_setting_is_warned_about(window, fake_game):
@@ -492,15 +502,18 @@ def test_update_without_a_game_explains_rather_than_failing(window, monkeypatch)
     assert shown and "Choose folder" in shown[0][2]
 
 
-def test_update_without_contract_data_explains(qapp, fake_game, monkeypatch):
+def test_update_reads_the_game_when_contracts_are_missing(qapp, fake_game, monkeypatch):
+    """Pressing the button just works: reading happens on demand."""
     fresh = MainWindow()
     fresh.start.install = fake_game
-    shown = []
-    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: shown.append(a))
+    warned = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warned.append(a))
 
     fresh.start.update_game()
 
-    assert shown and "contract list" in shown[0][2].lower()
+    # The fixture's archive is not a real p4k, so the read fails and says so
+    # rather than silently doing nothing.
+    assert warned and "Could not read" in warned[0][1]
 
 
 def test_undo_reports_when_there_is_nothing_to_undo(window, monkeypatch):

@@ -18,6 +18,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -32,12 +33,13 @@ from PySide6.QtWidgets import (
 )
 
 from ... import install as installs
+from ... import store
 from ...config import load_builtin
 from ...ini import LocalizationFile
 from ...inject import apply as apply_changes
 from ...inject import plan as plan_injection
 from ...inject import restore as restore_backup
-from ...sources import contracts_ini
+from ...sources import contracts_ini, game_strings
 from ..state import AppState
 
 CONTRACTS_URL = (
@@ -60,6 +62,7 @@ class StartTab(QWidget):
         super().__init__(parent)
         self.state = state
         self.install: installs.GameInstall | None = None
+        self.load_error: str | None = None
 
         layout = QVBoxLayout(self)
         layout.addWidget(_heading("Add reward information to your Star Citizen contracts"))
@@ -119,6 +122,9 @@ class StartTab(QWidget):
 
         row = QHBoxLayout()
         row.addStretch(1)
+        self.read_button = QPushButton("Read my contracts")
+        self.read_button.clicked.connect(self.read_game)
+        row.addWidget(self.read_button)
         again = QPushButton("Search again")
         again.clicked.connect(lambda: (self.detect_game(), self.refresh()))
         row.addWidget(again)
@@ -156,16 +162,57 @@ class StartTab(QWidget):
         self.refresh()
 
     def _adopt_install(self) -> None:
-        """Derive everything else from the install so nothing else is asked."""
+        """Derive everything else from the install, including the contracts.
+
+        The game's own strings are the source. Reading them here is what makes
+        the second step optional rather than required.
+        """
         if self.install is None:
             self.state.set_target(None)
             return
+
         self.state.set_target(self.install.localization())
+
+        # Only ever the cache here. Reading the archive takes ~30 seconds on a
+        # real install, which must never happen during startup.
+        cached = store.load(self.install)
+        if cached is not None:
+            self.state.set_contracts(cached)
+            self.load_error = None
+
+    def read_game(self) -> None:
+        """Read contracts from the archive, with progress, and cache them."""
+        if self.install is None:
+            return
+
+        progress = QProgressDialog(
+            "Reading your game files. This takes about half a minute the "
+            "first time, then it is remembered.",
+            "", 0, 0, self,
+        )
+        progress.setCancelButton(None)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.show()
+        QApplication.processEvents()
+
+        try:
+            contracts = game_strings.from_install(self.install)
+        except Exception as exc:
+            self.load_error = str(exc)
+            QMessageBox.warning(self, "Could not read your game", str(exc))
+            return
+        finally:
+            progress.close()
+
+        self.load_error = None
+        store.save(self.install, contracts)
+        self.state.set_contracts(contracts)
+        self.refresh()
 
     # --- step 2: contract data -----------------------------------------------
 
     def _build_data_step(self) -> QGroupBox:
-        box = QGroupBox("Step 2 — Contract information")
+        box = QGroupBox("Step 2 — Reward numbers (optional)")
         inner = QVBoxLayout(box)
 
         self.data_status = QLabel()
@@ -174,17 +221,19 @@ class StartTab(QWidget):
 
         inner.addWidget(
             _muted(
-                "Reward values are not stored in the game files, so they come from "
-                "the community's contract list. Download it once, then pick it here."
+                "Star Citizen does not store reputation amounts or blueprint lists "
+                "anywhere on your computer — the server decides them. To show those "
+                "numbers as well, add a community contract list. Everything else "
+                "works without it."
             )
         )
 
         row = QHBoxLayout()
         row.addStretch(1)
-        download = QPushButton("Get the file…")
+        download = QPushButton("Get a contract list…")
         download.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(CONTRACTS_URL)))
         row.addWidget(download)
-        pick = QPushButton("I have it — choose file…")
+        pick = QPushButton("Add reward numbers…")
         pick.clicked.connect(self.choose_contracts)
         row.addWidget(pick)
         inner.addLayout(row)
@@ -238,11 +287,9 @@ class StartTab(QWidget):
             )
             return
         if self.state.contracts is None:
-            QMessageBox.information(
-                self, "Contract information needed",
-                "Download the contract list in Step 2, then choose the file.",
-            )
-            return
+            self.read_game()
+            if self.state.contracts is None:
+                return
 
         target = self.install.localization()
         progress = QProgressDialog("Preparing your contracts…", "", 0, 0, self)
@@ -342,7 +389,8 @@ class StartTab(QWidget):
                 f"    g_language = english"
             )
 
-        self.go.setEnabled(self.install is not None and self.state.contracts is not None)
+        self.go.setEnabled(self.install is not None)
+        self.read_button.setEnabled(self.install is not None)
         self.undo.setEnabled(bool(self.state.backups()))
         self.footer.setText(
             "Nothing is changed until you confirm, and a backup is always saved first."
@@ -365,11 +413,23 @@ class StartTab(QWidget):
     def data_status_text(self) -> str:
         contracts = self.state.contracts
         if contracts is None:
-            return f"{TODO} Not loaded yet."
-        return (
-            f"{OK} {len(contracts.contracts):,} contracts loaded "
-            f"from {len(contracts.orgs):,} mission givers."
+            if self.load_error:
+                return f"{WARN} {self.load_error}"
+            return (
+                f"{TODO} Not read yet — press 'Read my contracts', or just press "
+                f"'Update my game' and it happens automatically."
+            )
+
+        with_rewards = sum(1 for c in contracts.contracts if not c.reward.is_empty)
+        found = (
+            f"{OK} Read {len(contracts.contracts):,} contracts from your game files, "
+            f"across {len(contracts.orgs):,} mission givers."
         )
+        if with_rewards:
+            extra = f"{OK} Reward numbers added for {with_rewards:,} of them."
+        else:
+            extra = f"{TODO} No reward numbers yet — optional, see below."
+        return found + "\n" + extra
 
 
 def _heading(text: str) -> QLabel:

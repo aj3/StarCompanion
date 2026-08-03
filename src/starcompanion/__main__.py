@@ -26,7 +26,8 @@ from .inject import (
     restore,
 )
 from .inject import plan as plan_injection
-from .sources import contracts_ini, merge, scmdb
+from . import install as installs
+from .sources import contracts_ini, game_strings, merge, scmdb
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -51,8 +52,26 @@ def _load_rendered(path: Path) -> dict[str, str]:
 
 
 def cmd_import(args) -> int:
-    contracts = contracts_ini.load(args.contracts)
-    cache.save(contracts, args.out, source=f"contracts.ini:{args.contracts.name}")
+    """Read contracts. The game's own strings are the default source; a
+    community contract list only adds reward values on top."""
+    if args.contracts:
+        contracts = contracts_ini.load(args.contracts)
+        source = f"contracts.ini:{args.contracts.name}"
+    else:
+        game = installs.identify(args.install) if args.install else installs.find_default()
+        if game is None:
+            print(
+                "error: no Star Citizen install found. Pass --install <game folder>, "
+                "or --contracts <file> to read a community contract list instead.",
+                file=sys.stderr,
+            )
+            return EXIT_ERROR
+
+        print(f"reading the game's own strings from {game.label}")
+        contracts = game_strings.from_install(game)
+        source = f"game:{game.channel}:{game.version or 'unknown'}"
+
+    cache.save(contracts, args.out, source=source)
 
     print(f"imported {len(contracts.contracts)} contracts from {len(contracts.orgs)} orgs")
     print(f"  keys     : {sum(len(c.all_keys()) for c in contracts.contracts)}")
@@ -261,8 +280,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("import", help="read contract data into a cache")
-    p.add_argument("--contracts", type=Path, required=True, help="path to contracts.ini")
+    p = sub.add_parser("import", help="read contracts from your game (or a contract list)")
+    p.add_argument("--install", type=Path, help="game folder; found automatically if omitted")
+    p.add_argument(
+        "--contracts", type=Path,
+        help="optional community contract list, for reward values the game does not contain",
+    )
     p.add_argument("--out", type=Path, default=Path("cache.json"))
     p.set_defaults(func=cmd_import)
 
