@@ -10,8 +10,10 @@ than presenting seven dropdowns to someone who just wants it to look sensible.
 
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
+    QFrame,
     QComboBox,
     QFormLayout,
     QGroupBox,
@@ -27,9 +29,10 @@ from ..labels import (
     INHERIT,
     PREFIX_CAPTION,
     STYLE_CAPTION,
-    STYLE_NAMES,
     TEXT_STYLES,
     TITLE_PREFIXES,
+    preview_html,
+    preview_note,
 )
 from ...features import community_rewards_enabled
 from ..state import AppState
@@ -66,6 +69,17 @@ class FormattingTab(QWidget):
         form = QFormLayout()
         form.addRow("Style", self.default_tag)
         layout.addLayout(form)
+
+        # A worked example beats a name: "Highlight 4" means nothing on its own.
+        self.example = QLabel()
+        self.example.setTextFormat(Qt.TextFormat.RichText)
+        self.example.setWordWrap(True)
+        self.example.setFrameShape(QFrame.Shape.StyledPanel)
+        self.example.setMargin(10)
+        layout.addWidget(self.example)
+
+        self.example_note = _muted("")
+        layout.addWidget(self.example_note)
         layout.addWidget(_muted(STYLE_CAPTION))
 
         self.per_field_toggle = QCheckBox(
@@ -96,10 +110,24 @@ class FormattingTab(QWidget):
         return box
 
     def _set_default_style(self, index: int) -> None:
+        self._update_example(self.default_tag.itemData(index))
         if self._loading:
             return
         self.state.profile.formatting.emphasis = self.default_tag.itemData(index)
         self.state.touch_profile()
+
+    def _update_example(self, tag: str | None) -> None:
+        """Show a real contract line in the chosen style."""
+        if not tag:
+            return
+
+        styled = preview_html(tag, "Reputation Awarded: 250")
+        self.example.setText(
+            "A contract description would read:<br><br>"
+            "Deal with the outlaws at Shubin Mining Facility.<br><br>"
+            f"{styled}"
+        )
+        self.example_note.setText(preview_note(tag))
 
     def _toggle_per_field(self, checked: bool) -> None:
         self.per_field.setVisible(checked)
@@ -213,6 +241,7 @@ class FormattingTab(QWidget):
             self.default_tag.setCurrentIndex(
                 max(0, self.default_tag.findData(formatting.emphasis))
             )
+            self._update_example(formatting.emphasis)
 
             has_overrides = bool(formatting.by_field)
             self.per_field_toggle.setChecked(has_overrides)

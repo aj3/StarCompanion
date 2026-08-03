@@ -27,9 +27,36 @@ STYLE_HINTS: dict[str, str] = {tag: hint for tag, _, hint in TEXT_STYLES}
 
 STYLE_CAPTION = (
     "These are the only text styles Star Citizen can display — it has no "
-    "setting for custom colours. Exactly how each one looks is decided by the "
-    "game's own theme, so pick one and check how it reads in game."
+    "setting for custom colours."
 )
+
+# Rendering the example: `b` and `i` are ordinary bold and italic, so those can
+# be shown truthfully. The Highlight styles are drawn by the game's own theme,
+# which is not documented anywhere, so they are shown as a neutral emphasis and
+# labelled as approximate rather than faked in a specific colour.
+STYLE_PREVIEW_HTML: dict[str, str] = {
+    "b": "<b>{text}</b>",
+    "i": "<i>{text}</i>",
+}
+STYLE_PREVIEW_DEFAULT = "<span style='background:palette(highlight); color:palette(highlighted-text);'>&nbsp;{text}&nbsp;</span>"
+
+EXACT_PREVIEW = frozenset(STYLE_PREVIEW_HTML)
+
+PREVIEW_EXACT_NOTE = "This is exactly how it appears."
+PREVIEW_APPROXIMATE_NOTE = (
+    "Approximate — Star Citizen draws its Highlight styles with its own colours, "
+    "so check how it reads in game."
+)
+
+
+def preview_html(tag: str, text: str) -> str:
+    """A sample of the styled text, for showing beside the picker."""
+    template = STYLE_PREVIEW_HTML.get(tag, STYLE_PREVIEW_DEFAULT)
+    return template.format(text=text)
+
+
+def preview_note(tag: str) -> str:
+    return PREVIEW_EXACT_NOTE if tag in EXACT_PREVIEW else PREVIEW_APPROXIMATE_NOTE
 
 # Which piece of information each style setting applies to.
 FIELD_NAMES: dict[str, str] = {

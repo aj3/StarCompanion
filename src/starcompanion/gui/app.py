@@ -42,7 +42,7 @@ class MainWindow(QMainWindow):
             # capability off they would be an empty tab and a dead end.
             tabs.addTab(self.fields, "What to show")
         tabs.addTab(self.formatting, "Appearance")
-        tabs.addTab(self.templates, "Custom wording")
+        tabs.addTab(self.templates, "Advanced: custom wording")
         if community_rewards_enabled():
             tabs.addTab(self.source, "Advanced: data")
         tabs.addTab(self.apply, "Advanced: apply")

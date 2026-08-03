@@ -283,7 +283,7 @@ def test_editing_a_template_updates_the_preview_and_profile(window):
 def test_broken_template_reports_inline_and_does_not_raise(window):
     window.templates.editor.setPlainText("{{ nope_undefined }}")
 
-    assert "Template error" in window.templates.status.text()
+    assert "not valid yet" in window.templates.status.text()
     assert window.templates.preview.toPlainText() == ""
 
 
@@ -291,7 +291,7 @@ def test_recovering_from_a_broken_template(window):
     window.templates.editor.setPlainText("{{ nope_undefined }}")
     window.templates.editor.setPlainText("FIXED {{ base }}")
 
-    assert "Template error" not in window.templates.status.text()
+    assert "not valid yet" not in window.templates.status.text()
     assert window.templates.preview.toPlainText().startswith("FIXED")
 
 
@@ -658,3 +658,47 @@ def test_step_two_only_talks_about_reward_numbers(community_rewards, window, fak
     window.start.refresh()
     text = window.start.data_status_text()
     assert "Reward numbers" in text or "reward" in text.lower()
+
+
+# --- explaining what things do -----------------------------------------------
+
+
+def test_style_picker_shows_a_worked_example(window):
+    """A name like "Highlight 4" says nothing on its own."""
+    combo = window.formatting.default_tag
+    combo.setCurrentIndex(combo.findData("EM4"))
+
+    example = window.formatting.example.text()
+    assert "Reputation Awarded: 250" in example
+    assert "contract description" in example.lower()
+
+
+def test_bold_and_italic_examples_are_exact(window):
+    """Those two are ordinary formatting, so the example is truthful."""
+    combo = window.formatting.default_tag
+    for tag in ("b", "i"):
+        combo.setCurrentIndex(combo.findData(tag))
+        assert "exactly how it appears" in window.formatting.example_note.text()
+
+
+def test_highlight_examples_are_marked_approximate(window):
+    """The game draws these itself, so the example must not overclaim."""
+    combo = window.formatting.default_tag
+    combo.setCurrentIndex(combo.findData("EM3"))
+    assert "Approximate" in window.formatting.example_note.text()
+
+
+def test_custom_wording_explains_itself(window):
+    assert not window.templates.explainer.isVisibleTo(window.templates)
+
+    window.templates.show_help.setChecked(True)
+    help_text = window.templates.explainer.text()
+
+    assert window.templates.explainer.isVisibleTo(window.templates)
+    assert "{{ base }}" in help_text
+    assert "[Foxwell 3]" in help_text, "shows the result, not just the syntax"
+
+
+def test_custom_wording_is_labelled_advanced(window):
+    tabs = [window.tabs.tabText(i) for i in range(window.tabs.count())]
+    assert "Advanced: custom wording" in tabs

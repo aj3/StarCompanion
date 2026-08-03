@@ -8,6 +8,7 @@ raised at the user.
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QGroupBox,
     QHBoxLayout,
@@ -25,11 +26,35 @@ from ...model import StringKind
 from ...render import TemplateRenderError
 from ..state import AppState
 
+INTRO = (
+    "Most people never need this tab. It is for writing the contract wording "
+    "yourself, one mission giver at a time, instead of using the settings on "
+    "the other tabs."
+)
+
+EXPLAINER = (
+    "Pick a mission giver, then type a pattern. Anything inside double braces "
+    "is filled in when the text is written:\n"
+    "\n"
+    "    {{ base }}            the contract's own title\n"
+    "    {{ org.name }}        who is offering it, e.g. Foxwell\n"
+    "    {{ contract.rank }}   how hard it is, 1 to 6\n"
+    "\n"
+    "So typing this:\n"
+    "    [{{ org.name }} {{ contract.rank }}] {{ base }}\n"
+    "\n"
+    "produces this:\n"
+    "    [Foxwell 3] Orange Level Contract: Spring a Trap\n"
+    "\n"
+    "The box underneath shows a real contract from your game, updating as you "
+    "type. Nothing is written to your game until you press 'Update my game', "
+    "and 'Use the normal wording' puts this mission giver back."
+)
+
 PLACEHOLDER = (
-    "Using the built-in template.\n\n"
-    "Type here to override it for this mission giver.\n"
-    "Available: base, contract, org, reward, pools, opts, em()\n\n"
-    "Example:\n"
+    "Leave this empty to use the normal wording.\n"
+    "\n"
+    "Or type a pattern, for example:\n"
     "  [{{ org.name }} {{ contract.rank }}] {{ base }}"
 )
 
@@ -44,17 +69,17 @@ class TemplatesTab(QWidget):
         self.org.currentIndexChanged.connect(self._reload_editor)
 
         self.kind = QComboBox()
-        self.kind.addItem("Title", StringKind.TITLE)
-        self.kind.addItem("Description", StringKind.DESC)
+        self.kind.addItem("Contract title", StringKind.TITLE)
+        self.kind.addItem("Contract description", StringKind.DESC)
         self.kind.currentIndexChanged.connect(self._reload_editor)
 
-        reset = QPushButton("Use built-in")
+        reset = QPushButton("Use the normal wording")
         reset.clicked.connect(self._reset)
 
         chooser = QHBoxLayout()
         chooser.addWidget(QLabel("Mission giver"))
         chooser.addWidget(self.org, 1)
-        chooser.addWidget(QLabel("String"))
+        chooser.addWidget(QLabel("Change the"))
         chooser.addWidget(self.kind)
         chooser.addWidget(reset)
 
@@ -69,11 +94,11 @@ class TemplatesTab(QWidget):
         self.status = QLabel()
         self.status.setWordWrap(True)
 
-        editor_box = QGroupBox("Template")
+        editor_box = QGroupBox("Your pattern")
         editor_layout = QVBoxLayout(editor_box)
         editor_layout.addWidget(self.editor)
 
-        preview_box = QGroupBox("Preview (real contract, as written to global.ini)")
+        preview_box = QGroupBox("What a real contract will say")
         preview_layout = QVBoxLayout(preview_box)
         preview_layout.addWidget(self.preview)
         preview_layout.addWidget(self.status)
@@ -83,7 +108,21 @@ class TemplatesTab(QWidget):
         splitter.addWidget(preview_box)
         splitter.setSizes([200, 300])
 
+        intro = QLabel(INTRO)
+        intro.setWordWrap(True)
+
+        self.explainer = QLabel(EXPLAINER)
+        self.explainer.setWordWrap(True)
+        self.explainer.setEnabled(False)
+        self.explainer.setVisible(False)
+
+        self.show_help = QCheckBox("Show me how this works")
+        self.show_help.toggled.connect(self.explainer.setVisible)
+
         layout = QVBoxLayout(self)
+        layout.addWidget(intro)
+        layout.addWidget(self.show_help)
+        layout.addWidget(self.explainer)
         layout.addLayout(chooser)
         layout.addWidget(splitter, 1)
 
@@ -168,7 +207,7 @@ class TemplatesTab(QWidget):
         contract = self.state.sample_contract(self.org_id)
         if contract is None:
             self.preview.setPlainText("")
-            self.status.setText("Load contract data to see a preview.")
+            self.status.setText("Read your contracts on the Start tab to see a preview here.")
             return
 
         key = contract.key(self.string_kind)
@@ -184,7 +223,7 @@ class TemplatesTab(QWidget):
         except TemplateRenderError as exc:
             # Expected while typing; show it rather than interrupting.
             self.preview.setPlainText("")
-            self.status.setText(f"Template error: {exc.cause}")
+            self.status.setText(f"That pattern is not valid yet: {exc.cause}")
             return
 
         self.preview.setPlainText(value)
