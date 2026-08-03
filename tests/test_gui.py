@@ -49,6 +49,12 @@ def qapp():
 
 
 @pytest.fixture
+def expert_tabs(monkeypatch):
+    """Show the hand-driven apply screen for tests that exercise it."""
+    monkeypatch.setenv("STARCOMPANION_EXPERT", "1")
+
+
+@pytest.fixture
 def community_rewards(monkeypatch):
     """Turn on the hidden community-rewards capability for tests that need it."""
     monkeypatch.setenv("STARCOMPANION_COMMUNITY_REWARDS", "1")
@@ -339,7 +345,7 @@ def test_plan_reports_counts_and_writes_nothing(window, target):
     assert "updated" in window.apply.plan_label.text()
 
 
-def test_plan_without_a_target_explains_rather_than_failing(window):
+def test_plan_without_a_target_explains_rather_than_failing(expert_tabs, window):
     # Start now auto-detects a real install, so clear it to test this path.
     window.apply.target_edit.setText("")
     window.state.set_target(None)
@@ -347,14 +353,14 @@ def test_plan_without_a_target_explains_rather_than_failing(window):
     assert "Choose which file to change" in window.apply.plan_label.text()
 
 
-def test_plan_without_contracts_explains(qapp, target):
+def test_plan_without_contracts_explains(expert_tabs, qapp, target):
     window = MainWindow()
     window.apply.target_edit.setText(str(target))
     assert window.apply.refresh_plan() is None
     assert "Start tab" in window.apply.plan_label.text()
 
 
-def test_declining_the_confirmation_writes_nothing(window, target, monkeypatch):
+def test_declining_the_confirmation_writes_nothing(expert_tabs, window, target, monkeypatch):
     before = target.read_bytes()
     window.apply.target_edit.setText(str(target))
     monkeypatch.setattr(window.apply, "confirm", lambda result: False)
@@ -364,7 +370,7 @@ def test_declining_the_confirmation_writes_nothing(window, target, monkeypatch):
     assert target.read_bytes() == before
 
 
-def test_accepting_the_confirmation_writes_and_backs_up(window, target, tmp_path, monkeypatch):
+def test_accepting_the_confirmation_writes_and_backs_up(expert_tabs, window, target, tmp_path, monkeypatch):
     before = target.read_bytes()
     window.apply.target_edit.setText(str(target))
     window.state.backup_dir = tmp_path / "backups"
@@ -378,7 +384,7 @@ def test_accepting_the_confirmation_writes_and_backs_up(window, target, tmp_path
     assert [p.read_bytes() for p in (tmp_path / "backups").iterdir()] == [before]
 
 
-def test_backup_list_and_restore_round_trip(window, target, tmp_path, monkeypatch):
+def test_backup_list_and_restore_round_trip(expert_tabs, window, target, tmp_path, monkeypatch):
     original = target.read_bytes()
     window.apply.target_edit.setText(str(target))
     window.state.backup_dir = tmp_path / "backups"
@@ -396,7 +402,7 @@ def test_backup_list_and_restore_round_trip(window, target, tmp_path, monkeypatc
     assert target.read_bytes() == original
 
 
-def test_game_install_target_shows_a_warning(window, tmp_path):
+def test_game_install_target_shows_a_warning(expert_tabs, window, tmp_path):
     install = tmp_path / "LIVE"
     (install / "data" / "Localization" / "english").mkdir(parents=True)
     (install / "Data.p4k").write_bytes(b"x")
@@ -410,12 +416,12 @@ def test_game_install_target_shows_a_warning(window, tmp_path):
     assert "Star Citizen install" in window.apply.install_warning.text()
 
 
-def test_ordinary_target_shows_no_warning(window, target):
+def test_ordinary_target_shows_no_warning(expert_tabs, window, target):
     window.apply.target_edit.setText(str(target))
     assert not window.apply.install_warning.isVisibleTo(window.apply)
 
 
-def test_overwrite_without_stock_warns_instead_of_writing(window, target, monkeypatch):
+def test_overwrite_without_stock_warns_instead_of_writing(expert_tabs, window, target, monkeypatch):
     before = target.read_bytes()
     window.apply.target_edit.setText(str(target))
     window.apply.mode.setCurrentIndex(window.apply.mode.findData(MergeMode.OVERWRITE))
@@ -705,7 +711,7 @@ def test_custom_wording_is_labelled_advanced(window):
     assert "Advanced: custom wording" in tabs
 
 
-def test_advanced_apply_says_what_it_is_for(window):
+def test_advanced_apply_says_what_it_is_for(expert_tabs, window):
     """A tab called "Advanced: apply" needs to explain when to use it."""
     from PySide6.QtWidgets import QLabel
 
@@ -718,7 +724,21 @@ def test_advanced_apply_says_what_it_is_for(window):
     assert "Update my game" in intro, "should point at the simple path instead"
 
 
-def test_merge_modes_are_described_by_consequence(window):
+def test_merge_modes_are_described_by_consequence(expert_tabs, window):
     shown = [window.apply.mode.itemText(i) for i in range(window.apply.mode.count())]
     assert not any("global.ini" in text for text in shown)
     assert any("leave anything else in the file alone" in text for text in shown)
+
+
+def test_advanced_apply_is_hidden_by_default(qapp):
+    """The Start tab covers the whole job; this screen is for rare cases."""
+    tabs_shown = [
+        MainWindow().tabs.tabText(i) for i in range(MainWindow().tabs.count())
+    ]
+    assert "Advanced: apply" not in tabs_shown
+
+
+def test_advanced_apply_can_be_switched_back_on(expert_tabs, qapp):
+    fresh = MainWindow()
+    tabs_shown = [fresh.tabs.tabText(i) for i in range(fresh.tabs.count())]
+    assert "Advanced: apply" in tabs_shown

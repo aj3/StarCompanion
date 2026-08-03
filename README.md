@@ -73,8 +73,16 @@ takes a backup, and there is an **Undo my last change** button beside it.
 It also warns if your `USER.cfg` is missing `g_language`, since without that
 setting the game ignores the override entirely and nothing appears to happen.
 
-The remaining tabs are optional: *What to show*, *Appearance*, *Custom wording*,
-and two *Advanced* tabs for driving the pipeline by hand.
+*Appearance* changes how the added text looks. *Advanced: custom wording* lets
+you write the wording yourself and is not needed for normal use.
+
+A hand-driven apply screen exists for three rarer cases — a second game copy
+such as PTU, restoring an older backup rather than the newest, or rebuilding
+from a clean file when another pack is installed. It is hidden by default:
+
+```bash
+STARCOMPANION_EXPERT=1 starcompanion-gui
+```
 
 ### The command line
 
@@ -254,6 +262,29 @@ Game data is never committed — `tests/samples/*.ini` is gitignored, and the
 Format notes for the p4k and DataCore layouts are in
 [docs/format-notes.md](docs/format-notes.md), written from our own reading. No
 code was copied from any reference tool.
+
+## Provenance
+
+Everything under `src/` was written for this project. To state the specifics,
+since "informed by other tools" is easy to say and hard to check:
+
+- **No third-party code is vendored.** The repository contains no copy of, and
+  no reference to, any other tool.
+- **Dependencies are five mainstream PyPI packages** — PySide6, Jinja2,
+  pydantic, zstandard, cryptography. No VCS installs, no URL installs, nothing
+  pulled from a personal fork.
+- **The application makes no network calls.** There are no HTTP, socket or
+  URL-fetching imports anywhere in `src/`.
+- **It executes nothing.** No `eval`, no `exec`, no `subprocess`, no `pickle`
+  loading. The only `exec` in the codebase is Qt's own `app.exec()` event loop.
+- Reference tools were read to understand CIG's file formats, in clones kept
+  outside the repository and since deleted. They were never installed, never
+  imported, and never on the Python path. What was taken is format facts —
+  signature values, header layouts, record sizes — which any implementation
+  must encode.
+
+These are checkable: `grep -rn "import requests\|subprocess\|eval(" src/`
+returns nothing.
 
 ## Credits
 

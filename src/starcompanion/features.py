@@ -25,3 +25,15 @@ _TRUTHY = {"1", "true", "yes", "on"}
 def community_rewards_enabled() -> bool:
     """Whether the interface offers community-sourced reward numbers."""
     return os.environ.get("STARCOMPANION_COMMUNITY_REWARDS", "").strip().casefold() in _TRUTHY
+
+
+def expert_tabs_enabled() -> bool:
+    """Whether the hand-driven apply screen is shown.
+
+    Off: the Start tab covers the whole job, and that screen exposes file
+    paths and merge modes that only matter for a second game install, an older
+    backup, or wiping another pack. The code is untouched and still tested.
+
+        STARCOMPANION_EXPERT=1
+    """
+    return os.environ.get("STARCOMPANION_EXPERT", "").strip().casefold() in _TRUTHY

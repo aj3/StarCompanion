@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..config import Profile, UnsupportedProfileVersion, builtin_profiles, load_builtin
-from ..features import community_rewards_enabled
+from ..features import community_rewards_enabled, expert_tabs_enabled
 from .state import AppState
 from .tabs import ApplyTab, FieldsTab, FormattingTab, SourceTab, StartTab, TemplatesTab
 
@@ -45,7 +45,8 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.templates, "Advanced: custom wording")
         if community_rewards_enabled():
             tabs.addTab(self.source, "Advanced: data")
-        tabs.addTab(self.apply, "Advanced: apply")
+        if expert_tabs_enabled():
+            tabs.addTab(self.apply, "Advanced: apply")
         self.setCentralWidget(tabs)
         self.tabs = tabs
 
