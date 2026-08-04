@@ -447,6 +447,13 @@ def apply(
     if mode is MergeMode.OVERWRITE and stock_path is None and source is None:
         raise ValueError("OVERWRITE mode needs stock_path -- a pristine, unmodified global.ini")
 
+    reviewed_target = target_path.resolve(strict=False)
+    if operation_plan is not None and operation_plan.target is not None:
+        if reviewed_target != Path(operation_plan.target):
+            raise TargetChangedError(
+                "target path no longer resolves to the reviewed operation-plan target"
+            )
+
     current_fingerprint = fingerprint(target_path)
     if expected_fingerprint is not None and current_fingerprint != expected_fingerprint:
         raise TargetChangedError(
@@ -529,6 +536,10 @@ def apply(
         raise TargetChangedError(
             "target changed while the backup was being created; nothing was replaced"
         )
+    if target_path.resolve(strict=False) != reviewed_target:
+        raise TargetChangedError(
+            "target path changed while the backup was being created; nothing was replaced"
+        )
 
     _atomic_save(
         target,
@@ -537,6 +548,7 @@ def apply(
         [*result.updated, *result.added],
         result.removed,
         data=desired_data,
+        expected_resolved=reviewed_target,
     )
     if journal is not None:
         journal.record_replaced()
@@ -560,6 +572,8 @@ def restore(
     expected_backup_fingerprint: FileFingerprint | None = None,
     expected_target_fingerprint: FileFingerprint | None = None,
 ) -> None:
+    reviewed_backup = backup_path.resolve(strict=False)
+    reviewed_target = target_path.resolve(strict=False)
     if not backup_path.is_file():
         raise FileNotFoundError(backup_path)
     backup_fingerprint = fingerprint(backup_path)
@@ -574,6 +588,8 @@ def restore(
     ):
         raise TargetChangedError("target changed before rollback")
     data = backup_path.read_bytes()
+    if backup_path.resolve(strict=False) != reviewed_backup:
+        raise TargetChangedError("selected backup path changed while it was being read")
     if fingerprint(backup_path) != backup_fingerprint:
         raise TargetChangedError("selected backup changed while it was being read")
     if (
@@ -581,7 +597,7 @@ def restore(
         and fingerprint(target_path) != expected_target_fingerprint
     ):
         raise TargetChangedError("target changed while rollback was being prepared")
-    _atomic_write(target_path, data)
+    _atomic_write(target_path, data, expected_resolved=reviewed_target)
 
 
 def _source_summary(data: object) -> dict[str, object]:
@@ -665,6 +681,7 @@ def _atomic_save(
     removed: list[str] | None = None,
     *,
     data: bytes | None = None,
+    expected_resolved: Path | None = None,
 ) -> None:
     data = data if data is not None else localization.dumps().encode("utf-8")
 
@@ -677,12 +694,18 @@ def _atomic_save(
         if check.get(key) is not None:
             raise OSError(f"post-render removal verification failed for {key}")
 
-    _atomic_write(target_path, data)
+    _atomic_write(target_path, data, expected_resolved=expected_resolved)
 
 
-def _atomic_write(path: Path, data: bytes) -> None:
+def _atomic_write(
+    path: Path, data: bytes, *, expected_resolved: Path | None = None
+) -> None:
     """Flush a sibling temporary file, then replace ``path`` atomically."""
+    if expected_resolved is not None and path.resolve(strict=False) != expected_resolved:
+        raise TargetChangedError("target path changed before atomic write")
     path.parent.mkdir(parents=True, exist_ok=True)
+    if expected_resolved is not None and path.resolve(strict=False) != expected_resolved:
+        raise TargetChangedError("target path changed before atomic write")
     descriptor, temporary_name = tempfile.mkstemp(
         dir=path.parent,
         prefix=f".{path.name}.",
@@ -696,6 +719,8 @@ def _atomic_write(path: Path, data: bytes) -> None:
             os.fsync(stream.fileno())
         if path.exists():
             shutil.copymode(path, temporary)
+        if expected_resolved is not None and path.resolve(strict=False) != expected_resolved:
+            raise TargetChangedError("target path changed before atomic replace")
         os.replace(temporary, path)
     except BaseException:
         temporary.unlink(missing_ok=True)

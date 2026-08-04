@@ -21,7 +21,8 @@ strings, usernames, and absolute paths must not enter diagnostics or releases.
 |---|---|---|
 | `Data.p4k` | Large and possibly truncated/corrupt; not an authenticity root | Read-only handle, bounded processing, compression and exact-length validation, ZIP CRC enforcement, narrowly classified CIG method-100 warning |
 | Local INI/JSON/CSV imports | User-selected but potentially hostile | Size/count/depth/schema limits, duplicate rejection, exact scopes, value validation, no remote retrieval |
-| Settings ZIP | Fully untrusted portable input | No encrypted/path-traversing input, allowlisted paths/kinds/preferences, count/size/ratio limits, ZIP CRC plus manifest SHA-256, preview, conflict authorization, crash journal and transactional rollback |
+| Settings ZIP | Fully untrusted portable input | No encrypted/path-traversing input, allowlisted paths/kinds/preferences, count/size/ratio limits, ZIP CRC plus manifest SHA-256, preview, conflict authorization, link/junction revalidation, crash journal and transactional rollback |
+| User fallback JSON | Fully untrusted local input | Exact schema, duplicate-key/depth/count/length/size limits, unresolved-key allowlist, build/language binding, explicit authored text only |
 | Game override | May change outside StarCompanion | Fingerprinted operation plan, pre-write recheck, backup, journal, atomic replacement, verified result and rollback |
 | Per-channel data | Different channels/languages must never mix | Supported-channel allowlist and normalized scopes for caches, overrides, language packs, ownership, backups, and transactions |
 | Archive helper process | May crash, hang, or be cancelled | Parent-owned file artifacts, bounded cancellation/termination, validated result format, parent cleanup |

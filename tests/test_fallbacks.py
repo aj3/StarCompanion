@@ -108,6 +108,49 @@ def test_fallback_document_rejects_values_outside_structured_metadata(tmp_path):
         FallbackDocument.load(path)
 
 
+def test_fallback_document_rejects_hostile_json_shapes(tmp_path):
+    duplicate = tmp_path / "duplicate.json"
+    duplicate.write_text(
+        '{"schema_version":1,"schema_version":1,"game_version":null,'
+        '"language":"english","unresolved":[],"values":{}}',
+        encoding="utf-8",
+    )
+    with pytest.raises(FallbackError, match="duplicate JSON key"):
+        FallbackDocument.load(duplicate)
+
+    nested = tmp_path / "nested.json"
+    nested.write_text("[" * 100 + "0" + "]" * 100, encoding="utf-8")
+    with pytest.raises(FallbackError, match="nesting limit"):
+        FallbackDocument.load(nested)
+
+    unknown = tmp_path / "unknown.json"
+    unknown.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "game_version": None,
+                "language": "english",
+                "unresolved": [],
+                "values": {},
+                "external_source": "https://example.invalid",
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(FallbackError, match="missing or unknown fields"):
+        FallbackDocument.load(unknown)
+
+
+def test_fallback_document_rejects_oversized_input(tmp_path, monkeypatch):
+    import starcompanion.fallbacks as fallbacks
+
+    monkeypatch.setattr(fallbacks, "MAX_FALLBACK_BYTES", 32)
+    path = tmp_path / "oversized.json"
+    path.write_bytes(b"{" + b" " * 64 + b"}")
+    with pytest.raises(FallbackError, match="file size limit"):
+        FallbackDocument.load(path)
+
+
 def test_context_rejects_cross_build_and_cross_language_reuse():
     fallback = document()
     with pytest.raises(FallbackError, match="build"):

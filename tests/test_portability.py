@@ -27,7 +27,7 @@ def _crash_settings_restore(archive: str, root: str) -> None:
     real_atomic = module._atomic_bytes
     target_writes = 0
 
-    def crash_on_second_target(path, payload):
+    def crash_on_second_target(path, payload, **kwargs):
         nonlocal target_writes
         path = Path(path)
         if (
@@ -37,7 +37,7 @@ def _crash_settings_restore(archive: str, root: str) -> None:
             target_writes += 1
             if target_writes == 2:
                 os._exit(92)
-        return real_atomic(path, payload)
+        return real_atomic(path, payload, **kwargs)
 
     module._atomic_bytes = crash_on_second_target
     module.apply_settings_import(plan, replace_existing=True)
@@ -165,6 +165,29 @@ def test_restore_detects_archive_and_target_changes_after_preview(tmp_path):
         apply_settings_import(plan, replace_existing=True)
 
 
+def test_restore_rejects_parent_symlink_swap_after_preview(tmp_path):
+    source = tmp_path / "source"
+    target = tmp_path / "target"
+    target.mkdir()
+    UserEditStore("LIVE", "english", root=source).save({"Key": "incoming"})
+    archive = tmp_path / "settings.zip"
+    write_settings_archive(plan_settings_export(source), archive)
+    plan = plan_settings_import(archive, target)
+
+    moved = tmp_path / "moved-target"
+    target.rename(moved)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    try:
+        target.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+
+    with pytest.raises(PortabilityError, match="symbolic link|junction|data root"):
+        apply_settings_import(plan)
+    assert not (outside / "channels").exists()
+
+
 def test_restore_rolls_back_completed_files_on_interrupted_write(monkeypatch, tmp_path):
     source = tmp_path / "source"
     target = tmp_path / "target"
@@ -178,7 +201,7 @@ def test_restore_rolls_back_completed_files_on_interrupted_write(monkeypatch, tm
     real_atomic = portability._atomic_bytes
     target_calls = 0
 
-    def interrupted(path, payload):
+    def interrupted(path, payload, **kwargs):
         nonlocal target_calls
         path = Path(path)
         if (
@@ -188,7 +211,7 @@ def test_restore_rolls_back_completed_files_on_interrupted_write(monkeypatch, tm
             target_calls += 1
         if target_calls == 2:
             raise OSError("synthetic restore crash")
-        return real_atomic(path, payload)
+        return real_atomic(path, payload, **kwargs)
 
     monkeypatch.setattr(portability, "_atomic_bytes", interrupted)
     with pytest.raises(OSError, match="synthetic restore crash"):

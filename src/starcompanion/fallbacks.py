@@ -26,10 +26,58 @@ SCHEMA_VERSION = 1
 PROVIDER = "user-localization-fallbacks"
 PROVIDER_VERSION = "1"
 PLACEHOLDER_KEYS = frozenset({"loc_uninitialized", "loc_placeholder"})
+MAX_FALLBACK_BYTES = 16 * 1024 * 1024
+MAX_JSON_DEPTH = 64
+MAX_UNRESOLVED = 100_000
+MAX_KEYS = 100_000
+MAX_KEYS_PER_GROUP = 256
+MAX_KEY_LENGTH = 512
+MAX_VALUE_LENGTH = 1024 * 1024
+MAX_LABEL_LENGTH = 4096
 
 
 class FallbackError(ValueError):
     pass
+
+
+def _strict_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise FallbackError(f"duplicate JSON key {key!r}")
+        result[key] = value
+    return result
+
+
+def _decode_document(payload: bytes) -> object:
+    if len(payload) > MAX_FALLBACK_BYTES:
+        raise FallbackError("fallback document exceeds the file size limit")
+    try:
+        text = payload.decode("utf-8")
+        depth = 0
+        in_string = False
+        escaped = False
+        for char in text:
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+            elif char == '"':
+                in_string = True
+            elif char in "[{":
+                depth += 1
+                if depth > MAX_JSON_DEPTH:
+                    raise FallbackError("fallback JSON nesting limit exceeded")
+            elif char in "]}":
+                depth = max(0, depth - 1)
+        return json.loads(text, object_pairs_hook=_strict_object)
+    except FallbackError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise FallbackError(f"invalid fallback JSON: {exc}") from exc
 
 
 @dataclass(frozen=True)
@@ -87,44 +135,77 @@ class FallbackDocument:
     @classmethod
     def load(cls, path: Path) -> FallbackDocument:
         try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise FallbackError(f"invalid fallback JSON: {exc}") from exc
+            with path.open("rb") as stream:
+                payload = stream.read(MAX_FALLBACK_BYTES + 1)
+        except OSError as exc:
+            raise FallbackError(f"cannot read fallback document: {exc}") from exc
+        raw = _decode_document(payload)
         if not isinstance(raw, dict):
             raise FallbackError("fallback document must be a JSON object")
+        allowed_fields = {
+            "schema_version",
+            "game_version",
+            "language",
+            "instructions",
+            "unresolved",
+            "values",
+        }
+        required_fields = allowed_fields - {"instructions"}
+        if not required_fields <= set(raw) or set(raw) - allowed_fields:
+            raise FallbackError("fallback document has missing or unknown fields")
+        instructions = raw.get("instructions")
+        if instructions is not None and (
+            not isinstance(instructions, str) or len(instructions) > MAX_LABEL_LENGTH
+        ):
+            raise FallbackError("fallback instructions must be bounded text")
         if raw.get("schema_version") != SCHEMA_VERSION:
             raise FallbackError(
                 f"unsupported fallback schema {raw.get('schema_version')!r}; "
                 f"expected {SCHEMA_VERSION}"
             )
         language = raw.get("language")
-        if not isinstance(language, str) or not language.strip():
+        if (
+            not isinstance(language, str)
+            or not language.strip()
+            or len(language) > MAX_LABEL_LENGTH
+        ):
             raise FallbackError("fallback language must be a non-empty string")
         game_version = raw.get("game_version")
-        if game_version is not None and not isinstance(game_version, str):
+        if game_version is not None and (
+            not isinstance(game_version, str) or len(game_version) > MAX_LABEL_LENGTH
+        ):
             raise FallbackError("fallback game_version must be a string or null")
 
         unresolved_raw = raw.get("unresolved")
         if not isinstance(unresolved_raw, list):
             raise FallbackError("fallback unresolved must be an array")
+        if len(unresolved_raw) > MAX_UNRESOLVED:
+            raise FallbackError("fallback unresolved exceeds the entry limit")
         unresolved: list[UnresolvedLocalization] = []
         allowed_keys: set[str] = set()
         for number, item in enumerate(unresolved_raw, 1):
-            if not isinstance(item, dict):
+            if not isinstance(item, dict) or set(item) != {"source_id", "reason", "keys"}:
                 raise FallbackError(f"unresolved entry {number} must be an object")
             source_id = item.get("source_id")
             reason = item.get("reason")
             keys = item.get("keys")
-            if not isinstance(source_id, str) or not source_id:
+            if (
+                not isinstance(source_id, str)
+                or not source_id
+                or len(source_id) > MAX_LABEL_LENGTH
+            ):
                 raise FallbackError(f"unresolved entry {number} has no source_id")
             if reason != "localization-missing":
                 raise FallbackError(
                     f"unresolved entry {number} is not a localization-missing fact"
                 )
             if not isinstance(keys, list) or not keys or not all(
-                isinstance(key, str) and key for key in keys
+                isinstance(key, str) and key and len(key) <= MAX_KEY_LENGTH
+                for key in keys
             ):
                 raise FallbackError(f"unresolved entry {number} has invalid keys")
+            if len(keys) > MAX_KEYS_PER_GROUP or len(keys) != len(set(keys)):
+                raise FallbackError(f"unresolved entry {number} has excessive or duplicate keys")
             typed_keys = tuple(keys)
             if any(key.casefold() in PLACEHOLDER_KEYS for key in typed_keys):
                 raise FallbackError("shared placeholder keys cannot receive fallbacks")
@@ -134,11 +215,14 @@ class FallbackDocument:
         values = raw.get("values")
         if not isinstance(values, dict):
             raise FallbackError("fallback values must be an object of key to text")
+        if len(allowed_keys) > MAX_KEYS or len(values) > MAX_KEYS:
+            raise FallbackError("fallback document exceeds the localization-key limit")
         clean_values: dict[str, str] = {}
         for key, value in values.items():
             if (
                 not isinstance(key, str)
                 or not key
+                or len(key) > MAX_KEY_LENGTH
                 or "=" in key
                 or "\n" in key
                 or "\r" in key
@@ -148,7 +232,7 @@ class FallbackDocument:
                 raise FallbackError(f"fallback value {key!r} is not in unresolved metadata")
             if key.casefold() in PLACEHOLDER_KEYS:
                 raise FallbackError(f"shared placeholder key {key!r} cannot be overridden")
-            if not isinstance(value, str):
+            if not isinstance(value, str) or len(value) > MAX_VALUE_LENGTH:
                 raise FallbackError(f"fallback value for {key!r} must be text")
             errors = [
                 issue

@@ -479,7 +479,14 @@ class EditSession:
                 replay = command.apply(replay)
         except FileNotFoundError:
             return
-        except (OSError, json.JSONDecodeError, UserEditError, AttributeError):
+        except (
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            RecursionError,
+            UserEditError,
+            AttributeError,
+        ):
             self.history_recovered = False
             return
         self.commands = commands

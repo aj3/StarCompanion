@@ -46,6 +46,17 @@ def _sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _bounded_bytes(path: Path, limit: int, label: str) -> bytes:
+    try:
+        with path.open("rb") as stream:
+            payload = stream.read(limit + 1)
+    except OSError as exc:
+        raise PortabilityError(f"cannot read {label}: {exc}") from exc
+    if len(payload) > limit:
+        raise PortabilityError(f"{label} exceeds the size limit")
+    return payload
+
+
 def _strict_object(pairs):
     result = {}
     for key, value in pairs:
@@ -124,8 +135,41 @@ def _canonical_json(value: object) -> bytes:
     )
 
 
-def _atomic_bytes(path: Path, payload: bytes) -> None:
+def _is_link_or_junction(path: Path) -> bool:
+    junction = getattr(path, "is_junction", None)
+    return path.is_symlink() or bool(junction and junction())
+
+
+def _checked_descendant(root: Path, path: Path, label: str) -> Path:
+    """Reject link-like components and resolved paths outside ``root``."""
+
+    # Callers bind ``root`` during preview. Do not resolve it again here: a
+    # later link/junction swap is precisely what this check must detect.
+    base = Path(os.path.abspath(root))
+    if _is_link_or_junction(base):
+        raise PortabilityError(f"{label} cannot use a symbolic-link or junction root")
+    candidate = Path(os.path.abspath(path))
+    try:
+        relative = candidate.relative_to(base)
+    except ValueError as exc:
+        raise PortabilityError(f"{label} escapes the data root") from exc
+    current = base
+    for part in relative.parts:
+        current /= part
+        if _is_link_or_junction(current):
+            raise PortabilityError(f"{label} cannot traverse a symbolic link or junction")
+    resolved = candidate.resolve(strict=False)
+    if resolved != base and base not in resolved.parents:
+        raise PortabilityError(f"{label} escapes the data root")
+    return candidate
+
+
+def _atomic_bytes(path: Path, payload: bytes, *, root: Path | None = None) -> None:
+    if root is not None:
+        path = _checked_descendant(root, path, "settings write target")
     path.parent.mkdir(parents=True, exist_ok=True)
+    if root is not None:
+        _checked_descendant(root, path, "settings write target")
     descriptor, temporary = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
     )
@@ -135,6 +179,8 @@ def _atomic_bytes(path: Path, payload: bytes) -> None:
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
+        if root is not None:
+            _checked_descendant(root, path, "settings write target")
         os.replace(temp, path)
     finally:
         temp.unlink(missing_ok=True)
@@ -155,7 +201,9 @@ class PreferencesStore:
             raise PortabilityError("preferences cannot be a symbolic link")
         if self.path.stat().st_size > MAX_ENTRY_BYTES:
             raise PortabilityError("preferences exceed the size limit")
-        return validate_preferences(_json(self.path.read_bytes(), "preferences"))
+        return validate_preferences(
+            _json(_bounded_bytes(self.path, MAX_ENTRY_BYTES, "preferences"), "preferences")
+        )
 
     def save(self, preferences: Mapping[str, object]) -> None:
         _atomic_bytes(self.path, _canonical_json(validate_preferences(dict(preferences))))
@@ -176,7 +224,9 @@ class LanguagePackStore:
     def load(self) -> dict[str, str]:
         if not self.path.is_file():
             return {}
-        return _parse_ini(self.path.read_bytes(), str(self.path))
+        return _parse_ini(
+            _bounded_bytes(self.path, MAX_FILE_BYTES, str(self.path)), str(self.path)
+        )
 
     def save(self, values: Mapping[str, str]) -> None:
         materialized = _validate_ini_values(values, "language pack")
@@ -236,7 +286,7 @@ def load_language_pack(path: Path) -> dict[str, str]:
     path = Path(path)
     if not path.is_file():
         raise PortabilityError(f"language pack does not exist: {path}")
-    return _parse_ini(path.read_bytes(), str(path))
+    return _parse_ini(_bounded_bytes(path, MAX_FILE_BYTES, str(path)), str(path))
 
 
 @dataclass(frozen=True)
@@ -277,7 +327,7 @@ def plan_settings_export(root: Path) -> SettingsExportPlan:
                 continue
             if base not in path.resolve().parents:
                 raise PortabilityError("settings source escapes the data root")
-            payload = path.read_bytes()
+            payload = _bounded_bytes(path, MAX_ENTRY_BYTES, str(path))
             _parse_ini(payload, str(path))
             entries.append(
                 ExportEntry(
@@ -311,7 +361,9 @@ def write_settings_archive(
         raise PortabilityError(f"refusing to overwrite {destination}")
     for entry in plan.entries:
         if entry.source is not None and (
-            not entry.source.is_file() or _sha256(entry.source.read_bytes()) != _sha256(entry.payload)
+            not entry.source.is_file()
+            or _sha256(_bounded_bytes(entry.source, MAX_ENTRY_BYTES, str(entry.source)))
+            != _sha256(entry.payload)
         ):
             raise PortabilityError(f"settings changed after preview: {entry.archive_path}")
     files = [
@@ -397,7 +449,9 @@ def _safe_member(info: zipfile.ZipInfo) -> None:
 
 def _target_for(base: Path, archive_path: str, kind: str) -> tuple[Path, str | None, str | None]:
     if archive_path == "preferences.json" and kind == "preferences":
-        return base / "preferences.json", None, None
+        return _checked_descendant(
+            base, base / "preferences.json", "settings restore target"
+        ), None, None
     parts = PurePosixPath(archive_path).parts
     if len(parts) != 4 or parts[0] != "channels":
         raise PortabilityError(f"manifest path {archive_path!r} is not allowlisted")
@@ -410,9 +464,9 @@ def _target_for(base: Path, archive_path: str, kind: str) -> tuple[Path, str | N
     if expected_name is None or parts[3] != expected_name:
         raise PortabilityError(f"manifest kind/path mismatch for {archive_path!r}")
     target = UserEditStore(channel, language, root=base).path.with_name(expected_name)
-    if base not in target.resolve().parents:
-        raise PortabilityError("settings target escapes the data root")
-    return target, channel, language
+    return _checked_descendant(
+        base, target, "settings restore target"
+    ), channel, language
 
 
 def plan_settings_import(archive_path: Path, root: Path) -> SettingsImportPlan:
@@ -420,7 +474,7 @@ def plan_settings_import(archive_path: Path, root: Path) -> SettingsImportPlan:
     base = Path(root).resolve()
     if not archive_path.is_file() or archive_path.stat().st_size > MAX_ARCHIVE_BYTES:
         raise PortabilityError("settings archive is missing or exceeds the size limit")
-    raw_archive = archive_path.read_bytes()
+    raw_archive = _bounded_bytes(archive_path, MAX_ARCHIVE_BYTES, "settings archive")
     try:
         with zipfile.ZipFile(io.BytesIO(raw_archive), "r") as archive:
             infos = archive.infolist()
@@ -471,19 +525,23 @@ def plan_settings_import(archive_path: Path, root: Path) -> SettingsImportPlan:
                 ):
                     raise PortabilityError(f"settings entry {name!r} failed manifest verification")
                 target, channel, language = _target_for(base, name, kind)
-                normalized_target = target.resolve()
+                normalized_target = _checked_descendant(
+                    base, target, "settings restore target"
+                ).resolve(strict=False)
                 if normalized_target in targets:
                     raise PortabilityError("settings manifest maps multiple files to one target")
                 targets.add(normalized_target)
-                if target.is_symlink():
-                    raise PortabilityError("settings restore target cannot be a symbolic link")
                 if record["channel"] != channel or record["language"] != language:
                     raise PortabilityError(f"settings scope mismatch for {name!r}")
                 if kind == "preferences":
                     validate_preferences(_json(payload, "preferences"))
                 else:
                     _parse_ini(payload, name)
-                current = target.read_bytes() if target.is_file() else None
+                current = (
+                    _bounded_bytes(target, MAX_ENTRY_BYTES, str(target))
+                    if target.is_file()
+                    else None
+                )
                 expected = _sha256(current) if current is not None else None
                 outcome = (
                     "add" if current is None else "unchanged" if current == payload else "change"
@@ -500,18 +558,27 @@ def plan_settings_import(archive_path: Path, root: Path) -> SettingsImportPlan:
     except (zipfile.BadZipFile, RuntimeError) as exc:
         raise PortabilityError(f"invalid settings archive: {exc}") from exc
     return SettingsImportPlan(
-        archive_path, _sha256(raw_archive), base, tuple(sorted(items, key=lambda item: item.archive_path))
+        archive_path,
+        _sha256(raw_archive),
+        base,
+        tuple(sorted(items, key=lambda item: item.archive_path)),
     )
 
 
 def apply_settings_import(plan: SettingsImportPlan, *, replace_existing: bool = False) -> None:
-    if _sha256(plan.archive.read_bytes()) != plan.archive_sha256:
+    if (
+        _sha256(_bounded_bytes(plan.archive, MAX_ARCHIVE_BYTES, "settings archive"))
+        != plan.archive_sha256
+    ):
         raise PortabilityError("settings archive changed after preview")
     changed = [item for item in plan.items if item.outcome != "unchanged"]
     conflicts = [item for item in changed if item.outcome == "change"]
     if conflicts and not replace_existing:
-        raise PortabilityError("settings restore would replace existing files; authorize replacement")
+        raise PortabilityError(
+            "settings restore would replace existing files; authorize replacement"
+        )
     lock = plan.root / ".settings-restore.lock"
+    _checked_descendant(plan.root, lock, "settings restore lock")
     with _store_lock(lock):
         journal_path = plan.root / ".settings-restore-journal.json"
         recovery_root = plan.root / ".settings-restore-recovery"
@@ -520,18 +587,30 @@ def apply_settings_import(plan: SettingsImportPlan, *, replace_existing: bool = 
                 "an interrupted settings restore requires `settings recover` before retrying"
             )
         if recovery_root.exists():
-            shutil.rmtree(recovery_root)
+            _remove_recovery_tree(plan.root)
         for item in plan.items:
-            current = item.target.read_bytes() if item.target.is_file() else None
+            _checked_descendant(plan.root, item.target, "settings restore target")
+            current = (
+                _bounded_bytes(item.target, MAX_ENTRY_BYTES, str(item.target))
+                if item.target.is_file()
+                else None
+            )
             actual = _sha256(current) if current is not None else None
             if actual != item.expected_sha256:
                 raise PortabilityError(f"settings changed after preview: {item.archive_path}")
         records = []
         try:
             for item in changed:
-                before = item.target.read_bytes() if item.target.is_file() else None
+                _checked_descendant(plan.root, item.target, "settings restore target")
+                before = (
+                    _bounded_bytes(item.target, MAX_ENTRY_BYTES, str(item.target))
+                    if item.target.is_file()
+                    else None
+                )
                 if before is not None:
-                    _atomic_bytes(recovery_root / item.archive_path, before)
+                    _atomic_bytes(
+                        recovery_root / item.archive_path, before, root=plan.root
+                    )
                 records.append(
                     {
                         "archive_path": item.archive_path,
@@ -541,12 +620,12 @@ def apply_settings_import(plan: SettingsImportPlan, *, replace_existing: bool = 
                 )
             _write_restore_journal(plan.root, "applying", records)
             for item in changed:
-                _atomic_bytes(item.target, item.payload)
+                _atomic_bytes(item.target, item.payload, root=plan.root)
         except BaseException:
             if journal_path.is_file():
                 _recover_settings_locked(plan.root)
             elif recovery_root.exists():
-                shutil.rmtree(recovery_root)
+                _remove_recovery_tree(plan.root)
             raise
         _write_restore_journal(plan.root, "complete", records)
         _finish_restore_cleanup(plan.root)
@@ -556,14 +635,20 @@ def _write_restore_journal(root: Path, stage: str, records: list[dict[str, objec
     _atomic_bytes(
         root / ".settings-restore-journal.json",
         _canonical_json({"schema": SETTINGS_SCHEMA, "stage": stage, "items": records}),
+        root=root,
     )
 
 
 def _read_restore_journal(root: Path) -> dict[str, object]:
-    path = root / ".settings-restore-journal.json"
+    path = _checked_descendant(
+        root, root / ".settings-restore-journal.json", "settings recovery journal"
+    )
     if not path.is_file() or path.stat().st_size > MAX_ENTRY_BYTES:
         raise PortabilityError("settings recovery journal is missing or too large")
-    data = _json(path.read_bytes(), "settings recovery journal")
+    data = _json(
+        _bounded_bytes(path, MAX_ENTRY_BYTES, "settings recovery journal"),
+        "settings recovery journal",
+    )
     if (
         not isinstance(data, dict)
         or set(data) != {"schema", "stage", "items"}
@@ -594,10 +679,18 @@ def settings_recovery_status(root: Path) -> str | None:
     return str(_read_restore_journal(root)["stage"])
 
 
-def _finish_restore_cleanup(root: Path) -> None:
+def _remove_recovery_tree(root: Path) -> None:
     recovery_root = root / ".settings-restore-recovery"
     if recovery_root.exists():
+        _checked_descendant(root, recovery_root, "settings recovery directory")
         shutil.rmtree(recovery_root)
+
+
+def _finish_restore_cleanup(root: Path) -> None:
+    _remove_recovery_tree(root)
+    _checked_descendant(
+        root, root / ".settings-restore-journal.json", "settings recovery journal"
+    )
     (root / ".settings-restore-journal.json").unlink(missing_ok=True)
 
 
@@ -610,13 +703,22 @@ def _recover_settings_locked(root: Path) -> str:
                 root, record["archive_path"], record["kind"]
             )
             if record["had_before"]:
-                backup = recovery_root / record["archive_path"]
+                backup = _checked_descendant(
+                    root,
+                    recovery_root / record["archive_path"],
+                    "settings recovery backup",
+                )
                 if not backup.is_file():
                     raise PortabilityError(
                         f"settings recovery backup is missing: {record['archive_path']}"
                     )
-                _atomic_bytes(target, backup.read_bytes())
+                _atomic_bytes(
+                    target,
+                    _bounded_bytes(backup, MAX_ENTRY_BYTES, "settings recovery backup"),
+                    root=root,
+                )
             else:
+                _checked_descendant(root, target, "settings recovery target")
                 target.unlink(missing_ok=True)
         _write_restore_journal(root, "complete", journal["items"])
         result = "rolled-back"

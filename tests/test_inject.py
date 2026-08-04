@@ -123,6 +123,38 @@ def test_apply_refuses_when_target_changed_after_preview(target):
     assert LocalizationFile.load(target).get("Foo") == "external"
 
 
+def test_apply_rejects_parent_symlink_swap_for_bound_plan(tmp_path):
+    install = tmp_path / "install"
+    install.mkdir()
+    target = install / "global.ini"
+    target.write_bytes(STOCK.encode("utf-8"))
+    preview = plan(LocalizationFile.load(target), {"Foo": "changed"})
+    preview.bind(
+        channel="LIVE",
+        language="english",
+        mode=MergeMode.MERGE,
+        baseline_source="override",
+        target=target,
+        target_fingerprint=fingerprint(target),
+        baseline_sha256=bytes_sha256(target.read_bytes()),
+        desired_sha256="a" * 64,
+    )
+
+    moved = tmp_path / "moved-install"
+    install.rename(moved)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "global.ini").write_bytes(STOCK.encode("utf-8"))
+    try:
+        install.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+
+    with pytest.raises(TargetChangedError, match="reviewed operation-plan target"):
+        apply(target, {"Foo": "changed"}, confirmed=True, operation_plan=preview)
+    assert (outside / "global.ini").read_bytes() == STOCK.encode("utf-8")
+
+
 def test_crash_before_replace_is_recovered_without_touching_target(
     target, tmp_path, monkeypatch
 ):
