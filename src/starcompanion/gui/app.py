@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 
 from ..config import Profile, UnsupportedProfileVersion, builtin_profiles, load_builtin
 from ..features import community_rewards_enabled, expert_tabs_enabled
+from . import theme
 from .state import AppState
 from .tabs import ApplyTab, FieldsTab, FormattingTab, SourceTab, StartTab, TemplatesTab
 
@@ -37,14 +38,10 @@ class MainWindow(QMainWindow):
         # Start first and selected: everything needed for the common case is
         # there, and the rest is for people who want to tune the output.
         tabs.addTab(self.start, "Start here")
-        if community_rewards_enabled():
-            # Every option on these two concerns reward numbers, so with that
-            # capability off they would be an empty tab and a dead end.
-            tabs.addTab(self.fields, "What to show")
+        tabs.addTab(self.fields, "What to show")
         tabs.addTab(self.formatting, "Appearance")
         tabs.addTab(self.templates, "Advanced: custom wording")
-        if community_rewards_enabled():
-            tabs.addTab(self.source, "Advanced: data")
+        tabs.addTab(self.source, "Data & provenance")
         if expert_tabs_enabled():
             tabs.addTab(self.apply, "Advanced: apply")
         self.setCentralWidget(tabs)
@@ -52,7 +49,24 @@ class MainWindow(QMainWindow):
 
         self._build_menu()
         self.state.profileChanged.connect(self._update_title)
+        self.state.profileChanged.connect(self.apply_theme)
         self._update_title()
+        self.apply_theme()
+
+    def apply_theme(self) -> None:
+        """Restyle everything from the profile's chosen theme."""
+        selected = self.state.profile.appearance.theme
+        if getattr(self, "_applied_theme", None) == selected:
+            return
+        app = QApplication.instance()
+        if app is not None:
+            theme.apply_theme(app, selected)
+            self._applied_theme = selected
+
+    def toggle_theme(self) -> None:
+        current = self.state.profile.appearance.theme
+        self.state.profile.appearance.theme = "light" if current == "dark" else "dark"
+        self.state.touch_profile()
 
     def _build_menu(self) -> None:
         menu = self.menuBar().addMenu("&Profile")
@@ -64,6 +78,15 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         menu.addAction("Open…", self.open_profile)
         menu.addAction("Save as…", self.save_profile)
+
+        view = self.menuBar().addMenu("&View")
+        self.theme_action = view.addAction("Switch to light theme", self.toggle_theme)
+        self.state.profileChanged.connect(self._update_theme_action)
+        self._update_theme_action()
+
+    def _update_theme_action(self) -> None:
+        going_to = "light" if self.state.profile.appearance.theme == "dark" else "dark"
+        self.theme_action.setText(f"Switch to {going_to} theme")
 
     # --- profile actions -----------------------------------------------------
 
@@ -98,8 +121,15 @@ class MainWindow(QMainWindow):
     def _update_title(self) -> None:
         self.setWindowTitle(f"StarCompanion — {self.state.profile.name}")
 
+    def closeEvent(self, event) -> None:
+        self.start.shutdown_jobs()
+        super().closeEvent(event)
+
 
 def main(argv: list[str] | None = None) -> int:
+    from ..offline import enforce_offline_from_environment
+
+    enforce_offline_from_environment()
     app = QApplication(argv if argv is not None else sys.argv)
     window = MainWindow()
     window.show()

@@ -70,6 +70,50 @@ def test_languages_are_discovered(archive_path):
         assert archive.languages() == ["english", "french"]
 
 
+def test_language_discovery_rejects_archive_path_tricks(tmp_path):
+    path = write(
+        tmp_path,
+        B.Builder()
+        .add("Data/Localization/english/global.ini", GLOBAL_INI)
+        .add("Data/Localization/../../global.ini", b"hostile")
+        .add("Data/Localization/english/nested/global.ini", b"hostile"),
+    )
+    with P4KArchive(path) as archive:
+        assert archive.languages() == ["english"]
+        with pytest.raises(ValueError, match="invalid localization language"):
+            archive.read_localization("../english")
+
+
+def test_localization_lookup_is_case_normalized_but_rejects_duplicate_scope(tmp_path):
+    path = write(
+        tmp_path,
+        B.Builder().add("Data/Localization/French/global.ini", b"Key=French\n"),
+    )
+    with P4KArchive(path) as archive:
+        assert archive.read_localization("FRENCH") == b"Key=French\n"
+
+    duplicate = write(
+        tmp_path,
+        B.Builder()
+        .add("Data/Localization/french/global.ini", b"Key=one\n")
+        .add("Data/Localization/FRENCH/global.ini", b"Key=two\n"),
+        name="duplicate.p4k",
+    )
+    with P4KArchive(duplicate) as archive:
+        with pytest.raises(CorruptArchiveError, match="multiple localization"):
+            archive.read_localization("french")
+
+    exact = write(
+        tmp_path,
+        B.Builder()
+        .add("Data/Localization/french/global.ini", b"Key=one\n")
+        .add("Data/Localization/french/global.ini", b"Key=two\n"),
+        name="exact-duplicate.p4k",
+    )
+    with pytest.raises(CorruptArchiveError, match="duplicate archive entry"):
+        P4KArchive(exact)
+
+
 # --- compression methods -----------------------------------------------------
 
 
@@ -139,6 +183,37 @@ def test_encrypted_and_compressed_entry(tmp_path):
     )
     with P4KArchive(path) as archive:
         assert archive.read("a.bin") == payload
+
+
+def test_entry_progress_covers_read_decrypt_and_decompress(tmp_path):
+    payload = b"progress through every phase " * 100_000
+    path = write(
+        tmp_path,
+        B.Builder().add("a.bin", payload, method=B.METHOD_ZSTD, encrypted=True),
+    )
+    events = []
+
+    with P4KArchive(path, entry_progress=lambda *event: events.append(event)) as archive:
+        assert archive.read("a.bin") == payload
+
+    phases = {phase for phase, _current, _total in events}
+    assert phases == {"read", "decrypt", "decompress"}
+    for phase in phases:
+        last = [event for event in events if event[0] == phase][-1]
+        assert last[1] == last[2]
+
+
+def test_streaming_consumer_never_receives_a_complete_large_entry(tmp_path):
+    payload = os.urandom((3 * 1024 * 1024) + 123)
+    path = write(tmp_path, B.Builder().add("large.bin", payload))
+    chunks = []
+
+    with P4KArchive(path) as archive:
+        written = archive.stream("large.bin", lambda chunk: chunks.append(len(chunk)))
+
+    assert written == len(payload)
+    assert len(chunks) >= 4
+    assert max(chunks) <= 1 << 20
 
 
 def test_plain_entries_are_not_marked_encrypted(tmp_path):
@@ -222,6 +297,106 @@ def test_extract_into_a_directory_uses_the_entry_name(archive_path, tmp_path):
         written = archive.extract("Data/Localization/english/global.ini", out)
 
     assert written == out / "global.ini"
+
+
+def test_extract_crc_failure_removes_partial_and_preserves_prior_target(tmp_path):
+    path = write(tmp_path, B.Builder().add("bad.bin", b"payload"))
+    raw = bytearray(path.read_bytes())
+    directory = raw.rfind(struct.pack("<I", B.CENTRAL_DIR_SIGNATURE))
+    struct.pack_into("<I", raw, directory + 16, 0x12345678)
+    path.write_bytes(raw)
+    target = tmp_path / "existing.bin"
+    target.write_bytes(b"known-good")
+
+    with P4KArchive(path) as archive:
+        with pytest.raises(CorruptArchiveError, match="CRC mismatch"):
+            archive.extract("bad.bin", target)
+
+    assert target.read_bytes() == b"known-good"
+    assert list(tmp_path.glob(".existing.bin.*.partial")) == []
+
+
+@pytest.mark.parametrize("declared_delta", [-1, 1])
+def test_every_entry_requires_exact_declared_decompressed_length(tmp_path, declared_delta):
+    payload = b"exact payload length"
+    path = write(tmp_path, B.Builder().add("length.bin", payload))
+    raw = bytearray(path.read_bytes())
+    directory = raw.rfind(struct.pack("<I", B.CENTRAL_DIR_SIGNATURE))
+    struct.pack_into("<I", raw, directory + 24, len(payload) + declared_delta)
+    path.write_bytes(raw)
+
+    with P4KArchive(path) as archive:
+        with pytest.raises(CorruptArchiveError, match="declared|expected"):
+            archive.read("length.bin")
+
+
+def test_zstd_cannot_hide_output_beyond_declared_length(tmp_path):
+    payload = b"zstd exact length" * 100
+    path = write(tmp_path, B.Builder().add("length.zst", payload, method=B.METHOD_ZSTD))
+    raw = bytearray(path.read_bytes())
+    directory = raw.rfind(struct.pack("<I", B.CENTRAL_DIR_SIGNATURE))
+    struct.pack_into("<I", raw, 22, len(payload) - 1)
+    struct.pack_into("<I", raw, directory + 24, len(payload) - 1)
+    path.write_bytes(raw)
+    with P4KArchive(path) as archive:
+        with pytest.raises(CorruptArchiveError, match="exceeds declared"):
+            archive.read("length.zst")
+
+
+@pytest.mark.parametrize("field_offset", [8, 14])
+def test_local_and_central_entry_headers_must_agree(tmp_path, field_offset):
+    path = write(tmp_path, B.Builder().add("header.bin", b"payload"))
+    raw = bytearray(path.read_bytes())
+    if field_offset == 8:
+        struct.pack_into("H", raw, field_offset, B.METHOD_DEFLATE)
+    else:
+        struct.pack_into("I", raw, field_offset, 0x12345678)
+    path.write_bytes(raw)
+    with P4KArchive(path) as archive:
+        with pytest.raises(CorruptArchiveError, match="local/central|CRC mismatch"):
+            archive.read("header.bin")
+
+
+def test_cig_aligned_zstd_crc_is_advisory_but_explicit(tmp_path):
+    payload = b"current CIG payload" * 10_000
+    path = write(
+        tmp_path,
+        B.Builder().add("Data/Game2.dcb", payload, method=B.METHOD_ZSTD, cig_aligned=True),
+    )
+    raw = bytearray(path.read_bytes())
+    directory = raw.rfind(struct.pack("<I", B.CENTRAL_DIR_SIGNATURE))
+    struct.pack_into("<I", raw, directory + 16, 0x12345678)
+    # Keep central and local metadata consistent, as the real archive does.
+    struct.pack_into("<I", raw, 14, 0x12345678)
+    path.write_bytes(raw)
+
+    with P4KArchive(path) as archive:
+        assert archive.read("Data/Game2.dcb") == payload
+        assert archive.integrity_warnings
+        assert "non-ZIP CRC" in archive.integrity_warnings[0]
+
+
+def test_cig_aligned_zstd_with_real_zip_crc_needs_no_warning(tmp_path):
+    payload = b"valid aligned payload" * 1000
+    path = write(
+        tmp_path,
+        B.Builder().add("aligned.bin", payload, method=B.METHOD_ZSTD, cig_aligned=True),
+    )
+    with P4KArchive(path) as archive:
+        assert archive.read("aligned.bin") == payload
+        assert archive.integrity_warnings == []
+
+
+def test_unaligned_zstd_entry_still_requires_zip_crc(tmp_path):
+    path = write(tmp_path, B.Builder().add("bad.bin", b"payload", method=B.METHOD_ZSTD))
+    raw = bytearray(path.read_bytes())
+    directory = raw.rfind(struct.pack("<I", B.CENTRAL_DIR_SIGNATURE))
+    struct.pack_into("<I", raw, directory + 16, 0x12345678)
+    path.write_bytes(raw)
+
+    with P4KArchive(path) as archive:
+        with pytest.raises(CorruptArchiveError, match="CRC mismatch"):
+            archive.read("bad.bin")
 
 
 # --- read-only guarantee -----------------------------------------------------
@@ -351,3 +526,24 @@ def test_reading_one_entry_does_not_load_the_whole_archive(tmp_path):
 
     assert max(reads) < 1 << 20, "a single read pulled in far more than the entry"
     assert sum(reads) < 1 << 20, "reading one small entry touched too much data"
+
+
+def test_entry_filter_scans_but_does_not_retain_unrelated_records(tmp_path):
+    from starcompanion.extract.p4k import is_localization_entry
+
+    builder = B.Builder()
+    for index in range(5000):
+        builder.add(f"Data/filler/{index:05}.bin", b"")
+    builder.add("Data/Localization/english/global.ini", GLOBAL_INI)
+    path = write(tmp_path, builder)
+    progress = []
+
+    with P4KArchive(
+        path,
+        entry_filter=is_localization_entry,
+        progress=lambda current, total: progress.append((current, total)),
+    ) as archive:
+        assert len(archive) == 1
+        assert archive.languages() == ["english"]
+
+    assert progress[-1] == (5001, 5001)

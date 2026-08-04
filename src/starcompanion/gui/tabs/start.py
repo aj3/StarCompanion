@@ -13,15 +13,15 @@ Design rules here, deliberately different from the other tabs:
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices, QFont
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QFileDialog,
-    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -35,13 +35,13 @@ from PySide6.QtWidgets import (
 from ... import install as installs
 from ... import store
 from ...features import community_rewards_enabled
-from ...config import load_builtin
 from ..labels import PREFIX_CAPTION, TITLE_PREFIXES
-from ...ini import LocalizationFile
-from ...inject import apply as apply_changes
-from ...inject import plan as plan_injection
 from ...inject import restore as restore_backup
-from ...sources import contracts_ini, game_strings
+from ...model import ProviderStatus
+from ...operations import PreparedUpdate, prepare_update, read_contracts
+from ...sources import contracts_ini
+from ...tasks import ProgressEvent
+from ..jobs import Operation, QtOperationJob
 from ..state import AppState
 
 CONTRACTS_URL = (
@@ -65,6 +65,9 @@ class StartTab(QWidget):
         self.state = state
         self.install: installs.GameInstall | None = None
         self.load_error: str | None = None
+        self.operation_status: str | None = None
+        self._jobs: set[QtOperationJob] = set()
+        self._busy = False
 
         layout = QVBoxLayout(self)
         layout.addWidget(_heading("Make your Star Citizen contract list easier to read"))
@@ -78,7 +81,6 @@ class StartTab(QWidget):
 
         layout.addWidget(self._build_game_step())
         self.data_step = self._build_data_step()
-        self.data_step.setVisible(community_rewards_enabled())
         layout.addWidget(self.data_step)
         layout.addWidget(self._build_look_step())
 
@@ -190,7 +192,7 @@ class StartTab(QWidget):
             self.state.set_contracts(cached)
             self.load_error = None
 
-    def read_game(self, *, force: bool = False) -> None:
+    def read_game(self, *, force: bool = False, after=None) -> None:
         """Read contracts from the archive, with progress, and cache them.
 
         `force` re-reads even when a cached copy exists, which is what the
@@ -206,36 +208,43 @@ class StartTab(QWidget):
                 self.state.set_contracts(cached)
                 self.load_error = None
                 self.refresh()
+                if after is not None:
+                    after()
                 return
 
-        progress = QProgressDialog(
-            "Reading your game files. This takes about half a minute the "
-            "first time, then it is remembered.",
-            "", 0, 0, self,
-        )
-        progress.setCancelButton(None)
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.show()
-        QApplication.processEvents()
+        install = self.install
+        succeeded = {"value": False}
 
-        try:
-            contracts = game_strings.from_install(self.install)
-        except Exception as exc:
+        def loaded(contracts) -> None:
+            succeeded["value"] = True
+            self.load_error = None
+            store.save(install, contracts)
+            self.state.set_contracts(contracts)
+            self.refresh()
+
+        def failed(exc: Exception) -> None:
             self.load_error = str(exc)
             QMessageBox.warning(self, "Could not read your game", str(exc))
-            return
-        finally:
-            progress.close()
 
-        self.load_error = None
-        store.save(self.install, contracts)
-        self.state.set_contracts(contracts)
-        self.refresh()
+        job = self._run_operation(
+            "Reading your game files…",
+            lambda token, reporter: read_contracts(
+                install,
+                token=token,
+                reporter=reporter,
+            ),
+            on_success=loaded,
+            on_failure=failed,
+        )
+        if job is not None and after is not None:
+            job.finished.connect(
+                lambda: after() if succeeded["value"] else None
+            )
 
     # --- step 2: contract data -----------------------------------------------
 
     def _build_data_step(self) -> QGroupBox:
-        box = QGroupBox("Step 2 — Reward numbers (optional)")
+        box = QGroupBox("Step 2 — Local mission enhancements")
         inner = QVBoxLayout(box)
 
         self.data_status = QLabel()
@@ -244,10 +253,9 @@ class StartTab(QWidget):
 
         inner.addWidget(
             _muted(
-                "Star Citizen does not store reputation amounts or blueprint lists "
-                "anywhere on your computer — the server decides them. To show those "
-                "numbers as well, add a community contract list. Everything else "
-                "works without it."
+                "Reputation, blueprint pools, and direct item rewards are read from "
+                "Data/Game2.dcb in your local archive. No community download or "
+                "network connection is required."
             )
         )
 
@@ -259,6 +267,8 @@ class StartTab(QWidget):
         pick = QPushButton("Add reward numbers…")
         pick.clicked.connect(self.choose_contracts)
         row.addWidget(pick)
+        download.setVisible(community_rewards_enabled())
+        pick.setVisible(community_rewards_enabled())
         inner.addLayout(row)
 
         return box
@@ -283,7 +293,7 @@ class StartTab(QWidget):
     def _build_look_step(self) -> QGroupBox:
         # Numbered at build time: with step 2 hidden this must read "Step 2",
         # not leave a gap in the sequence.
-        number = 3 if community_rewards_enabled() else 2
+        number = 3
         box = QGroupBox(f"Step {number} — How to label each contract")
         inner = QVBoxLayout(box)
 
@@ -321,24 +331,40 @@ class StartTab(QWidget):
             )
             return
         if self.state.contracts is None:
-            self.read_game()
-            if self.state.contracts is None:
-                return
+            self.read_game(after=self.update_game)
+            return
 
-        target = self.install.localization()
-        progress = QProgressDialog("Preparing your contracts…", "", 0, 0, self)
-        progress.setCancelButton(None)
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.show()
         try:
             rendered = self.state.render()
-            result = plan_injection(LocalizationFile.load(target), rendered.values)
-        except (OSError, ValueError) as exc:
-            progress.close()
-            QMessageBox.critical(self, "Something went wrong", str(exc))
+        except Exception as exc:
+            QMessageBox.critical(self, "Could not prepare your contracts", str(exc))
             return
+
+        install = self.install
+        mode = self.state.profile.injection.merge_mode
+        self._run_operation(
+            "Preparing your contracts…",
+            lambda token, reporter: prepare_update(
+                install,
+                rendered.values,
+                mode=mode,
+                token=token,
+                reporter=reporter,
+            ),
+            on_success=self._confirm_prepared_update,
+            on_failure=lambda exc: QMessageBox.critical(
+                self, "Something went wrong", str(exc)
+            ),
+        )
+
+    def _confirm_prepared_update(self, prepared: PreparedUpdate) -> None:
+        try:
+            self._use_prepared_update(prepared)
         finally:
-            progress.close()
+            prepared.cleanup()
+
+    def _use_prepared_update(self, prepared: PreparedUpdate) -> None:
+        result = prepared.plan
 
         if not result.updated:
             QMessageBox.information(
@@ -350,7 +376,7 @@ class StartTab(QWidget):
         confirmed = QMessageBox.question(
             self,
             "Ready to update your game?",
-            f"{result.updated:,} contracts will show extra reward information.\n\n"
+            f"{len(result.updated):,} contract strings will be updated.\n\n"
             f"Game: {self.install.channel}\n"
             f"A backup is saved first, and 'Undo my last change' puts it back.\n\n"
             f"Star Citizen must be closed.",
@@ -361,11 +387,9 @@ class StartTab(QWidget):
             return
 
         try:
-            written = apply_changes(
-                target,
-                rendered.values,
+            written = prepared.localization.commit(
+                prepared.replacements,
                 confirmed=True,
-                mode=self.state.profile.injection.merge_mode,
                 backup_dir=self.state.backup_dir,
             )
         except Exception as exc:  # surfaced, never swallowed
@@ -379,10 +403,127 @@ class StartTab(QWidget):
         QMessageBox.information(
             self,
             "Done",
-            f"{written.updated:,} contracts updated.\n\n"
+            f"{len(written.updated):,} contract strings updated.\n\n"
             f"Start Star Citizen and open the contract manager to see it.\n\n"
             f"Remember: run this again after every game patch.",
         )
+
+    # --- background operations ---------------------------------------------
+
+    def _run_operation(
+        self,
+        title: str,
+        operation: Operation,
+        *,
+        on_success,
+        on_failure,
+    ) -> QtOperationJob | None:
+        if self._jobs:
+            return None
+
+        dialog = QProgressDialog(title, "Cancel", 0, 1000, self)
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        dialog.setMinimumDuration(0)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        dialog.setValue(0)
+
+        job = QtOperationJob(operation, self)
+        self._jobs.add(job)
+        self._busy = True
+        self.operation_status = None
+        self.refresh()
+
+        job.progress.connect(lambda event: self._show_progress(dialog, event))
+        job.succeeded.connect(lambda value: (dialog.close(), on_success(value)))
+        job.failed.connect(lambda exc: (dialog.close(), on_failure(exc)))
+        job.cancelled.connect(
+            lambda: (
+                dialog.close(),
+                setattr(
+                    self,
+                    "operation_status",
+                    "Cancelled safely. Nothing was changed.",
+                ),
+            )
+        )
+        job.finished.connect(lambda: self._operation_finished(job, dialog))
+        dialog.canceled.connect(
+            lambda: (
+                dialog.setLabelText("Cancelling safely…"),
+                dialog.setCancelButton(None),
+                job.cancel(),
+            )
+        )
+        job.start()
+        return job
+
+    @staticmethod
+    def _show_progress(dialog: QProgressDialog, event: ProgressEvent) -> None:
+        dialog.setLabelText(event.message)
+        dialog.setValue(round(event.fraction * 1000))
+
+    def _operation_finished(
+        self,
+        job: QtOperationJob,
+        dialog: QProgressDialog,
+    ) -> None:
+        dialog.close()
+        self._jobs.discard(job)
+        job.deleteLater()
+        self._busy = bool(self._jobs)
+        self.refresh()
+
+    def wait_for_jobs(self, timeout_ms: int = 5000) -> bool:
+        """Pump queued results while waiting; intended for tests and smoke tools."""
+        deadline = time.monotonic() + (timeout_ms / 1000)
+        while self._jobs and time.monotonic() < deadline:
+            QApplication.processEvents()
+            for job in list(self._jobs):
+                job.wait(5)
+        QApplication.processEvents()
+        return not self._jobs
+
+    def shutdown_jobs(self) -> None:
+        """Cancel and visibly join workers before their window disappears."""
+        jobs = list(self._jobs)
+        if not jobs:
+            return
+
+        self.operation_status = "Waiting for game-file work to stop safely…"
+        dialog = QProgressDialog(
+            self.operation_status,
+            "",
+            0,
+            0,
+            self.window(),
+        )
+        dialog.setCancelButton(None)
+        dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dialog.setMinimumDuration(0)
+        dialog.show()
+        QApplication.processEvents()
+
+        started = time.monotonic()
+        remaining = jobs
+        while remaining:
+            still_running = []
+            for job in remaining:
+                if not job.shutdown(25):
+                    still_running.append(job)
+            remaining = still_running
+            elapsed = time.monotonic() - started
+            if elapsed >= 0.5:
+                dialog.setLabelText(
+                    "Still waiting for a safe game-file checkpoint…\n"
+                    "No file will be left half-written."
+                )
+            QApplication.processEvents()
+
+        dialog.close()
+        self._jobs.clear()
+        self._busy = False
+        self.operation_status = "Background game-file work stopped safely."
 
     def undo_last(self) -> None:
         backups = self.state.backups()
@@ -428,11 +569,12 @@ class StartTab(QWidget):
                 f"    g_language = english"
             )
 
-        self.go.setEnabled(self.install is not None)
-        self.read_button.setEnabled(self.install is not None)
+        self.go.setEnabled(self.install is not None and not self._busy)
+        self.read_button.setEnabled(self.install is not None and not self._busy)
         self.undo.setEnabled(bool(self.state.backups()))
         self.footer.setText(
-            "Nothing is changed until you confirm, and a backup is always saved first."
+            self.operation_status
+            or "Nothing is changed until you confirm, and a backup is always saved first."
         )
 
     def game_status_text(self) -> str:
@@ -469,18 +611,36 @@ class StartTab(QWidget):
         )
 
     def data_status_text(self) -> str:
-        """Only about the optional reward numbers."""
+        """Local enhancement-provider health and provenance coverage."""
         contracts = self.state.contracts
         with_rewards = (
             sum(1 for c in contracts.contracts if not c.reward.is_empty)
             if contracts
             else 0
         )
+        capability = next(
+            (
+                item
+                for item in (contracts.capabilities if contracts else ())
+                if item.provider == "local-dataforge-missions"
+            ),
+            None,
+        )
+        if capability is not None and capability.status is ProviderStatus.UNAVAILABLE:
+            reason = capability.diagnostics[0] if capability.diagnostics else "unsupported build"
+            return f"{WARN} Local mission provider unavailable: {reason}"
+        if capability is not None:
+            label = "ready" if capability.status is ProviderStatus.AVAILABLE else "degraded"
+            return (
+                f"{OK if capability.status is ProviderStatus.AVAILABLE else WARN} "
+                f"Local mission provider {label}: {with_rewards:,} contracts enhanced, "
+                f"{capability.evidence_links:,} evidence links; "
+                f"{capability.matched_facts:,}/{capability.reward_facts:,} reward facts matched."
+            )
         if with_rewards:
-            return f"{OK} Reward numbers added for {with_rewards:,} contracts."
+            return f"{OK} Reward facts added for {with_rewards:,} contracts."
         return (
-            f"{TODO} Not added. Reputation and blueprint numbers will not "
-            f"appear without these."
+            f"{TODO} Local mission facts have not been read yet."
         )
 
 

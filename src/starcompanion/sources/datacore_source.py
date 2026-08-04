@@ -1,19 +1,21 @@
 """Build contracts from the game's own DataCore.
 
-**Scope, established empirically against a real `Game2.dcb`:**
+The stable broker projection and the patch-sensitive reward graph are kept as
+two independent providers:
 
 - Every one of the 67 LOCALE-bearing structs was scanned. `MissionBrokerEntry`
   is the only one carrying contract strings: 2,492 entries, ~1,007 distinct
   localization keys.
 - Of those, only ~95 overlap the ~1,449 keys StarStrings annotates -- but ~912
   are contracts StarStrings does *not* cover.
-- **Rewards are not reachable from here.** `BlueprintReward` and `MissionReward`
-  exist in the schema with *zero* instances; the values live behind the
-  Subsumption mission-XML layer this module does not read (roadmap Phase 9b).
+- :func:`extract` reads the long-lived ``MissionBrokerEntry`` records and never
+  guesses rewards.
+- :func:`extract_facts` scans nested contract-generator records through the
+  bounded DataForge graph.  It returns provenance and a capability report so a
+  changed build can disable this provider without breaking broker discovery.
 
-So this is a discovery source: it finds contracts and their localization keys.
-It is not yet a replacement for `contracts_ini`, which still supplies rewards.
-Rather than invent reward data, contracts from here carry an empty `Reward`.
+Keeping the projections separate also prevents a partial or unfamiliar reward
+schema from contaminating otherwise valid stock localization extraction.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from typing import Any
 
 from ..extract import datacore
 from ..extract.datacore import DataCore, Record
+from ..extract.dataforge import MissionExtractionResult, extract_mission_facts
 from ..model import Contract, ContractSet, Org, StringKind
 
 MISSION_STRUCT = "MissionBrokerEntry"
@@ -40,6 +43,18 @@ PLACEHOLDERS = frozenset({"LOC_UNINITIALIZED", "LOC_PLACEHOLDER", ""})
 
 def load(path: Path) -> ContractSet:
     return extract(datacore.load(path))
+
+
+def load_facts(path: Path) -> MissionExtractionResult:
+    """Load a DataCore and run the isolated C1 mission-facts provider."""
+
+    return extract_facts(datacore.load(path))
+
+
+def extract_facts(core: DataCore) -> MissionExtractionResult:
+    """Return nested mission rewards with evidence and build diagnostics."""
+
+    return extract_mission_facts(core)
 
 
 def extract(core: DataCore) -> ContractSet:
@@ -67,8 +82,8 @@ def extract(core: DataCore) -> ContractSet:
                 keys=keys,
                 texts=texts,
                 base_texts=dict(texts),
-                # Left empty deliberately: reward values are not in the
-                # DataCore. Inventing zeros here would read as real data.
+                # Left empty deliberately: reward facts remain isolated until
+                # the provider/presentation merge introduced in Sprint C2.
             )
         )
 

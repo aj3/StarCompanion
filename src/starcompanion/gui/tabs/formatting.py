@@ -49,7 +49,6 @@ class FormattingTab(QWidget):
         layout.addWidget(self._build_style_box())
         layout.addWidget(self._build_title_box())
         self.length_box = self._build_length_box()
-        self.length_box.setVisible(community_rewards_enabled())
         layout.addWidget(self.length_box)
         layout.addStretch(1)
 
@@ -183,16 +182,13 @@ class FormattingTab(QWidget):
 
         self.bracket_rep = QCheckBox("Also show the reputation number in the title")
         self.bracket_rep.toggled.connect(lambda v: self._set_title("bracket_rep", v))
-        self.bracket_rep.setVisible(community_rewards_enabled())
         layout.addWidget(self.bracket_rep)
 
         self.bracket_bp = QCheckBox("Also mark titles that can award a blueprint")
         self.bracket_bp.toggled.connect(lambda v: self._set_title("bracket_bp", v))
-        self.bracket_bp.setVisible(community_rewards_enabled())
         layout.addWidget(self.bracket_bp)
 
         self.reward_note = _muted("")
-        self.reward_note.setVisible(community_rewards_enabled())
         layout.addWidget(self.reward_note)
 
         return box
@@ -287,8 +283,8 @@ class FormattingTab(QWidget):
             self.reward_note.setText("")
         else:
             self.reward_note.setText(
-                "These two need reward numbers, which are not in your game files. "
-                "Add a contract list on the Start tab to use them."
+                "The current contract cache has no rendered reward facts. "
+                "Read your game on the Start tab to run the local provider."
             )
 
 

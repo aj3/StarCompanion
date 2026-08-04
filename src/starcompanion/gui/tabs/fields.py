@@ -18,13 +18,19 @@ TOGGLES: tuple[tuple[str, str, str, bool], ...] = (
         "reputation",
         "Reputation earned",
         "How much standing the contract pays with its mission giver.",
-        True,
+        False,
     ),
     (
         "blueprints",
         "Blueprints it can drop",
         "The list of blueprints a contract can award.",
-        True,
+        False,
+    ),
+    (
+        "item_rewards",
+        "Items it awards directly",
+        "Named item rewards found in your local game data.",
+        False,
     ),
     (
         "owned",
@@ -121,14 +127,6 @@ class FieldsTab(QWidget):
         finally:
             self._loading = False
 
-        if not community_rewards_enabled():
-            self.notice.setText(
-                "Reputation amounts and blueprint lists are not stored on your "
-                "computer — Star Citizen's servers decide them — so they cannot "
-                "be shown from your game files alone."
-            )
-            return
-
         contracts = self.state.contracts
         has_rewards = bool(
             contracts and any(not c.reward.is_empty for c in contracts.contracts)
@@ -137,7 +135,7 @@ class FieldsTab(QWidget):
             ""
             if has_rewards
             else (
-                "None of these can be shown yet — add a contract list in step 2 "
-                "on the Start tab."
+                "No local reward facts matched this build. Check the provider "
+                "status on the Source or Start tab."
             )
         )

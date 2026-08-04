@@ -13,6 +13,37 @@ venv/
 cache/
 backups/
 
+# Generated localization, merge previews, imports, and player-owned data.
+# These names are intentionally root-scoped so synthetic test fixtures remain
+# possible under tests/.
+/cache.json
+/rendered.json
+/stock-global.ini
+/global.ini
+/scmdb*.json
+/scmdb*.csv
+/owned-items*.json
+/owned-items*.csv
+/ownership.json
+/ownership.json.bak
+/ownership.json.lock
+/ownership.json.lock.reap
+/preferences.json
+/language-pack.ini
+/settings*.zip
+/diagnostics*.json
+/.settings-restore.lock
+/.settings-restore-journal.json
+/.settings-restore-recovery/
+/channels/
+/sources.json
+/conflicts.json
+/operation-plan*.json
+/user.ini
+/history.json
+/.apply-journal.json
+/last-operation.json
+
 # Test fixtures are copies of CIG/community strings, sourced locally by the
 # developer. Tests that need them skip when absent. See tests/samples/README.md
 tests/samples/*.ini

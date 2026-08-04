@@ -114,6 +114,40 @@ class SourceTab(QWidget):
         ]
         if contracts.unparsed:
             lines.append(f"{len(contracts.unparsed)} with no reward data found")
+        lines.append(
+            f"{sum(len(contract.evidence) for contract in contracts.contracts):,} provenance evidence links"
+        )
+        for capability in contracts.capabilities:
+            lines.append(
+                f"{capability.provider} v{capability.version}: {capability.status.value}; "
+                f"{capability.contracts_enhanced:,} contracts enhanced "
+                f"(build {capability.build_version})"
+            )
+            lines.append(
+                f"  coverage: {capability.matched_facts:,}/"
+                f"{capability.reward_facts:,} reward facts matched; "
+                f"{capability.unmatched_facts:,} unmatched"
+            )
+            if capability.diagnostic_counts:
+                lines.append(
+                    "  diagnostics: "
+                    + ", ".join(
+                        f"{category}={count:,}"
+                        for category, count in capability.diagnostic_counts
+                    )
+                )
+            if capability.unmatched_reason_counts:
+                lines.append(
+                    "  unmatched reasons: "
+                    + ", ".join(
+                        f"{reason}={count:,}"
+                        for reason, count in capability.unmatched_reason_counts
+                    )
+                )
+            if capability.diagnostics:
+                lines.append(f"  diagnostic: {capability.diagnostics[0]}")
+            if capability.unmatched_samples:
+                lines.append(f"  unmatched: {capability.unmatched_samples[0]}")
         return "\n".join(lines)
 
     def _warn(self, title: str, message: str) -> None:

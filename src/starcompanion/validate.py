@@ -22,6 +22,8 @@ VOID_TAGS = frozenset({"None"})
 EMPHASIS_TAGS = ALLOWED_TAGS - VOID_TAGS
 
 _TAG = re.compile(r"<(/?)([A-Za-z][A-Za-z0-9]*)>")
+_ANGLE_TAG = re.compile(r"<[^<>]*>|<[^<>]*$")
+_TAG_NAME = re.compile(r"</?([A-Za-z][A-Za-z0-9]*)")
 _MISSION_TOKEN = re.compile(r"~mission\(([^)]*)\)")
 _UNCLOSED_MISSION = re.compile(r"~mission\((?:[^)]*)$")
 
@@ -36,13 +38,20 @@ class Issue:
     severity: Severity
     code: str
     message: str
+    offset: int | None = None
 
     def __str__(self) -> str:
-        return f"[{self.severity.value}] {self.code}: {self.message}"
+        location = f" at character {self.offset}" if self.offset is not None else ""
+        return f"[{self.severity.value}] {self.code}{location}: {self.message}"
 
 
-def validate_value(value: str) -> list[Issue]:
-    """Check one rendered value. ERROR breaks the game; WARNING looks wrong."""
+def validate_value(value: str, *, trusted_source: str = "") -> list[Issue]:
+    """Check one rendered value.
+
+    CIG occasionally ships placeholder tags outside the documented emphasis
+    set. A renderer may preserve names already present in its pristine source,
+    but it may not introduce a new unsupported name.
+    """
     issues: list[Issue] = []
 
     if "\n" in value or "\r" in value:
@@ -54,43 +63,102 @@ def validate_value(value: str) -> list[Issue]:
             )
         )
 
-    issues.extend(_check_tags(value))
+    trusted_tags = {match.group(2) for match in _TAG.finditer(trusted_source)}
+    issues.extend(_check_tags(value, trusted_tags))
     issues.extend(_check_mission_tokens(value))
     return issues
 
 
-def _check_tags(value: str) -> list[Issue]:
+def _check_tags(value: str, trusted_tags: set[str] | None = None) -> list[Issue]:
     issues: list[Issue] = []
-    stack: list[str] = []
+    stack: list[tuple[str, int]] = []
 
-    for closing, name in _TAG.findall(value):
+    for candidate in _ANGLE_TAG.finditer(value):
+        raw = candidate.group()
+        name_match = _TAG_NAME.match(raw)
+        if name_match is None:
+            continue  # ordinary angle-bracket text, not tag-like markup
+
+        name = name_match.group(1)
+        parsed = _TAG.fullmatch(raw)
+        if name not in ALLOWED_TAGS and name in (trusted_tags or set()):
+            # CIG substitution placeholders such as <years> and <PH> do not
+            # follow emphasis-tag balance rules. Preserve complete source tags.
+            if parsed is None:
+                issues.append(
+                    Issue(
+                        Severity.ERROR,
+                        "malformed-tag",
+                        f"{raw} is not the complete trusted tag <{name}> or </{name}>",
+                        candidate.start(),
+                    )
+                )
+            continue
         if name not in ALLOWED_TAGS:
             issues.append(
-                Issue(Severity.ERROR, "unknown-tag", f"<{name}> is not a supported tag")
+                Issue(
+                    Severity.ERROR,
+                    "unknown-tag",
+                    f"{raw} uses unsupported tag {name!r}",
+                    candidate.start(),
+                )
             )
             continue
+        if parsed is None:
+            issues.append(
+                Issue(
+                    Severity.ERROR,
+                    "malformed-tag",
+                    f"{raw} is not a complete <{name}> or </{name}> tag",
+                    candidate.start(),
+                )
+            )
+            continue
+
+        closing = parsed.group(1)
         if name in VOID_TAGS:
+            if closing:
+                issues.append(
+                    Issue(
+                        Severity.ERROR,
+                        "invalid-void-close",
+                        f"</{name}> closes a tag that has no closing partner",
+                        candidate.start(),
+                    )
+                )
             continue
         if not closing:
-            stack.append(name)
+            stack.append((name, candidate.start()))
         elif not stack:
             issues.append(
-                Issue(Severity.WARNING, "unbalanced-tag", f"</{name}> has no opening tag")
+                Issue(
+                    Severity.WARNING,
+                    "unbalanced-tag",
+                    f"</{name}> has no opening tag",
+                    candidate.start(),
+                )
             )
-        elif stack[-1] != name:
+        elif stack[-1][0] != name:
+            opened, _offset = stack.pop()
             issues.append(
                 Issue(
                     Severity.WARNING,
                     "mismatched-tag",
-                    f"<{stack.pop()}> closed by </{name}>",
+                    f"<{opened}> closed by </{name}>",
+                    candidate.start(),
                 )
             )
         else:
             stack.pop()
 
     issues.extend(
-        Issue(Severity.WARNING, "unbalanced-tag", f"<{name}> is never closed")
-        for name in stack
+        Issue(
+            Severity.WARNING,
+            "unbalanced-tag",
+            f"<{name}> is never closed",
+            offset,
+        )
+        for name, offset in stack
     )
     return issues
 

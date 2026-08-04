@@ -78,6 +78,175 @@ def test_short_prose_without_a_token_is_not_a_contract():
     assert result.contracts == []
 
 
+def test_dataforge_evidence_accepts_a_short_mission_pair():
+    strings = build(
+        ("Foxwell_short_title", "Brief job"),
+        ("Foxwell_short_desc", "Recover it."),
+    )
+
+    result = game_strings.parse(
+        strings,
+        evidenced_keys={"Foxwell_short_title", "Foxwell_short_desc"},
+    )
+
+    assert len(result.contracts) == 1
+
+
+def test_exact_dataforge_evidence_accepts_a_two_segment_mission_pair():
+    strings = build(("recovery_title", "Recovery"), ("recovery_desc", "Recover it."))
+
+    ordinary = game_strings.parse(strings)
+    evidenced = game_strings.parse(
+        strings,
+        evidenced_keys={"recovery_title", "recovery_desc"},
+    )
+
+    assert ordinary.contracts == []
+    assert len(evidenced.contracts) == 1
+    assert evidenced.contracts[0].org.id == "recovery"
+
+
+def test_evidence_relationship_groups_shared_title_with_variant_descriptions():
+    strings = build(
+        ("bhg_bounty_title_Rockcracker_001", "Rockcracker"),
+        ("bhg_bounty_desc_Rockcracker_Zone1_001", "Zone one"),
+        ("bhg_bounty_desc_Rockcracker_Zone2_001", "Zone two"),
+    )
+
+    result = game_strings.parse(
+        strings,
+        evidenced_groups=[
+            game_strings.MissionKeyEvidence(
+                ("bhg_bounty_title_Rockcracker_001",),
+                ("bhg_bounty_desc_Rockcracker_Zone1_001",),
+            ),
+            game_strings.MissionKeyEvidence(
+                ("bhg_bounty_title_Rockcracker_001",),
+                ("bhg_bounty_desc_Rockcracker_Zone2_001",),
+            ),
+        ],
+    )
+
+    assert len(result.contracts) == 1
+    assert result.contracts[0].keys[StringKind.DESC] == [
+        "bhg_bounty_desc_Rockcracker_Zone1_001",
+        "bhg_bounty_desc_Rockcracker_Zone2_001",
+    ]
+
+
+def test_explicit_title_segment_wins_when_malformed_fact_claims_both_roles():
+    strings = build(
+        ("blackbox_recover_title_H_001,P", "Recover a black box"),
+        ("blackbox_recover_desc_H_001,P", "Recover it."),
+    )
+
+    result = game_strings.parse(
+        strings,
+        evidenced_groups=[
+            game_strings.MissionKeyEvidence(
+                ("blackbox_recover_title_H_001",),
+                ("blackbox_recover_desc_H_001",),
+            ),
+            game_strings.MissionKeyEvidence(
+                ("blackbox_recover_title_H_001",),
+                ("blackbox_recover_title_H_001",),
+            ),
+        ],
+    )
+
+    assert len(result.contracts) == 1
+    assert result.contracts[0].key(StringKind.TITLE) == "blackbox_recover_title_H_001,P"
+
+
+def test_typed_description_role_handles_nonstandard_description_key():
+    strings = build(
+        ("RepairOxygenKiosk_Title", "Repair oxygen"),
+        ("RepairOxygenKiosk_DescriptionLong", "Restore the kiosk."),
+    )
+
+    result = game_strings.parse(
+        strings,
+        evidenced_groups=[
+            game_strings.MissionKeyEvidence(
+                ("RepairOxygenKiosk_Title",),
+                ("RepairOxygenKiosk_DescriptionLong",),
+            )
+        ],
+    )
+
+    assert len(result.contracts) == 1
+    assert result.contracts[0].key(StringKind.DESC) == "RepairOxygenKiosk_DescriptionLong"
+
+
+def test_placeholder_title_can_still_admit_an_evidenced_description_only_contract():
+    strings = build(("IAE_2955_Wolf_Rosso_Desc", "Meet Rosso."))
+
+    result = game_strings.parse(
+        strings,
+        evidenced_groups=[
+            game_strings.MissionKeyEvidence(
+                ("LOC_UNINITIALIZED",),
+                ("IAE_2955_Wolf_Rosso_Desc",),
+            )
+        ],
+    )
+
+    assert len(result.contracts) == 1
+    assert result.contracts[0].key(StringKind.TITLE) is None
+    assert result.contracts[0].key(StringKind.DESC) == "IAE_2955_Wolf_Rosso_Desc"
+
+
+def test_evidence_does_not_weaken_unevidenced_ui_or_item_filters():
+    strings = build(
+        ("Foxwell_short_title", "Brief job"),
+        ("Foxwell_short_desc", "Recover it."),
+        ("ui_panel_title", "Panel"),
+        ("ui_panel_desc", "Panel description"),
+        ("item_helmet_title", "Helmet"),
+        ("item_helmet_desc", "Helmet description"),
+    )
+
+    result = game_strings.parse(
+        strings,
+        evidenced_keys={"Foxwell_short_title", "Foxwell_short_desc"},
+    )
+
+    assert {contract.org.id for contract in result.contracts} == {"foxwell"}
+
+
+def test_typed_evidence_still_cannot_admit_denied_namespaces():
+    strings = build(
+        ("ui_title", "Panel"),
+        ("ui_desc", "Panel description"),
+        ("item_title", "Helmet"),
+        ("item_desc", "Helmet description"),
+    )
+
+    result = game_strings.parse(
+        strings,
+        evidenced_keys={"ui_title", "ui_desc", "item_title", "item_desc"},
+    )
+
+    assert result.contracts == []
+
+
+def test_plural_suffix_is_ignored_for_classification_but_preserved_as_key():
+    strings = build(
+        ("Foxwell_short_title,P", "Brief jobs"),
+        ("Foxwell_short_desc,P", "Recover them."),
+    )
+
+    result = game_strings.parse(
+        strings,
+        evidenced_keys={"Foxwell_short_title", "Foxwell_short_desc"},
+    )
+
+    assert result.contracts[0].all_keys() == [
+        "Foxwell_short_title,P",
+        "Foxwell_short_desc,P",
+    ]
+
+
 # --- structure ---------------------------------------------------------------
 
 

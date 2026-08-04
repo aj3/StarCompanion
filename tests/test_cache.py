@@ -1,6 +1,9 @@
 from pathlib import Path
+import json
+import copy
 
 import pytest
+from io import StringIO
 
 from starcompanion import cache
 from starcompanion.cache import UnsupportedCacheVersion
@@ -9,9 +12,12 @@ from starcompanion.model import (
     Contract,
     ContractSet,
     Difficulty,
+    Evidence,
     Gate,
     GateKind,
     Org,
+    ProviderCapability,
+    ProviderStatus,
     Reward,
     ScenarioPoints,
     StringKind,
@@ -38,6 +44,8 @@ def sample_set() -> ContractSet:
             blueprint_pools=[
                 BlueprintPool(
                     items=["Aves Core"],
+                    item_ids={"Aves Core": "11111111-1111-1111-1111-111111111111"},
+                    item_categories={"Aves Core": "armor"},
                     gates=[
                         Gate(GateKind.FACTION, "BitZeros"),
                         Gate(GateKind.RANK, "Neutral"),
@@ -45,13 +53,25 @@ def sample_set() -> ContractSet:
                     label="Pool 1",
                     example_locations=["Ruin Station"],
                     caveat="Warning: check scmdb",
+                    chance=0.5,
                     owned={"Aves Core"},
                 )
             ],
+            item_rewards=["Novikov Undersuit"],
         ),
+        evidence=[
+            Evidence("local-test", "record", "path", "$.reward", 100)
+        ],
     )
     return ContractSet(
-        contracts=[contract], orgs={"foxwell": org}, unparsed=[("x", "no reward")]
+        contracts=[contract],
+        orgs={"foxwell": org},
+        unparsed=[("x", "no reward")],
+        capabilities=[
+            ProviderCapability(
+                "local-test", "1", ProviderStatus.AVAILABLE, "build", 1, 1, 1
+            )
+        ],
     )
 
 
@@ -65,6 +85,42 @@ def test_round_trip_via_disk(tmp_path):
     path = tmp_path / "cache.json"
     cache.save(original, path, source="test")
     assert cache.load(path) == original
+
+
+def test_incremental_helper_transport_round_trips_without_whole_document():
+    original = sample_set()
+    stream = StringIO()
+
+    cache.dump_lines(original, stream, source="helper-test")
+    stream.seek(0)
+
+    assert cache.load_lines(stream) == original
+    assert len(stream.getvalue().splitlines()) == 6
+
+
+def test_cache_interns_evidence_and_omits_duplicate_base_text():
+    raw = json.loads(cache.dumps(sample_set()))
+
+    assert len(raw["evidence"]) == 1
+    assert raw["contracts"][0]["evidence_ids"] == [0]
+    assert raw["contracts"][0]["base_texts"] == {}
+
+
+def test_shared_evidence_is_interned_without_losing_per_contract_links():
+    original = sample_set()
+    second = copy.deepcopy(original.contracts[0])
+    second.id = "Foxwell_Test_E"
+    second.keys = {StringKind.TITLE: ["t2"], StringKind.DESC: ["d2"]}
+    second.texts = {"t2": "Second", "d2": "Second body"}
+    second.base_texts = dict(second.texts)
+    original.contracts.append(second)
+
+    raw = json.loads(cache.dumps(original))
+    restored = cache.loads(json.dumps(raw))
+
+    assert len(raw["evidence"]) == 1
+    assert [item["evidence_ids"] for item in raw["contracts"]] == [[0], [0]]
+    assert restored.contracts[0].evidence == restored.contracts[1].evidence
 
 
 def test_ownership_survives_the_round_trip():

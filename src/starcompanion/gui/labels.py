@@ -74,6 +74,7 @@ def preview_note(tag: str) -> str:
 FIELD_NAMES: dict[str, str] = {
     "reputation": "Reputation earned",
     "pools": "Blueprint lists",
+    "items": "Item rewards",
     "gates": "Rank requirements",
     "regional": "Location differences",
     "scenario": "Event points",

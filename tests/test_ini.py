@@ -82,6 +82,25 @@ def test_set_returns_false_for_unknown_key():
     assert f.set("Nope", "x") is False
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        BOM + "Foo=one\nBar=two\n",
+        BOM + "Foo=one\r\nBar=two\r\n",
+        "Foo=one\nraw line",
+        "",
+    ],
+)
+def test_stream_parser_matches_in_memory_parser(text, tmp_path):
+    path = tmp_path / "global.ini"
+    path.write_bytes(text.encode("utf-8"))
+
+    with path.open("rb") as stream:
+        streamed = LocalizationFile.load_stream(stream)
+
+    assert streamed.dumps() == LocalizationFile.loads(text).dumps()
+
+
 def test_first_occurrence_wins_for_duplicate_keys():
     f = LocalizationFile.loads(BOM + "Dup=first\nDup=second\n")
     assert f.get("Dup") == "first"

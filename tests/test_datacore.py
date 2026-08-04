@@ -10,6 +10,7 @@ from starcompanion.extract.datacore import (
     ConversionType,
     CorruptDataCoreError,
     DataType,
+    PropertyDefinition,
     Record,
     UnsupportedVersionError,
 )
@@ -121,9 +122,50 @@ def test_the_two_string_tables_are_kept_apart():
     assert record.file_name == "THE_FILE"
 
 
+def test_enum_values_use_text_table_not_schema_blob_table():
+    core = datacore.loads(B.minimal())
+    core._text1 = b"Title\x00"
+    core._text2 = b"WrongTable\x00"
+
+    assert core._read_scalar(DataType.ENUM_CHOICE, struct.pack("<i", 0), 0, 0) == "Title"
+
+
 def test_absent_string_offset_reads_as_none():
     core = datacore.loads(B.minimal(version=6))
     assert core.records[0].tag is None
+
+
+def test_pointer_variant_is_uint16_and_padding_is_not_part_of_the_index():
+    core = datacore.loads(B.minimal())
+    raw = struct.pack("<IHH", 123, 28_409, 11)
+
+    assert core._read_scalar(DataType.STRONG_POINTER, raw, 0, 0) == {
+        "$struct": 123,
+        "$instance": 28_409,
+    }
+
+
+def test_pointer_null_sentinel_uses_struct_and_variant_fields():
+    core = datacore.loads(B.minimal())
+    raw = struct.pack("<IHH", 0xFFFFFFFF, 0xFFFF, 0)
+
+    assert core._read_scalar(DataType.WEAK_POINTER, raw, 0, 0) is None
+
+
+def test_complex_reference_array_uses_reference_values_not_struct_instances():
+    core = datacore.loads(B.minimal())
+    guid = bytes(range(16))
+    core._values["reference"] = [struct.pack("<i16s", 0, guid)]
+    prop = PropertyDefinition(
+        "refs",
+        struct_index=123,
+        data_type=DataType.REFERENCE,
+        conversion_type=ConversionType.COMPLEX_ARRAY,
+    )
+
+    assert core._read_array(prop, 1, 0, 0, 0) == [
+        "03020100-0504-0706-0809-0a0b0c0d0e0f"
+    ]
     assert core.text2(-1) is None
 
 
