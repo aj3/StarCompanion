@@ -25,6 +25,13 @@ VERIFY_AUTHENTICODE_REPORT = runpy.run_path(
         / "verify_authenticode_report.py"
     )
 )["verify"]
+BUILD_OWNERSHIP_SMOKE_FIXTURE = runpy.run_path(
+    str(
+        Path(__file__).parents[1]
+        / "packaging"
+        / "ownership_smoke_fixture.py"
+    )
+)["build"]
 
 
 def test_network_surface_allows_only_the_socket_blocking_guard(tmp_path: Path) -> None:
@@ -200,3 +207,20 @@ def test_signing_workflow_is_manual_protected_and_fail_closed() -> None:
     assert '"verify", "/pa", "/all", "/v"' in script
     assert "TimeStamperCertificate" in script
     assert "finally" in script
+
+
+def test_dependency_free_ownership_smoke_fixture_matches_cache_schema(
+    tmp_path: Path,
+) -> None:
+    from starcompanion import cache
+
+    cache_path, log_path = BUILD_OWNERSHIP_SMOKE_FIXTURE(tmp_path)
+
+    contracts = cache.load(cache_path)
+    pool = contracts.contracts[0].reward.blueprint_pools[0]
+    assert pool.item_ids == {
+        "Synthetic Coda": "11111111-1111-1111-1111-111111111111"
+    }
+    assert "Received Blueprint: Synthetic Coda" in log_path.read_text(
+        encoding="utf-8"
+    )

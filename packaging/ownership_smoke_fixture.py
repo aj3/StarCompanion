@@ -3,38 +3,78 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
-
-from starcompanion import cache
-from starcompanion.model import BlueprintPool, Contract, ContractSet, Org, Reward
 
 
 def build(root: Path) -> tuple[Path, Path]:
     root.mkdir(parents=True, exist_ok=True)
-    org = Org("synthetic", "Synthetic Org")
-    contracts = ContractSet(
-        [
-            Contract(
-                "Synthetic_Blueprint_Mission",
-                org,
-                "BlueprintMission",
-                reward=Reward(
-                    blueprint_pools=[
-                        BlueprintPool(
-                            items=["Synthetic Coda"],
-                            item_ids={
-                                "Synthetic Coda": "11111111-1111-1111-1111-111111111111"
-                            },
-                            item_categories={"Synthetic Coda": "weapons"},
-                        )
-                    ]
-                ),
-            )
-        ],
-        {org.id: org},
-    )
     cache_path = root / "catalog-cache.json"
-    cache.save(contracts, cache_path, source="game:LIVE:synthetic:english")
+    # Keep this fixture dependency-free: packaging/verify_offline.py must be
+    # runnable by a clean CPython after the application itself is frozen. The
+    # committed cache version is intentionally explicit so format drift fails
+    # the packaged smoke instead of being hidden by importing source helpers.
+    cache_path.write_text(
+        json.dumps(
+            {
+                "cache_version": 6,
+                "source": "game:LIVE:synthetic:english",
+                "generated": "2026-03-26T17:15:41+00:00",
+                "orgs": {
+                    "synthetic": {
+                        "id": "synthetic",
+                        "name": "Synthetic Org",
+                        "rank_ladder": [],
+                    }
+                },
+                "evidence": [],
+                "contracts": [
+                    {
+                        "id": "Synthetic_Blueprint_Mission",
+                        "org": "synthetic",
+                        "family": "BlueprintMission",
+                        "difficulty": None,
+                        "keys": {},
+                        "texts": {},
+                        "base_texts": {},
+                        "reward": {
+                            "reputation": [],
+                            "scenario_points": [],
+                            "scrip": False,
+                            "blueprint_pools": [
+                                {
+                                    "items": ["Synthetic Coda"],
+                                    "item_ids": {
+                                        "Synthetic Coda": (
+                                            "11111111-1111-1111-1111-111111111111"
+                                        )
+                                    },
+                                    "item_categories": {
+                                        "Synthetic Coda": "weapons"
+                                    },
+                                    "gates": [],
+                                    "label": None,
+                                    "example_locations": [],
+                                    "caveat": None,
+                                    "chance": None,
+                                    "owned": [],
+                                }
+                            ],
+                            "item_rewards": [],
+                        },
+                        "evidence_ids": [],
+                    }
+                ],
+                "capabilities": [],
+                "unparsed": [],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
     log_path = root / "Game.log"
     log_path.write_text(
         '<2026-03-26T17:15:41.684Z> [Notice] '
