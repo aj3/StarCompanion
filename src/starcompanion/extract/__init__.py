@@ -3,16 +3,21 @@
 Everything here is strictly read-only against the game install.
 """
 
-from . import cryxml, datacore
+from . import cryxml, datacore, dataforge
 from .cryxml import CryXmlError, Node
+from .dataforge import DataForgeIndex, MissionFacts, MissionExtractionResult
 from .p4k import P4KArchive, P4KEntry, P4KError
 
 __all__ = [
     "CryXmlError",
+    "DataForgeIndex",
+    "MissionExtractionResult",
+    "MissionFacts",
     "Node",
     "P4KArchive",
     "P4KEntry",
     "P4KError",
     "cryxml",
     "datacore",
+    "dataforge",
 ]

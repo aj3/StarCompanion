@@ -33,6 +33,25 @@ def test_unknown_tag_is_an_error():
     assert has_errors(issues)
 
 
+def test_unknown_tag_is_allowed_only_when_preserved_from_trusted_stock():
+    assert validate_value("Wait <years>", trusted_source="Wait <years>") == []
+    assert "unknown-tag" in {
+        issue.code for issue in validate_value("Wait <years>")
+    }
+    assert "unknown-tag" in {
+        issue.code
+        for issue in validate_value("Wait <script>", trusted_source="Wait <years>")
+    }
+
+
+@pytest.mark.parametrize("value", ["<EM4 text", "<EM4 text>", "</EM4 extra>"])
+def test_malformed_allowed_tag_is_an_error(value):
+    issues = validate_value(value)
+    assert "malformed-tag" in {i.code for i in issues}
+    assert has_errors(issues)
+    assert any(i.offset == 0 for i in issues)
+
+
 def test_all_allowed_tags_pass():
     value = "<EM>a</EM><EM1>b</EM1><EM2>c</EM2><EM3>d</EM3><EM4>e</EM4><b>f</b><i>g</i><None>"
     assert validate_value(value) == []

@@ -1,0 +1,4 @@
+# Supply-chain tools run separately and are not bundled into StarCompanion.
+uv==0.12.1
+pip-audit==2.10.1
+cyclonedx-bom==7.3.1

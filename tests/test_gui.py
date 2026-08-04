@@ -48,6 +48,19 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
+@pytest.fixture(autouse=True)
+def close_qt_windows(qapp):
+    """Do not retain full window trees and global dialogs between tests."""
+    yield
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    for widget in QApplication.topLevelWidgets():
+        widget.close()
+        widget.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    qapp.processEvents()
+
+
 @pytest.fixture
 def expert_tabs(monkeypatch):
     """Show the hand-driven apply screen for tests that exercise it."""
@@ -93,6 +106,19 @@ def window(qapp, contracts):
 
 def test_state_starts_with_the_default_profile(qapp):
     assert AppState().profile.name == "default"
+
+
+def test_profile_edits_do_not_reapply_an_unchanged_theme(qapp, monkeypatch):
+    from starcompanion.gui import theme
+
+    applied = []
+    monkeypatch.setattr(theme, "apply_theme", lambda app, name: applied.append(name))
+    fresh = MainWindow()
+
+    fresh.state.touch_profile()
+    fresh.toggle_theme()
+
+    assert applied == ["dark", "light"]
 
 
 def test_render_is_cached_until_the_profile_changes(window):
@@ -219,14 +245,14 @@ def test_title_prefix_choices_avoid_jargon(window):
     assert shown == ["Nothing", "Who is offering it", "How hard it is", "Both"]
 
 
-def test_community_rewards_are_hidden_by_default(qapp):
-    """The project reads the game; someone else's download is not the main flow."""
+def test_local_rewards_and_provenance_are_visible_by_default(qapp):
+    """Local providers are first-class while community download controls stay hidden."""
     fresh = MainWindow()
     tabs = [fresh.tabs.tabText(i) for i in range(fresh.tabs.count())]
 
-    assert "What to show" not in tabs
-    assert "Advanced: data" not in tabs
-    assert not fresh.start.data_step.isVisibleTo(fresh.start)
+    assert "What to show" in tabs
+    assert "Data & provenance" in tabs
+    assert fresh.start.data_step.isVisibleTo(fresh.start)
 
 
 def test_community_rewards_can_be_switched_back_on(community_rewards, qapp):
@@ -593,10 +619,48 @@ def test_update_reads_the_game_when_contracts_are_missing(qapp, fake_game, monke
     monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warned.append(a))
 
     fresh.start.update_game()
+    assert fresh.start.wait_for_jobs()
 
     # The fixture's archive is not a real p4k, so the read fails and says so
     # rather than silently doing nothing.
     assert warned and "Could not read" in warned[0][1]
+
+
+def test_guided_update_creates_clean_install_override(window, tmp_path, monkeypatch):
+    """The normal install has stock strings in Data.p4k and no loose INI."""
+    import p4kbuilder as B
+    from starcompanion.install import GameInstall
+
+    root = tmp_path / "StarCitizen" / "LIVE"
+    root.mkdir(parents=True)
+    (root / "Data.p4k").write_bytes(
+        B.Builder()
+        .add("Data/Localization/english/global.ini", STOCK.encode("utf-8"))
+        .build()
+    )
+    install = GameInstall(root=root, channel="LIVE", version="test")
+    window.start.install = install
+    window.start._adopt_install()
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *a, **k: QMessageBox.StandardButton.Yes,
+    )
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    monkeypatch.setattr(
+        QMessageBox,
+        "critical",
+        lambda *a, **k: pytest.fail(f"unexpected error dialog: {a}"),
+    )
+
+    assert not install.localization().exists()
+    window.start.update_game()
+    assert window.start.wait_for_jobs()
+
+    written = LocalizationFile.load(install.localization())
+    assert written.get("Other") == "untouched"
+    assert written.get("Org_x_title") != "Original"
 
 
 def test_undo_reports_when_there_is_nothing_to_undo(window, monkeypatch):
@@ -630,7 +694,7 @@ def test_read_button_offers_a_re_read_once_contracts_are_loaded(window, fake_gam
 def test_reading_again_bypasses_the_cache(qapp, fake_game, monkeypatch):
     """Pressing the button deliberately should look at the archive again."""
     from starcompanion import store
-    from starcompanion.sources import game_strings
+    import starcompanion.gui.tabs.start as start_module
 
     fresh = MainWindow()
     fresh.start.install = fake_game
@@ -638,13 +702,107 @@ def test_reading_again_bypasses_the_cache(qapp, fake_game, monkeypatch):
     monkeypatch.setattr(store, "load", lambda install: pytest.fail("cache was used"))
     calls = []
     monkeypatch.setattr(
-        game_strings, "from_install",
-        lambda install, language="english": calls.append(install) or _empty_set(),
+        start_module,
+        "read_contracts",
+        lambda install, token, reporter: calls.append(install) or _empty_set(),
     )
     monkeypatch.setattr(store, "save", lambda install, contracts: None)
 
     fresh.start.read_game(force=True)
+    assert fresh.start.wait_for_jobs()
     assert calls, "the archive should have been read"
+
+
+def test_progress_event_updates_dialog(qapp):
+    from PySide6.QtWidgets import QProgressDialog
+    from starcompanion.tasks import OperationStage, ProgressEvent
+
+    dialog = QProgressDialog("", "Cancel", 0, 1000)
+    event = ProgressEvent(OperationStage.INDEX_ARCHIVE, "Indexing 50 of 100", 50, 100)
+
+    MainWindow().start._show_progress(dialog, event)
+
+    assert dialog.labelText() == "Indexing 50 of 100"
+    assert 0 < dialog.value() < 1000
+
+
+def test_cancelling_background_read_changes_nothing(qapp, fake_game, monkeypatch):
+    import time
+    import starcompanion.gui.tabs.start as start_module
+
+    def cancellable_read(install, token, reporter):
+        while True:
+            token.checkpoint()
+            time.sleep(0.001)
+
+    monkeypatch.setattr(start_module, "read_contracts", cancellable_read)
+    fresh = MainWindow()
+    fresh.start.install = fake_game
+    fresh.start.read_game(force=True)
+    job = next(iter(fresh.start._jobs))
+
+    job.cancel()
+
+    assert fresh.start.wait_for_jobs()
+    assert fresh.state.contracts is None
+    assert "Nothing was changed" in fresh.start.footer.text()
+
+
+def test_window_close_cancels_and_joins_worker(qapp, fake_game, monkeypatch):
+    import time
+    import starcompanion.gui.tabs.start as start_module
+
+    def cancellable_read(install, token, reporter):
+        while True:
+            token.checkpoint()
+            time.sleep(0.001)
+
+    monkeypatch.setattr(start_module, "read_contracts", cancellable_read)
+    fresh = MainWindow()
+    fresh.start.install = fake_game
+    fresh.start.read_game(force=True)
+    job = next(iter(fresh.start._jobs))
+
+    fresh.close()
+
+    assert not job.is_running
+    assert not fresh.start._jobs
+    assert "stopped safely" in fresh.start.operation_status
+
+
+def test_slow_close_explains_that_it_is_waiting_safely(qapp, fake_game, monkeypatch):
+    import threading
+    import time
+    from PySide6.QtWidgets import QProgressDialog
+    import starcompanion.gui.tabs.start as start_module
+
+    started = threading.Event()
+
+    def slow_checkpoint(install, token, reporter):
+        started.set()
+        time.sleep(0.6)
+        token.checkpoint()
+
+    labels = []
+    original = QProgressDialog.setLabelText
+
+    def remember_label(dialog, text):
+        labels.append(text)
+        return original(dialog, text)
+
+    monkeypatch.setattr(start_module, "read_contracts", slow_checkpoint)
+    monkeypatch.setattr(QProgressDialog, "setLabelText", remember_label)
+    fresh = MainWindow()
+    fresh.start.install = fake_game
+    fresh.start.read_game(force=True)
+    deadline = time.monotonic() + 1
+    while not started.is_set() and time.monotonic() < deadline:
+        qapp.processEvents()
+
+    fresh.close()
+
+    assert any("Still waiting" in label for label in labels)
+    assert not fresh.start._jobs
 
 
 def _empty_set():

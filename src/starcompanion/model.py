@@ -67,6 +67,56 @@ class StringKind(Enum):
     DESC = "desc"
 
 
+class ProviderStatus(Enum):
+    """Whether an enhancement provider can safely contribute this build."""
+
+    AVAILABLE = "available"
+    DEGRADED = "degraded"
+    UNAVAILABLE = "unavailable"
+    DISABLED = "disabled"
+
+
+@dataclass(frozen=True)
+class UnresolvedLocalization:
+    """One provider fact that could not join because localization is absent."""
+
+    source_id: str
+    reason: str
+    keys: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Evidence:
+    """One traceable source for a generated enhancement value."""
+
+    provider: str
+    record_id: str
+    record_path: str
+    field_path: str
+    value: str | int | float | bool | None = None
+
+
+@dataclass(frozen=True)
+class ProviderCapability:
+    """Stable, cacheable provider health and coverage summary."""
+
+    provider: str
+    version: str
+    status: ProviderStatus
+    build_version: str
+    facts_seen: int = 0
+    contracts_enhanced: int = 0
+    evidence_links: int = 0
+    diagnostics: tuple[str, ...] = ()
+    reward_facts: int = 0
+    matched_facts: int = 0
+    unmatched_facts: int = 0
+    unmatched_samples: tuple[str, ...] = ()
+    unmatched_reason_counts: tuple[tuple[str, int], ...] = ()
+    diagnostic_counts: tuple[tuple[str, int], ...] = ()
+    unresolved_localizations: tuple[UnresolvedLocalization, ...] = ()
+
+
 @dataclass
 class ScenarioPoints:
     """Event scenario progress, e.g. Return of XenoThreat."""
@@ -79,6 +129,15 @@ class ScenarioPoints:
 @dataclass
 class BlueprintPool:
     items: list[str] = field(default_factory=list)
+    item_ids: dict[str, str] = field(default_factory=dict)
+    """Display name -> stable local DataForge blueprint-record identity.
+
+    Older/community sources may not provide an identity.  Catalog construction
+    then uses an explicit name-derived fallback instead of pretending the name
+    is a CIG record identifier.
+    """
+    item_categories: dict[str, str] = field(default_factory=dict)
+    """Display name -> conservative category derived from the entity path."""
     gates: list[Gate] = field(default_factory=list)
     """All conditions that must hold. Real pools stack them -- 'BitZeros Only'
     *and* 'Neutral level variants' is one pool with two gates. Empty means
@@ -89,13 +148,15 @@ class BlueprintPool:
     """Sample spawn locations for a regional variant."""
     caveat: str | None = None
     """Known-unreliable warning carried from the source data."""
+    chance: float | None = None
+    """Observed award probability in the local game data, when present."""
     owned: set[str] = field(default_factory=set)
     """Items the player already has, from their own SCMDB export. Empty means
     unknown, not 'owns nothing'."""
 
     @property
     def is_gated(self) -> bool:
-        return bool(self.gates)
+        return bool(self.gates) or (self.chance is not None and self.chance < 1.0)
 
     def is_owned(self, item: str) -> bool:
         return item in self.owned
@@ -121,11 +182,17 @@ class Reward:
     scrip: bool = False
     """True when the contract pays MG Scrip; the amount is dynamic in-game."""
     blueprint_pools: list[BlueprintPool] = field(default_factory=list)
+    item_rewards: list[str] = field(default_factory=list)
+    """Direct item awards resolved through the local localization table."""
 
     @property
     def is_empty(self) -> bool:
         return not (
-            self.reputation or self.scenario_points or self.scrip or self.blueprint_pools
+            self.reputation
+            or self.scenario_points
+            or self.scrip
+            or self.blueprint_pools
+            or self.item_rewards
         )
 
     @property
@@ -197,6 +264,8 @@ class Contract:
     files it is simply the stock string."""
     difficulty: Difficulty | None = None
     reward: Reward = field(default_factory=Reward)
+    evidence: list[Evidence] = field(default_factory=list)
+    """Provider evidence contributing generated fields on this contract."""
 
     @property
     def rank(self) -> int | None:
@@ -249,6 +318,8 @@ class ContractSet:
     orgs: dict[str, Org] = field(default_factory=dict)
     unparsed: list[tuple[str, str]] = field(default_factory=list)
     """(key, reason) — surfaced, never silently dropped."""
+    capabilities: list[ProviderCapability] = field(default_factory=list)
+    """Independent enhancement-provider health reports for this build."""
 
     def by_org(self, org_id: str) -> list[Contract]:
         return [c for c in self.contracts if c.org.id == org_id.casefold()]

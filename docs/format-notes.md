@@ -88,6 +88,14 @@ Verified against a real install — **build `sc-alpha-4.9.0`, changelist
 Both are individually extractable; there is no need to unpack the archive.
 Neither was encrypted in this build, though the reader handles encryption.
 
+Current CIG-aligned method-100 entries pad the local header so payload data
+starts on a 4 KiB boundary. In LIVE 4.9.188.23497, the central/local field named
+CRC does not equal ZIP CRC-32 of the decompressed bytes for either `Game2.dcb`
+or any inspected localization file. StarCompanion treats that field as
+advisory only for this unambiguous aligned layout, records an integrity warning,
+and still requires successful Zstandard decoding and the exact declared output
+length. Standard/fixture ZIP layouts continue to fail on a CRC mismatch.
+
 ### Observed on the real archive
 
 - Opening (central directory only) takes ~32 s and ~537 MB for 1.36 M entries.
@@ -251,13 +259,14 @@ appear before its parent in the table.
 
 ---
 
-## 4. Where contract reward data is *not*
+## 4. Historical top-level reward search (superseded by C1)
 
-Recorded because it cost real time to establish, and the negative result is
-what matters.
+Recorded because it explains why the original broker-only extractor stopped
+early. These observations were correct for that narrow traversal, but the
+conclusion was not: Sprint C1 follows anonymous struct instances, typed arrays,
+record UUIDs, and generator/broker localization joins.
 
-**Per-variant contract definitions are not in the shipped client data.**
-Evidence, all against build `sc-alpha-4.9.0`:
+The earlier top-level checks against build `sc-alpha-4.9.0` found:
 
 | Check | Result |
 |---|---|
@@ -267,15 +276,16 @@ Evidence, all against build `sc-alpha-4.9.0`:
 | `Data/Libs/Subsumption/Missions/PU/` — the path every `missionModule` points at | **0 entries** |
 | "Foxwell" anywhere in the archive | 20 hits, all art: animations, a face model, a logo |
 
-`global.ini` *does* contain all 1,449 strings — the client ships the text so it
-can display it, but the mission logic that selects and rewards them is
-server-authoritative. That also explains the zero-instance reward structs: the
-schema exists client-side so responses can be deserialised, and the server fills
-it in.
+`global.ini` *does* contain all 1,449 strings. The earlier investigation treated
+the empty top-level reward structs and missing Subsumption modules as evidence
+that reward selection was wholly server-authoritative. C1 disproved that
+inference by reaching different local DataForge record trees.
 
-**Consequence:** reputation amounts and blueprint pools cannot be extracted from
-a client install. Any project publishing them is deriving them from observation,
-community reporting, or a non-client source — not from reading these files.
+**Corrected consequence:** top-level record scans cannot find the reward graph.
+The client does ship usable local evidence under contract-generator, mission
+broker, reputation-reward, and crafting blueprint record trees. C1 extracts it
+without SCMDB or a network source and reports missing optional targets as build
+diagnostics.
 
 Contract *discovery* is still possible: `MissionBrokerEntry` yields 2,492
 contracts and ~1,000 localization keys, and the per-variant keys follow a rigid

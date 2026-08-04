@@ -8,8 +8,10 @@ blank in-game.
 
 from __future__ import annotations
 
+import io
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
 BOM = "﻿"
 PLURAL_SUFFIX = ",P"
@@ -57,6 +59,48 @@ class LocalizationFile:
     @classmethod
     def load(cls, path: Path) -> LocalizationFile:
         return cls.loads(path.read_bytes().decode("utf-8"))
+
+    @classmethod
+    def load_stream(cls, stream: BinaryIO) -> LocalizationFile:
+        """Parse a binary stream line-by-line without assembling its bytes."""
+        stream.seek(0)
+        prefix = stream.read(3)
+        bom = prefix == BOM.encode("utf-8")
+        stream.seek(0)
+        wrapper = io.TextIOWrapper(
+            stream,
+            encoding="utf-8-sig" if bom else "utf-8",
+            errors="strict",
+            newline="",
+        )
+        lines: list[Entry | RawLine] = []
+        newline: str | None = None
+        trailing_newline = False
+        try:
+            for raw in wrapper:
+                if raw.endswith("\r\n"):
+                    ending = "\r\n"
+                elif raw.endswith("\n"):
+                    ending = "\n"
+                else:
+                    ending = ""
+                if ending and newline is None:
+                    newline = ending
+                text = raw[: -len(ending)] if ending else raw
+                key, separator, value = text.partition("=")
+                lines.append(Entry(key, value) if separator else RawLine(text))
+                trailing_newline = bool(ending)
+        finally:
+            wrapper.detach()
+
+        if not lines:
+            lines.append(RawLine(""))
+        return cls(
+            lines,
+            bom=bom,
+            trailing_newline=trailing_newline,
+            newline=newline or "\n",
+        )
 
     @classmethod
     def loads(cls, text: str) -> LocalizationFile:
@@ -115,6 +159,26 @@ class LocalizationFile:
         if resolved is None:
             return False
         self._lines[self._index[resolved]].value = value
+        return True
+
+    def add(self, key: str, value: str) -> bool:
+        """Append a genuinely absent entry. Returns False if it already exists."""
+        if self.resolve_key(key) is not None:
+            return False
+        self._index[key] = len(self._lines)
+        self._lines.append(Entry(key, value))
+        return True
+
+    def remove(self, key: str) -> bool:
+        """Remove an existing entry and rebuild indexes. Returns False if absent."""
+        resolved = self.resolve_key(key)
+        if resolved is None:
+            return False
+        del self._lines[self._index[resolved]]
+        self._index = {}
+        for index, line in enumerate(self._lines):
+            if isinstance(line, Entry):
+                self._index.setdefault(line.key, index)
         return True
 
     def keys(self) -> list[str]:

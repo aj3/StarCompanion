@@ -15,13 +15,13 @@ from pathlib import Path
 from jinja2 import (
     ChoiceLoader,
     DictLoader,
-    Environment,
     FileSystemLoader,
     StrictUndefined,
     TemplateError,
 )
+from jinja2.sandbox import ImmutableSandboxedEnvironment
 
-from ..model import BlueprintPool, Contract, ContractSet, GateKind, StringKind
+from ..model import BlueprintPool, Contract, ContractSet, Evidence, GateKind, StringKind
 from ..validate import EMPHASIS_TAGS, Issue, Severity, validate_value
 
 TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
@@ -57,8 +57,9 @@ class Field:
     GATES = "gates"
     REGIONAL = "regional"
     TITLE = "title"
+    ITEMS = "items"
 
-    ALL = (REPUTATION, SCRIP, SCENARIO, POOLS, GATES, REGIONAL, TITLE)
+    ALL = (REPUTATION, SCRIP, SCENARIO, POOLS, GATES, REGIONAL, TITLE, ITEMS)
 
 
 @dataclass
@@ -67,6 +68,7 @@ class RenderOptions:
 
     show_reputation: bool = True
     show_blueprints: bool = True
+    show_item_rewards: bool = True
     show_scenario_points: bool = True
     show_scrip: bool = True
     show_rank_gates: bool = True
@@ -109,6 +111,8 @@ class RenderResult:
     warnings: list[tuple[str, Issue]] = field(default_factory=list)
     skipped: list[tuple[str, str]] = field(default_factory=list)
     """(key, reason) for contracts that produced nothing usable."""
+    provenance: dict[str, tuple[Evidence, ...]] = field(default_factory=dict)
+    """Evidence contributing to each emitted localization value."""
 
     def summary(self) -> str:
         parts = [f"{len(self.values)} rendered"]
@@ -136,7 +140,10 @@ class Renderer:
             loaders.append(FileSystemLoader(str(template_dir)))
         loaders.append(FileSystemLoader(str(TEMPLATE_DIR)))
 
-        self.env = Environment(
+        # Profiles are user-controlled files. The immutable sandbox blocks
+        # Python internals and state mutation while retaining ordinary Jinja
+        # expressions and the small formatting surface used by our templates.
+        self.env = ImmutableSandboxedEnvironment(
             loader=ChoiceLoader(loaders),
             undefined=StrictUndefined,
             keep_trailing_newline=False,
@@ -181,7 +188,26 @@ class Renderer:
 
         for contract in contracts.contracts:
             for key, value in self.render(contract).items():
-                issues = validate_value(value)
+                source_value = contract.base_text(key) or ""
+                issues = validate_value(
+                    value,
+                    trusted_source=source_value,
+                )
+                source_warnings = {
+                    issue
+                    for issue in validate_value(source_value)
+                    if issue.severity is Severity.WARNING
+                }
+                # Do not attribute CIG's existing tag-balance defects to the
+                # generated output. New warnings and every error remain visible.
+                issues = [
+                    issue
+                    for issue in issues
+                    if not (
+                        issue.severity is Severity.WARNING
+                        and issue in source_warnings
+                    )
+                ]
                 errors = [i for i in issues if i.severity is Severity.ERROR]
                 if errors:
                     # Never emit a value that would break in-game, even if the
@@ -190,6 +216,7 @@ class Renderer:
                     continue
 
                 result.values[key] = value
+                result.provenance[key] = tuple(contract.evidence)
                 result.warnings.extend((key, i) for i in issues)
 
         return result
@@ -209,10 +236,21 @@ class Renderer:
             if self.options.max_pool_items is not None:
                 pool = BlueprintPool(
                     items=pool.items[: self.options.max_pool_items],
+                    item_ids={
+                        item: pool.item_ids[item]
+                        for item in pool.items[: self.options.max_pool_items]
+                        if item in pool.item_ids
+                    },
+                    item_categories={
+                        item: pool.item_categories[item]
+                        for item in pool.items[: self.options.max_pool_items]
+                        if item in pool.item_categories
+                    },
                     gates=pool.gates,
                     label=pool.label,
                     example_locations=pool.example_locations,
                     caveat=pool.caveat,
+                    chance=pool.chance,
                     owned=pool.owned,
                 )
             visible.append(pool)

@@ -25,7 +25,12 @@ a = Analysis(
     pathex=[str(SRC)],
     binaries=[],
     datas=datas,
-    hiddenimports=["starcompanion.sources.contracts_ini", "starcompanion.sources.datacore_source"],
+    hiddenimports=[
+        "starcompanion.helper_process",
+        "starcompanion.operations",
+        "starcompanion.sources.contracts_ini",
+        "starcompanion.sources.datacore_source",
+    ],
     hookspath=[],
     runtime_hooks=[],
     # Qt ships far more than this needs; dropping the unused modules keeps the
@@ -73,6 +78,8 @@ cli_analysis = Analysis(
     binaries=[],
     datas=datas,
     hiddenimports=[
+        "starcompanion.helper_process",
+        "starcompanion.operations",
         "starcompanion.sources.contracts_ini",
         "starcompanion.sources.datacore_source",
         "starcompanion.sources.scmdb",

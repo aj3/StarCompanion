@@ -1,0 +1,38 @@
+{
+  "4.9.188.23497": {
+    "snapshot_version": 1,
+    "game_version": "4.9.188.23497",
+    "contracts": 1841,
+    "orgs": 176,
+    "keys": 5188,
+    "enhanced_contracts": 483,
+    "reputation_contracts": 47,
+    "blueprint_contracts": 320,
+    "item_reward_contracts": 189,
+    "blueprint_items": 4001,
+    "direct_items": 266,
+    "placeholder_reward_labels": 0,
+    "evidence_links": 19883,
+    "unique_evidence": 9621,
+    "provider": {
+      "id": "local-dataforge-missions",
+      "version": "3",
+      "status": "available",
+      "facts_seen": 2509,
+      "reward_facts": 1060,
+      "matched_facts": 1057,
+      "unmatched_facts": 3,
+      "unmatched_reasons": {
+        "localization-missing": 2,
+        "placeholder-key": 1
+      },
+      "unresolved_localizations": 3,
+      "diagnostics": {
+        "data-gap": 52,
+        "optional-reference": 11
+      }
+    },
+    "contract_identity_sha256": "6c328a44e0ddb67b3d5b55139bfcbecb08092f0762882e335f572d66621e01d9",
+    "reward_shape_sha256": "398ae8b51820db257566f0950eb21ecb57676a5af263160b0229f21537809031"
+  }
+}

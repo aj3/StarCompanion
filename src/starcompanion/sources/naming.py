@@ -6,9 +6,10 @@ Contract strings follow a rigid shape:
 
 e.g. `Foxwell_bombingrun_VE_title_001`, `Covalex_HaulCargo_AToB_title`.
 
-That convention is the only thing tying a string in `global.ini` to a contract:
-nothing in the shipped client data references these keys (docs/format-notes.md
-§4), so they are discovered by shape rather than by lookup.
+Generic discovery uses that convention because `global.ini` has no record
+relationships. During a complete local import, typed localization references
+from `Data/Game2.dcb` provide stronger evidence for short and unusual missions;
+the naming rules remain the safety boundary for strings without that evidence.
 
 Shared by both importers so the two cannot drift apart.
 """
@@ -45,6 +46,12 @@ DISPLAY_OVERRIDES = {
 }
 
 
+def canonical_key(key: str) -> str:
+    """Remove CIG's plural metadata suffix for naming analysis only."""
+
+    return key[:-2] if key.casefold().endswith(",p") else key
+
+
 def split_key(key: str) -> tuple[str, StringKind | None]:
     """Return (base, kind), where base is shared by a title/desc pair.
 
@@ -55,7 +62,7 @@ def split_key(key: str) -> tuple[str, StringKind | None]:
     kind: StringKind | None = None
     kept: list[str] = []
 
-    for segment in key.split("_"):
+    for segment in canonical_key(key).split("_"):
         lowered = segment.casefold()
         if kind is None and lowered in TITLE_SEGMENTS:
             kind = StringKind.TITLE
@@ -91,7 +98,7 @@ def looks_like_contract(key: str) -> bool:
     text, and prefixing an unrelated UI label with `[Org 3]` would be worse
     than missing a contract.
     """
-    segments = key.split("_")
+    segments = canonical_key(key).split("_")
     if len(segments) < 3:
         return False
 
@@ -112,7 +119,7 @@ def difficulty_of(base: str) -> Difficulty | None:
 
 
 def org_token(key: str) -> str:
-    return key.split("_")[0]
+    return canonical_key(key).split("_")[0]
 
 
 def family_of(base: str, org_token_value: str, difficulty: Difficulty | None) -> str:

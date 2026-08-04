@@ -380,12 +380,18 @@ class DataCore:
             # Localization keys and plain strings both live in table 1.
             return self.text1(struct.unpack("<i", chunk)[0])
         if data_type == DataType.ENUM_CHOICE:
-            return self.text2(struct.unpack("<i", chunk)[0])
+            # Enum values are offsets into the text table (the same table as
+            # LOCALE), not the schema/blob table used by definition names.
+            return self.text1(struct.unpack("<i", chunk)[0])
         if data_type == DataType.GUID:
             return _format_guid(chunk)
         if data_type in (DataType.STRONG_POINTER, DataType.WEAK_POINTER):
-            target_struct, target_instance = struct.unpack("<ii", chunk)
-            if target_struct < 0 or target_instance < 0:
+            # DataForge Pointer is UInt32 struct + UInt16 variant + UInt16
+            # padding. Reading the last four bytes as a signed instance index
+            # silently folds non-zero padding into the variant (e.g. 28,409
+            # becomes 749,305), resolving unrelated instance data.
+            target_struct, target_instance, _padding = struct.unpack("<IHH", chunk)
+            if target_struct == 0xFFFFFFFF and target_instance == 0xFFFF:
                 return None
             if depth >= max_depth:
                 # Unfollowed: report where it points rather than pretending null.
@@ -405,10 +411,12 @@ class DataCore:
         if count == 0 or count > _MAX_ARRAY:
             return []
 
-        if prop.data_type == DataType.CLASS or prop.conversion_type in (
-            ConversionType.COMPLEX_ARRAY,
-            ConversionType.CLASS_ARRAY,
-        ):
+        # Conversion type controls XML/container representation; the data type
+        # still determines which backing array owns the elements. In
+        # particular, a COMPLEX_ARRAY of REFERENCE values lives in the global
+        # reference array. Treating every complex array as inline CLASS data
+        # resolves its first index against an unrelated struct instance block.
+        if prop.data_type == DataType.CLASS:
             if depth >= max_depth:
                 return [{"$struct": prop.struct_index, "$instance": first + i} for i in range(count)]
             return [
@@ -428,14 +436,14 @@ class DataCore:
         if prop.data_type in (DataType.STRING, DataType.LOCALE):
             return [self.text1(v) for v in slice_]
         if prop.data_type == DataType.ENUM_CHOICE:
-            return [self.text2(v) for v in slice_]
+            return [self.text1(v) for v in slice_]
         if prop.data_type == DataType.GUID:
             return [_format_guid(v) for v in slice_]
         if prop.data_type in (DataType.STRONG_POINTER, DataType.WEAK_POINTER):
             resolved = []
             for raw in slice_:
-                target_struct, target_instance = struct.unpack("<ii", raw)
-                if target_struct < 0 or target_instance < 0:
+                target_struct, target_instance, _padding = struct.unpack("<IHH", raw)
+                if target_struct == 0xFFFFFFFF and target_instance == 0xFFFF:
                     resolved.append(None)
                 elif depth >= max_depth:
                     resolved.append({"$struct": target_struct, "$instance": target_instance})
@@ -574,7 +582,7 @@ def loads(data: bytes) -> DataCore:
     ]
 
     core.enum_options = [
-        core.text2(offset) or ""
+        core.text1(offset) or ""
         for (offset,) in struct.iter_unpack("<i", raw_enum_options)
     ]
 

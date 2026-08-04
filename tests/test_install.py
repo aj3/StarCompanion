@@ -60,6 +60,19 @@ def test_derives_the_file_to_modify(tmp_path):
     assert found.localization() == game / "data" / "Localization" / "english" / "global.ini"
     assert found.localization("german_(germany)").parent.name == "german_(germany)"
 
+    with pytest.raises(ValueError, match="invalid localization language"):
+        found.localization("../../LIVE")
+
+
+def test_unknown_channel_folder_is_not_accepted_as_scoped_install(tmp_path):
+    game = tmp_path / "StarCitizen" / "PRIVATE"
+    game.mkdir(parents=True)
+    (game / install.ARCHIVE_NAME).write_bytes(b"archive")
+
+    assert install.identify(game) is None
+    with pytest.raises(ValueError, match="unsupported game channel"):
+        install.GameInstall(game, "PRIVATE")
+
 
 def test_detects_an_existing_override(tmp_path):
     game = make_install(tmp_path)
@@ -94,6 +107,11 @@ def test_finds_installs_under_a_supplied_root(tmp_path):
     found = install.find_installs(roots=[base])
 
     assert [i.channel for i in found] == ["LIVE", "PTU"], "LIVE must come first"
+
+
+def test_finds_a_direct_channel_root(tmp_path):
+    game = make_install(tmp_path, "EPTU")
+    assert install.find_installs(roots=[game])[0].channel == "EPTU"
 
 
 def test_no_installs_found_is_not_an_error(tmp_path):

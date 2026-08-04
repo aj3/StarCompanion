@@ -93,8 +93,8 @@ def test_resolve_texts_fills_in_from_global_ini():
     assert contract.texts["bounty_title"] == "Hunt them down"
 
 
-def test_extracted_contracts_carry_no_invented_rewards():
-    """Reward values are not in the DataCore; empty must stay empty."""
+def test_broker_projection_does_not_invent_or_merge_rewards():
+    """C1 facts stay isolated until the C2 presentation/provider merge."""
     core = datacore.loads(build([("MissionBrokerEntry.PU_Bounty", None, None)]))
     for contract in datacore_source.extract(core).contracts:
         assert contract.reward.is_empty
@@ -163,6 +163,6 @@ def test_real_keys_resolve_against_the_stock_strings(extracted):
 
 
 @real
-def test_real_rewards_are_absent_rather_than_fabricated(extracted):
-    """Documented limitation, asserted so it cannot regress into fake data."""
+def test_real_broker_projection_remains_independent_of_reward_provider(extracted):
+    """A drifting reward provider cannot contaminate broker discovery."""
     assert all(c.reward.is_empty for c in extracted.contracts)

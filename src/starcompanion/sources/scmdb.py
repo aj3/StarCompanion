@@ -1,8 +1,9 @@
 """Read SCMDB exports.
 
 [SCMDB](https://scmdb.net/) is Krovax's community database of Star Citizen
-missions, crafting and mining. It holds the reward data that provably is not in
-the client install (see docs/format-notes.md §4).
+missions, crafting and mining. Its user-exported data can fill or compare
+community details and ownership that are outside the current C1-to-C2 local
+facts presentation path.
 
 **Access policy.** SCMDB's `robots.txt` disallows `/data/` and `/data-nda/`, so
 this module never fetches anything. It reads export files *you* download from

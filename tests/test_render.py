@@ -56,6 +56,26 @@ def test_rendered_output_always_passes_validation():
     assert validate_value(value) == []
 
 
+def test_renderer_preserves_cig_placeholder_tags_from_stock():
+    from starcompanion.model import ContractSet
+
+    contract = make_contract(base="Available in <years>")
+    result = Renderer().render_all(ContractSet([contract], {contract.org.id: contract.org}))
+
+    assert not result.skipped
+    assert "<years>" in result.values["d"]
+
+
+def test_renderer_does_not_report_a_stock_warning_as_generated():
+    from starcompanion.model import ContractSet
+
+    contract = make_contract(base="CIG text <EM>with mismatched close</EM4>")
+    result = Renderer().render_all(ContractSet([contract], {contract.org.id: contract.org}))
+
+    assert not result.skipped
+    assert not result.warnings
+
+
 def test_base_text_literal_escapes_survive_untouched():
     contract = make_contract(base=r"Line one\nLine two")
     assert r"Line one\nLine two" in render(contract)
@@ -85,6 +105,19 @@ def test_template_errors_name_the_key_and_template():
 
     assert exc.value.key == "d"
     assert exc.value.template == "desc.j2"
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "{{ cycler.__init__.__globals__.os.getcwd() }}",
+        "{{ contract.__class__.__mro__ }}",
+    ],
+)
+def test_template_cannot_reach_python_internals(expression):
+    renderer = Renderer(overrides={"desc.j2": expression})
+    with pytest.raises(TemplateRenderError, match="unsafe|SecurityError|access"):
+        renderer.render_key(make_contract(), "d")
 
 
 # --- options -----------------------------------------------------------------

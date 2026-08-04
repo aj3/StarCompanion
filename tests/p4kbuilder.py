@@ -35,6 +35,7 @@ class Member:
     encrypted: bool = False
     cig_signature: bool = False
     zip64: bool = False
+    cig_aligned: bool = False
 
 
 @dataclass
@@ -60,14 +61,18 @@ class Builder:
                 LOCAL_FILE_CIG_SIGNATURE if member.cig_signature else LOCAL_FILE_SIGNATURE
             )
             name = member.name.encode("utf-8")
+            local_extra = b""
+            if member.cig_aligned:
+                local_extra = b"\x00" * (-(offset + 30 + len(name)) % 4096)
             # sig, version, flags, method, time, date, crc, comp, uncomp, name, extra
             out += struct.pack(
                 "<IHHHHHIIIHH",
                 signature, 20, 0, member.method, 0, 0,
                 zlib.crc32(member.data), len(payload), len(member.data),
-                len(name), 0,
+                len(name), len(local_extra),
             )
             out += name
+            out += local_extra
             out += payload
 
             directory.append((member, offset, payload, len(payload)))

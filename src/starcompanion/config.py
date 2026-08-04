@@ -49,6 +49,7 @@ class FieldToggles(Strict):
 
     reputation: bool = True
     blueprints: bool = True
+    item_rewards: bool = True
     scenario_points: bool = True
     scrip: bool = True
     rank_gates: bool = True
@@ -95,6 +96,13 @@ class Formatting(Strict):
         return value
 
 
+class Appearance(Strict):
+    """How the interface looks. Additive with a default, so profiles written
+    before this existed still load."""
+
+    theme: Literal["dark", "light"] = "dark"
+
+
 class OrgTemplates(Strict):
     """Inline Jinja overriding the defaults for one mission giver."""
 
@@ -117,6 +125,7 @@ class Profile(Strict):
     description: str = ""
     fields: FieldToggles = Field(default_factory=FieldToggles)
     formatting: Formatting = Field(default_factory=Formatting)
+    appearance: Appearance = Field(default_factory=Appearance)
     templates: dict[str, OrgTemplates] = Field(default_factory=dict)
     """Keyed by org id (casefolded), matching `Org.id`."""
     injection: Injection = Field(default_factory=Injection)
@@ -149,6 +158,7 @@ class Profile(Strict):
         return RenderOptions(
             show_reputation=self.fields.reputation,
             show_blueprints=self.fields.blueprints,
+            show_item_rewards=self.fields.item_rewards,
             show_scenario_points=self.fields.scenario_points,
             show_scrip=self.fields.scrip,
             show_rank_gates=self.fields.rank_gates,
@@ -204,6 +214,7 @@ def load_builtin(name: str) -> Profile:
 
 __all__ = [
     "SCHEMA_VERSION",
+    "Appearance",
     "Formatting",
     "FieldToggles",
     "Injection",

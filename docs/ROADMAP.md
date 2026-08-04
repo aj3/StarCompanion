@@ -4,6 +4,12 @@ Multi-session build plan. Each phase is independently shippable, has testable
 acceptance criteria, and ends with a working tree. Start a session by pasting
 that phase's **Resume prompt**.
 
+> The completed historical phases below are followed by the core-first
+> [Smart Citizen catch-up program](SMART_CITIZEN_CATCHUP.md). That plan replaces
+> the earlier conclusion that mission reputation and blueprint rewards cannot
+> be extracted locally; they require nested DataForge traversal and reference
+> resolution.
+
 
 ## Standing rules (apply to every phase)
 
@@ -370,7 +376,14 @@ not cover.** Independent extraction works.
 
 ### Why this phase is only partial
 
-Rewards are **not in the DataCore**. Established, not assumed:
+> Historical finding: this section describes the earlier top-level
+> `MissionBrokerEntry` experiment. Sprint C1 now also indexes nested DataForge
+> contract-generator records and emits an independent evidence/capability
+> report from `extract/dataforge.py`. The broker projection intentionally stays
+> reward-free so a patch-sensitive provider cannot break stock discovery.
+
+The earlier conclusion was that rewards were **not reachable from the broker
+projection**. It was based on these observations from that captured build:
 
 - All 67 LOCALE-bearing structs were scanned across all 116,512 records.
   `MissionBrokerEntry` is the only one holding contract strings, and it reaches
@@ -379,10 +392,9 @@ Rewards are **not in the DataCore**. Established, not assumed:
   instances**. Reading a broker entry at pointer depth 0, 1 and 2 never reaches
   a `blueprintRecord` or `minStanding`.
 
-Reward values therefore live in the Subsumption mission definitions — 465 files
-under `Data/Libs/Subsumption/Missions/` — which needs a CryXMLB reader and
-mission-graph traversal. That is genuinely new scope, so it is **Phase 9b**
-rather than something to quietly fold in here.
+That led to the historical Phase 9b hypothesis below. Sprint C1 supersedes the
+blanket conclusion by scanning the DataForge record paths directly; its
+capability report now determines what a particular build actually exposes.
 
 Speculative reward-walking code was written, found to be unreachable, and
 **deleted rather than shipped**. Contracts from this source carry an empty
@@ -403,8 +415,8 @@ walker, and reward extraction feeding the existing domain model.
 The CryXmlB reader works and parses real mission files (641 nodes on the first
 one tried). It is genuinely useful for any future work on Subsumption content.
 
-**The reward half of this phase was disproved rather than built.** Reward values
-are not in the shipped client data at all:
+**Historical result, superseded by Sprint C1.** The first reward attempt only
+searched top-level reward structs and Subsumption files:
 
 | Check | Result |
 |---|---|
@@ -413,22 +425,12 @@ are not in the shipped client data at all:
 | `Data/Libs/Subsumption/Missions/PU/` — the path every `missionModule` names | **0 entries** |
 | "Foxwell" anywhere in the 1.36 M-entry archive | 20 hits, all art assets |
 
-`global.ini` ships all 1,449 strings so the client can *display* them, but the
-mission logic that selects and rewards them is server-authoritative. That also
-explains the zero-instance reward structs.
-
-**Consequence:** no client-side tool can extract reputation amounts or blueprint
-pools. StarStrings' values are derived from observation and community reporting,
-not from reading these files — which is consistent with MrKraken relying on bug
-reports to correct pools (their issues #3, #6, #14, #40).
-
-So `contracts_ini` stays the reward source, not as a shortcut but because it is
-the only source that exists. Full details in docs/format-notes.md §4.
-
-**Resume prompt**
-> Read docs/ROADMAP.md Phase 9b and docs/format-notes.md. Implement the CryXMLB
-> reader and mission-definition walker to extract reward data. Cross-check against
-> StarStrings' contracts.ini and flag uncertain cases rather than asserting them.
+Those checks did not traverse anonymous DataCore instances or the separate
+contract-generator, mission-broker, reputation, and crafting record trees.
+Sprint C1 now extracts reputation, blueprint pools, and item rewards from those
+local records with provenance. Sprint C2 now merges those facts through the
+local mission provider into rendered reputation, blueprint, and direct-item
+rewards; `contracts_ini` remains an explicit optional community source.
 
 ---
 
