@@ -1,5 +1,12 @@
 # StarCompanion v0.2.0 — C6/G1/G2 GUI release
 
+> [!WARNING]
+> **The v0.2.0 Windows executables are intentionally unsigned.** Windows cannot
+> verify the publisher and Microsoft Defender SmartScreen may display
+> **Windows protected your PC**. Download only from the official GitHub release,
+> verify the SHA-256 value before running it, and use **More info > Run anyway**
+> only when the value matches the release table. Do not disable SmartScreen.
+
 StarCompanion v0.2.0 delivers the professional desktop workflow over the
 security-reviewed C0-C5 core. The application remains local-first: it has no
 updater, telemetry, analytics, crash upload, remote configuration, or automatic
@@ -55,6 +62,27 @@ manually approved signing workflow. Ubuntu artifacts and ordinary CI artifacts
 remain unsigned. Hashes in `release-manifest.json` establish integrity, not
 publisher identity.
 
+### Verify a downloaded file
+
+The public release notes list the independently verified SHA-256 value for each
+asset. On Windows, open PowerShell in the download directory and run:
+
+```powershell
+Get-FileHash -Algorithm SHA256 .\StarCompanion.exe
+Get-FileHash -Algorithm SHA256 .\starcompanion-cli.exe
+```
+
+On Ubuntu, run:
+
+```bash
+sha256sum ./StarCompanion ./starcompanion-cli
+```
+
+Compare the entire 64-character value with the corresponding value in the
+GitHub release table. Do not run the file if any character differs. A matching
+hash establishes that the download matches the reviewed release artifact; it
+does not provide the publisher identity that Authenticode would provide.
+
 ## Upgrade and rollback
 
 v0.2.0 uses the existing C5 portable schemas and channel-scoped stores. Back up
@@ -65,6 +93,6 @@ replace the executable with v0.1.0; user data is not deleted automatically.
 
 ## Publication status
 
-This release is prepared but not published. Create and push tag `v0.2.0`, then
-create the GitHub release from these notes only after the release-candidate PR,
-required CI, artifact inspection, and explicit publication approval are complete.
+Verified unsigned publication was explicitly approved on 2026-08-05. Tag
+`v0.2.0` and the public GitHub release must still be created only from the final
+merge commit after required CI and final artifact inspection complete.
