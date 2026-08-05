@@ -108,6 +108,17 @@ def window(qapp, contracts):
     return w
 
 
+def _wait_until(qapp, predicate, *, timeout=10.0, message="GUI condition did not finish"):
+    """Pump Qt without entering QTest's nested event loop."""
+    deadline = time.monotonic() + timeout
+    while not predicate() and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+    qapp.processEvents()
+    if not predicate():
+        pytest.fail(message)
+
+
 # --- C6 application shell ---------------------------------------------------
 
 
@@ -823,7 +834,6 @@ def test_editor_user_ini_load_and_save_never_run_on_gui_thread(
     window, qapp, tmp_path, monkeypatch
 ):
     from PySide6.QtCore import QThread
-    from PySide6.QtTest import QTest
     from starcompanion.user_edits import UserEditStore
 
     load_threads = []
@@ -843,11 +853,11 @@ def test_editor_user_ini_load_and_save_never_run_on_gui_thread(
     monkeypatch.setattr(UserEditStore, "save", tracked_save)
     target = tmp_path / "LIVE" / "data" / "Localization" / "english" / "global.ini"
     window.state.set_target(target)
-    for _ in range(300):
-        qapp.processEvents()
-        if not window.editor._jobs and not window.editor.scope_timer.isActive():
-            break
-        QTest.qWait(10)
+    _wait_until(
+        qapp,
+        lambda: not window.editor._jobs and not window.editor.scope_timer.isActive(),
+        message="background user.ini load did not finish",
+    )
     assert window.state.user_overrides_ready
 
     key = window.editor.model.snapshot.records[0].key
@@ -855,11 +865,11 @@ def test_editor_user_ini_load_and_save_never_run_on_gui_thread(
     window.editor.model.rebuild()
     window.editor._after_model_change()
     window.editor.save_user_edits()
-    for _ in range(300):
-        qapp.processEvents()
-        if not window.editor._jobs:
-            break
-        QTest.qWait(10)
+    _wait_until(
+        qapp,
+        lambda: not window.editor._jobs,
+        message="background user.ini save did not finish",
+    )
 
     assert load_threads and save_threads
     assert all(thread is not qapp.thread() for thread in (*load_threads, *save_threads))
@@ -870,16 +880,15 @@ def test_editor_user_ini_load_and_save_never_run_on_gui_thread(
 def test_editor_refuses_to_overwrite_external_user_ini_change(
     window, qapp, tmp_path
 ):
-    from PySide6.QtTest import QTest
     from starcompanion.user_edits import UserEditStore
 
     target = tmp_path / "LIVE" / "data" / "Localization" / "english" / "global.ini"
     window.state.set_target(target)
-    for _ in range(300):
-        qapp.processEvents()
-        if not window.editor._jobs and not window.editor.scope_timer.isActive():
-            break
-        QTest.qWait(10)
+    _wait_until(
+        qapp,
+        lambda: not window.editor._jobs and not window.editor.scope_timer.isActive(),
+        message="background user.ini load did not finish",
+    )
     store = UserEditStore("LIVE", "english")
     store.save({"External_Key": "external"})
     key = window.editor.model.snapshot.records[0].key
@@ -888,11 +897,11 @@ def test_editor_refuses_to_overwrite_external_user_ini_change(
     window.editor._after_model_change()
 
     window.editor.save_user_edits()
-    for _ in range(300):
-        qapp.processEvents()
-        if not window.editor._jobs:
-            break
-        QTest.qWait(10)
+    _wait_until(
+        qapp,
+        lambda: not window.editor._jobs,
+        message="external-change rejection did not finish",
+    )
 
     assert store.load() == {"External_Key": "external"}
     assert "changed outside this editor" in window.editor.status.text()
@@ -1429,7 +1438,6 @@ def test_update_reads_the_game_when_contracts_are_missing(qapp, fake_game, monke
 def test_guided_update_creates_clean_install_override(window, tmp_path, monkeypatch):
     """The normal install has stock strings in Data.p4k and no loose INI."""
     import p4kbuilder as B
-    from PySide6.QtTest import QTest
     from starcompanion.install import GameInstall
 
     root = tmp_path / "StarCitizen" / "LIVE"
@@ -1442,11 +1450,11 @@ def test_guided_update_creates_clean_install_override(window, tmp_path, monkeypa
     install = GameInstall(root=root, channel="LIVE", version="test")
     window.start.install = install
     window.start._adopt_install()
-    for _ in range(300):
-        QApplication.processEvents()
-        if window.state.user_overrides_ready:
-            break
-        QTest.qWait(10)
+    _wait_until(
+        QApplication.instance(),
+        lambda: window.state.user_overrides_ready,
+        message="guided-update user.ini scope did not become ready",
+    )
 
     monkeypatch.setattr(
         QMessageBox,
