@@ -1,5 +1,8 @@
 # StarCompanion
 
+Current release candidate: **v0.2.0** (C6/G1/G2 desktop experience over the
+verified C0-C5 core).
+
 Reads Star Citizen's own game files and builds a **customisable** `global.ini`
 localization override — so contract titles and descriptions show the reward
 information the game leaves out, formatted the way *you* want it.
@@ -60,10 +63,11 @@ python -m starcompanion --help
 starcompanion-gui          # or: python -m starcompanion.gui.app
 ```
 
-It opens on **Start here**, which is the whole job in three steps:
+It opens on **Overview**, which is the whole normal workflow:
 
-1. **Your game** — found automatically. You are never asked to type a path.
-   One button reads the contracts out of it.
+1. **Your game** — found automatically. Discover and switch among installed
+   LIVE/PTU/EPTU/TECH-PREVIEW/HOTFIX channels without typing a path.
+   One button reads the contracts out of the selected local archive.
 2. **How to label each contract** — put the mission giver, the difficulty, or
    both at the front of every title.
 
@@ -73,16 +77,17 @@ takes a backup, and there is an **Undo my last change** button beside it.
 It also warns if your `USER.cfg` is missing `g_language`, since without that
 setting the game ignores the override entirely and nothing appears to happen.
 
-*Appearance* changes how the added text looks. *Advanced: custom wording* lets
-you write the wording yourself and is not needed for normal use.
+*Presentation* changes how the added text looks. *Custom wording* and the
+virtualized *String editor* handle explicit advanced edits. *Blueprints* joins
+the local C4 catalog to channel-scoped ownership and incrementally scans local
+game logs only after you request it.
 
-A hand-driven apply screen exists for three rarer cases — a second game copy
-such as PTU, restoring an older backup rather than the newest, or rebuilding
-from a clean file when another pack is installed. It is hidden by default:
-
-```bash
-STARCOMPANION_EXPERT=1 starcompanion-gui
-```
+*Backup & recovery* is always available for reviewing target-scoped restore
+points and known interrupted operations. Its manual-plan tools cover rarer
+cases such as a separately selected localization file or rebuilding from a
+clean copy. *Settings & help* provides output profiles, preview-first portable
+settings, inspect-before-export redacted diagnostics, and bundled searchable
+offline guidance.
 
 ### The command line
 
@@ -462,12 +467,19 @@ pip install pyinstaller
 pyinstaller packaging/starcompanion.spec
 ```
 
-Produces two executables in `dist/`, with templates and profiles bundled inside:
+Produces two executables in `dist/`, with templates and profiles bundled inside.
+Windows adds the `.exe` suffix; Ubuntu binaries have no suffix:
 
 | File | What it is |
 |---|---|
 | `StarCompanion.exe` (~56 MB) | The window. Double-click it. |
 | `starcompanion-cli.exe` (~18 MB) | The command line. Smaller because it needs no Qt. |
+
+Release CI builds both Windows and Ubuntu from hash-verified wheelhouses, runs
+the frozen GUI and the complete packaged core workflow with Python networking
+and DNS denied, and publishes per-platform integrity manifests as CI artifacts.
+See [the v0.2.0 release notes](docs/RELEASE_NOTES_v0.2.0.md) and
+[release checklist](docs/RELEASE_CHECKLIST_v0.2.0.md).
 
 ## Development
 

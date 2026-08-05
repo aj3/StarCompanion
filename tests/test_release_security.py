@@ -69,6 +69,13 @@ def test_network_surface_rejects_unreviewed_network_imports(
         VERIFY(tmp_path)
 
 
+def test_frozen_gui_explicitly_excludes_qt_network() -> None:
+    root = Path(__file__).parents[1]
+    spec = (root / "packaging" / "starcompanion.spec").read_text(encoding="utf-8")
+
+    assert '"PySide6.QtNetwork"' in spec
+
+
 def test_project_declares_apache_license_and_notice() -> None:
     root = Path(__file__).parents[1]
     project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))[
@@ -81,6 +88,17 @@ def test_project_declares_apache_license_and_notice() -> None:
     assert "StarCompanion contributors" in (root / "NOTICE").read_text(
         encoding="utf-8"
     )
+
+
+def test_package_and_project_versions_stay_in_sync() -> None:
+    from starcompanion import __version__
+
+    root = Path(__file__).parents[1]
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))[
+        "project"
+    ]
+
+    assert __version__ == project["version"]
 
 
 def test_sbom_finalizer_records_and_verifier_requires_project_license(
@@ -207,6 +225,33 @@ def test_signing_workflow_is_manual_protected_and_fail_closed() -> None:
     assert '"verify", "/pa", "/all", "/v"' in script
     assert "TimeStamperCertificate" in script
     assert "finally" in script
+
+
+def test_release_workflow_builds_and_offline_smokes_both_platforms() -> None:
+    root = Path(__file__).parents[1]
+    workflow = (root / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "build-windows:" in workflow
+    assert "build-ubuntu:" in workflow
+    assert "StarCompanion-windows-unsigned" in workflow
+    assert "StarCompanion-ubuntu-unsigned" in workflow
+    assert "pytest -q --ignore=tests/test_gui.py" in workflow
+    assert "pytest -vv -s tests/test_gui.py" in workflow
+    assert "pytest -q tests/test_gui_screenshots.py" in workflow
+    assert workflow.count("packaging/verify_offline.py") == 1
+    assert workflow.count("packaging\\verify_offline.py") == 2
+
+    gui_entry = (root / "src" / "starcompanion" / "gui" / "app.py").read_text(
+        encoding="utf-8"
+    )
+    packaged_smoke = (root / "packaging" / "verify_offline.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"--smoke-test"' in gui_entry
+    assert '_run([str(gui), "--smoke-test"]' in packaged_smoke
+    assert 'env["STARCOMPANION_ENFORCE_OFFLINE"] = "1"' in packaged_smoke
 
 
 def test_dependency_free_ownership_smoke_fixture_matches_cache_schema(

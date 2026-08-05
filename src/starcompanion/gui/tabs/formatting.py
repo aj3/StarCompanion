@@ -16,14 +16,14 @@ from PySide6.QtWidgets import (
     QFrame,
     QComboBox,
     QFormLayout,
-    QGroupBox,
+    QGridLayout,
     QLabel,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
-from ...render.renderer import TitlePrefix
+from ..components import MetricTile, NoticeBanner, SectionCard, Tone
 from ..labels import (
     FIELD_NAMES,
     INHERIT,
@@ -35,8 +35,8 @@ from ..labels import (
     preview_html,
     preview_note,
 )
-from ...features import community_rewards_enabled
 from ..state import AppState
+from ..theme import SPACING
 
 
 class FormattingTab(QWidget):
@@ -44,24 +44,66 @@ class FormattingTab(QWidget):
         super().__init__(parent)
         self.state = state
         self._loading = False
+        self.setAccessibleName("Presentation settings")
+        self.setAccessibleDescription(
+            "Control title structure, emphasis, and blueprint-list length."
+        )
 
         layout = QVBoxLayout(self)
-        layout.addWidget(self._build_style_box())
-        layout.addWidget(self._build_title_box())
+        layout.setSpacing(SPACING.large)
+
+        metrics = QGridLayout()
+        metrics.setSpacing(SPACING.medium)
+        self.style_metric = MetricTile("Text style")
+        self.prefix_metric = MetricTile("Title prefix")
+        self.length_metric = MetricTile("Blueprint list")
+        metrics.addWidget(self.style_metric, 0, 0)
+        metrics.addWidget(self.prefix_metric, 0, 1)
+        metrics.addWidget(self.length_metric, 0, 2)
+        for column in range(3):
+            metrics.setColumnStretch(column, 1)
+        layout.addLayout(metrics)
+
+        sections = QVBoxLayout()
+        sections.setSpacing(SPACING.large)
+        self.style_section = self._build_style_box()
+        self.title_section = self._build_title_box()
+        sections.addWidget(self.style_section)
+        sections.addWidget(self.title_section)
         self.length_box = self._build_length_box()
-        layout.addWidget(self.length_box)
+        sections.addWidget(self.length_box)
+        layout.addLayout(sections)
         layout.addStretch(1)
+
+        focus_order = [
+            self.default_tag,
+            self.per_field_toggle,
+            *self.field_tags.values(),
+            self.prefix,
+            self.bracket_rep,
+            self.bracket_bp,
+            self.max_items,
+        ]
+        for current, following in zip(focus_order, focus_order[1:]):
+            QWidget.setTabOrder(current, following)
 
         state.profileChanged.connect(self.refresh)
         self.refresh()
 
     # --- text style ----------------------------------------------------------
 
-    def _build_style_box(self) -> QGroupBox:
-        box = QGroupBox("How the added text looks")
-        layout = QVBoxLayout(box)
+    def _build_style_box(self) -> SectionCard:
+        box = SectionCard(
+            "Text emphasis",
+            "Choose a game-supported emphasis style for generated mission facts.",
+        )
+        layout = box.body_layout
 
         self.default_tag = QComboBox()
+        self.default_tag.setAccessibleName("Default generated-text style")
+        self.default_tag.setAccessibleDescription(
+            "Applies to generated information unless a field-specific style overrides it."
+        )
         for tag, name, _hint in TEXT_STYLES:
             self.default_tag.addItem(name, tag)
         self.default_tag.currentIndexChanged.connect(self._set_default_style)
@@ -76,6 +118,8 @@ class FormattingTab(QWidget):
         self.example.setWordWrap(True)
         self.example.setFrameShape(QFrame.Shape.StyledPanel)
         self.example.setMargin(10)
+        self.example.setProperty("component", "preview")
+        self.example.setAccessibleName("Generated text example")
         layout.addWidget(self.example)
 
         self.example_note = _muted("")
@@ -84,6 +128,12 @@ class FormattingTab(QWidget):
 
         self.per_field_toggle = QCheckBox(
             "Use a different style for each kind of information"
+        )
+        self.per_field_toggle.setAccessibleName(
+            "Use field-specific generated-text styles"
+        )
+        self.per_field_toggle.setAccessibleDescription(
+            "Reveals one optional style selector for each generated field."
         )
         self.per_field_toggle.toggled.connect(self._toggle_per_field)
         layout.addWidget(self.per_field_toggle)
@@ -95,6 +145,10 @@ class FormattingTab(QWidget):
         self.field_tags: dict[str, QComboBox] = {}
         for name, label in FIELD_NAMES.items():
             combo = QComboBox()
+            combo.setAccessibleName(f"{label} style")
+            combo.setAccessibleDescription(
+                "Use the default style or override this generated field only."
+            )
             combo.addItem(INHERIT, None)
             for tag, shown, _hint in TEXT_STYLES:
                 combo.addItem(shown, tag)
@@ -163,11 +217,18 @@ class FormattingTab(QWidget):
 
     # --- titles --------------------------------------------------------------
 
-    def _build_title_box(self) -> QGroupBox:
-        box = QGroupBox("Contract titles")
-        layout = QVBoxLayout(box)
+    def _build_title_box(self) -> SectionCard:
+        box = SectionCard(
+            "Contract titles",
+            "Make the in-game contract list easier to scan without changing its sort order.",
+        )
+        layout = box.body_layout
 
         self.prefix = QComboBox()
+        self.prefix.setAccessibleName("Contract title prefix")
+        self.prefix.setAccessibleDescription(
+            "Choose whether mission giver, difficulty, both, or neither appears first."
+        )
         for value, name, _hint in TITLE_PREFIXES:
             self.prefix.addItem(name, value)
         self.prefix.currentIndexChanged.connect(self._set_prefix)
@@ -181,14 +242,23 @@ class FormattingTab(QWidget):
         layout.addWidget(_muted(PREFIX_CAPTION))
 
         self.bracket_rep = QCheckBox("Also show the reputation number in the title")
+        self.bracket_rep.setAccessibleName("Show reputation in contract titles")
+        self.bracket_rep.setAccessibleDescription(
+            "Adds a compact reputation value when local evidence is available."
+        )
         self.bracket_rep.toggled.connect(lambda v: self._set_title("bracket_rep", v))
         layout.addWidget(self.bracket_rep)
 
         self.bracket_bp = QCheckBox("Also mark titles that can award a blueprint")
+        self.bracket_bp.setAccessibleName("Mark blueprint contracts in titles")
+        self.bracket_bp.setAccessibleDescription(
+            "Adds a blueprint marker when local evidence is available."
+        )
         self.bracket_bp.toggled.connect(lambda v: self._set_title("bracket_bp", v))
         layout.addWidget(self.bracket_bp)
 
-        self.reward_note = _muted("")
+        self.reward_note = NoticeBanner(tone=Tone.WARNING)
+        self.reward_note.setVisible(False)
         layout.addWidget(self.reward_note)
 
         return box
@@ -211,11 +281,19 @@ class FormattingTab(QWidget):
 
     # --- length --------------------------------------------------------------
 
-    def _build_length_box(self) -> QGroupBox:
-        box = QGroupBox("Keep it short")
-        layout = QFormLayout(box)
+    def _build_length_box(self) -> SectionCard:
+        box = SectionCard(
+            "Blueprint-list length",
+            "Limit unusually large pools so contract descriptions remain readable.",
+        )
+        layout = QFormLayout()
+        box.add_layout(layout)
 
         self.max_items = QSpinBox()
+        self.max_items.setAccessibleName("Maximum blueprints per contract")
+        self.max_items.setAccessibleDescription(
+            "Zero shows every blueprint; other values cap the generated list."
+        )
         self.max_items.setRange(0, 500)
         self.max_items.setSpecialValueText("Show them all")
         self.max_items.valueChanged.connect(self._set_max_items)
@@ -270,6 +348,11 @@ class FormattingTab(QWidget):
         finally:
             self._loading = False
 
+        self.style_metric.set_value(self.default_tag.currentText())
+        self.prefix_metric.set_value(self.prefix.currentText())
+        self.length_metric.set_value(
+            str(self.max_items.value()) if self.max_items.value() else "All"
+        )
         self._update_reward_note()
 
     def _update_reward_note(self) -> None:
@@ -281,11 +364,16 @@ class FormattingTab(QWidget):
         )
         if has_rewards:
             self.reward_note.setText("")
+            self.reward_note.setVisible(False)
         else:
             self.reward_note.setText(
-                "The current contract cache has no rendered reward facts. "
-                "Read your game on the Start tab to run the local provider."
+                "Local reward facts have not been loaded. Return to Overview to read "
+                "the game and run the local provider."
+                if contracts is None
+                else "This build has no matched reward facts. Review provider health "
+                "under Data & provenance."
             )
+            self.reward_note.setVisible(True)
 
 
 def _muted(text: str) -> QLabel:

@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "logical_size": [1280, 800],
+  "tolerance": 4,
+  "rects": {
+    "shell": [0, 0, 1280, 800],
+    "sidebar": [0, 0, 244, 800],
+    "header": [244, 0, 1036, 98],
+    "stack": [244, 98, 1036, 672],
+    "status": [244, 770, 1036, 30],
+    "style_metric": [253, 107, 325, 97],
+    "style_section": [253, 220, 1000, 286],
+    "title_section": [253, 522, 1000, 339],
+    "length_section": [253, 877, 1000, 159]
+  },
+  "linux_rects": {
+    "length_section": [253, 787, 1000, 153]
+  },
+  "minimum_colour_samples": {
+    "#0b0f14": 500,
+    "#121820": 500,
+    "#3fd0d4": 4
+  }
+}

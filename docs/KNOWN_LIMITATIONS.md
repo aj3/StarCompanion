@@ -1,12 +1,13 @@
-# Core release known limitations
+# v0.2.0 release known limitations
 
-**Review date:** 2026-08-04
+**Review date:** 2026-08-05
 
-- Ordinary CI artifacts are intentionally unsigned. A manually approved
-  `release-signing` environment can Authenticode-sign and RFC 3161 timestamp a
-  reviewed release candidate once a publisher certificate is configured. The
-  current local C5 candidate remains unsigned because no certificate is
-  available; manifest hashes alone do not establish publisher identity.
+- The v0.2.0 Windows artifacts are intentionally unsigned by explicit
+  publication approval. Windows may display Microsoft Defender SmartScreen and
+  unknown-publisher warnings. The release provides independently verified
+  SHA-256 values for integrity, but hashes do not establish publisher identity.
+  Do not disable SmartScreen; proceed only after downloading from the official
+  release and matching the complete published hash.
 - Ordinary ZIP entries require CRC-32. Current CIG-aligned method-100 entries
   can carry a demonstrably non-ZIP CRC field. StarCompanion reports this and
   requires valid Zstandard decompression plus exact declared length, but cannot
@@ -21,5 +22,9 @@
   ambiguous names remain unresolved instead of being guessed.
 - Tests use synthetic P4K, log, settings, and ownership fixtures. Optional
   proprietary real-build checks skip when local fixtures are absent.
-- The frozen release target is Windows. Core tests run on Windows and Ubuntu CI,
-  but desktop integration is not promised for every Linux distribution.
+- Frozen Windows and Ubuntu artifacts are built independently because native
+  PyInstaller executables are not cross-platform. Ubuntu CI verifies its own
+  artifact; desktop integration is not promised for every Linux distribution.
+- The GUI is localized in English. Installed Star Citizen localization
+  languages remain strictly isolated and supported as local data sources, but
+  application-interface translation is deferred.

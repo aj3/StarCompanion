@@ -118,6 +118,22 @@ def test_no_installs_found_is_not_an_error(tmp_path):
     assert install.find_installs(roots=[tmp_path / "nothing"]) == []
 
 
+def test_install_discovery_has_bounded_cancellation_checkpoints(tmp_path):
+    calls = []
+
+    def checkpoint():
+        calls.append(True)
+        if len(calls) == 2:
+            raise RuntimeError("cancelled")
+
+    with pytest.raises(RuntimeError, match="cancelled"):
+        install.find_installs(
+            roots=[tmp_path / "one", tmp_path / "two"],
+            checkpoint=checkpoint,
+        )
+    assert len(calls) == 2
+
+
 def test_unreadable_directories_are_skipped(tmp_path):
     """Scanning drives must not raise on folders we cannot read."""
     assert install.find_installs(roots=[Path("//nonexistent-host/share")]) == []

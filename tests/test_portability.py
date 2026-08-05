@@ -79,6 +79,8 @@ def test_preferences_and_language_packs_are_strictly_scoped(tmp_path):
             "default_language": "German_(Germany)",
             "merge_mode": "merge",
             "theme": "dark",
+            "ui_schema": 1,
+            "last_page": "provenance",
             "link_live_hotfix": False,
         }
     )
@@ -86,6 +88,8 @@ def test_preferences_and_language_packs_are_strictly_scoped(tmp_path):
     assert preferences.load()["default_language"] == "german_(germany)"
     with pytest.raises(PortabilityError, match="non-portable"):
         preferences.save({"last_install_path": "C:/private/game"})
+    with pytest.raises(PortabilityError, match="last_page"):
+        preferences.save({"last_page": "../../outside"})
 
     live_en = LanguagePackStore("LIVE", "english", data)
     live_fr = LanguagePackStore("LIVE", "french", data)
@@ -102,7 +106,14 @@ def test_preferences_and_language_packs_are_strictly_scoped(tmp_path):
 def test_settings_archive_round_trip_is_allowlist_only(tmp_path):
     source = tmp_path / "source"
     destination = tmp_path / "destination"
-    PreferencesStore(source).save({"default_channel": "LIVE", "theme": "light"})
+    PreferencesStore(source).save(
+        {
+            "default_channel": "LIVE",
+            "theme": "light",
+            "ui_schema": 1,
+            "last_page": "content",
+        }
+    )
     UserEditStore("LIVE", "english", root=source).save({"User_Key": "Mine"})
     LanguagePackStore("PTU", "french", source).save({"Pack_Key": "Locale"})
     user_dir = UserEditStore("LIVE", "english", root=source).path.parent
@@ -125,7 +136,10 @@ def test_settings_archive_round_trip_is_allowlist_only(tmp_path):
     assert {item.outcome for item in plan.items} == {"add"}
     assert not destination.exists()
     apply_settings_import(plan)
-    assert PreferencesStore(destination).load()["theme"] == "light"
+    restored_preferences = PreferencesStore(destination).load()
+    assert restored_preferences["theme"] == "light"
+    assert restored_preferences["ui_schema"] == 1
+    assert restored_preferences["last_page"] == "content"
     assert UserEditStore("LIVE", "english", root=destination).load() == {"User_Key": "Mine"}
     assert LanguagePackStore("PTU", "french", destination).load() == {"Pack_Key": "Locale"}
 

@@ -161,10 +161,10 @@ class TypeScale:
 
 TYPE = TypeScale()
 
-# Filled in by Phase 2 once a bundled face exists; empty means "use whatever
-# the system provides", which is why the app works with no font shipped.
-FONT_FAMILY_UI = ""
-FONT_FAMILY_MONO = ""
+# Native Windows faces are preferred, with generic fallbacks retained for
+# Linux and for minimal CI images. No font files or licenses need shipping.
+FONT_FAMILY_UI = "Segoe UI Variable"
+FONT_FAMILY_MONO = "Cascadia Mono"
 
 
 def _family(preferred: str, fallback: str) -> str:
@@ -201,6 +201,245 @@ QWidget {{
 
 QMainWindow, QDialog {{
     background-color: {colours.canvas};
+}}
+
+QLabel {{
+    background: transparent;
+}}
+
+/* --- application shell ---------------------------------------------- */
+QFrame#AppSidebar {{
+    background-color: {colours.surface};
+    border-right: 1px solid {colours.border};
+}}
+
+QFrame#BrandMark {{
+    background-color: {colours.accent};
+    border-radius: 2px;
+}}
+
+QWidget#AppMain, QWidget#PageCanvas, QWidget#PageScrollContent,
+QScrollArea#PageViewport, QScrollArea#PageViewport > QWidget > QWidget {{
+    background-color: {colours.canvas};
+    border: none;
+}}
+
+QFrame#AppHeader {{
+    background-color: {colours.surface};
+    border-bottom: 1px solid {colours.border};
+}}
+
+QFrame#AppStatus {{
+    background-color: {colours.surface};
+    border-top: 1px solid {colours.border};
+}}
+
+QLabel[role="brand"] {{
+    color: {colours.text};
+    font-size: {TYPE.heading.size}pt;
+    font-weight: 700;
+    letter-spacing: 1.4px;
+}}
+
+QLabel[role="overline"], QLabel[role="nav-section"] {{
+    color: {colours.text_muted};
+    font-size: {TYPE.caption.size}pt;
+    font-weight: 600;
+    letter-spacing: 1.1px;
+}}
+
+QLabel[role="nav-section"] {{
+    padding: {s.tiny}px {s.small}px;
+}}
+
+QLabel[role="page-title"] {{
+    color: {colours.text};
+    font-size: {TYPE.display.size}pt;
+    font-weight: {TYPE.display.weight};
+    letter-spacing: 0.3px;
+}}
+
+QLabel[role="page-description"] {{
+    color: {colours.text_muted};
+    font-size: {TYPE.body.size}pt;
+}}
+
+QLabel[role="badge"] {{
+    background-color: {colours.surface_raised};
+    color: {colours.text_muted};
+    border: 1px solid {colours.border};
+    border-radius: {r.large}px;
+    padding: {s.tiny}px {s.small}px;
+    font-size: {TYPE.caption.size}pt;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+}}
+
+QLabel[role="security"] {{
+    color: {colours.text_muted};
+    font-size: {TYPE.caption.size}pt;
+    font-weight: 600;
+    letter-spacing: 0.7px;
+}}
+
+QLabel[role="hero-title"] {{
+    color: {colours.text};
+    font-size: {TYPE.display.size}pt;
+    font-weight: {TYPE.display.weight};
+    letter-spacing: 0.2px;
+}}
+
+QLabel[role="status-title"] {{
+    color: {colours.text};
+    font-size: {TYPE.heading.size}pt;
+    font-weight: {TYPE.heading.weight};
+}}
+
+QLabel[role="empty-title"] {{
+    color: {colours.text};
+    font-weight: 600;
+}}
+
+QLabel[role="section-title"] {{
+    color: {colours.text};
+    font-size: {TYPE.heading.size}pt;
+    font-weight: {TYPE.heading.weight};
+    letter-spacing: 0.2px;
+}}
+
+QLabel[role="metric-value"] {{
+    color: {colours.text};
+    font-size: {TYPE.heading.size}pt;
+    font-weight: 700;
+}}
+
+/* --- reusable state components -------------------------------------- */
+QFrame[component="dashboard-hero"] {{
+    background-color: {colours.surface};
+    border: 1px solid {colours.border};
+    border-left: 4px solid {colours.accent};
+    border-radius: {r.large}px;
+}}
+
+QFrame[component="dashboard-hero"][tone="warning"] {{
+    border-left-color: {colours.warning};
+}}
+
+QFrame[component="dashboard-hero"][tone="danger"] {{
+    border-left-color: {colours.danger};
+}}
+
+QFrame[component="dashboard-hero"][tone="success"] {{
+    border-left-color: {colours.success};
+}}
+
+QFrame[component="status-card"] {{
+    background-color: {colours.surface};
+    border: 1px solid {colours.border};
+    border-top: 3px solid {colours.border_strong};
+    border-radius: {r.large}px;
+}}
+
+QFrame[component="status-card"][tone="info"] {{
+    border-top-color: {colours.accent};
+}}
+
+QFrame[component="status-card"][tone="success"] {{
+    border-top-color: {colours.success};
+}}
+
+QFrame[component="status-card"][tone="warning"] {{
+    border-top-color: {colours.warning};
+}}
+
+QFrame[component="status-card"][tone="danger"] {{
+    border-top-color: {colours.danger};
+}}
+
+QFrame[component="empty-state"] {{
+    background-color: {colours.surface_raised};
+    border: 1px dashed {colours.border_strong};
+    border-radius: {r.medium}px;
+}}
+
+QFrame[component="notice"] {{
+    background-color: {colours.surface_raised};
+    border: 1px solid {colours.border};
+    border-left: 3px solid {colours.accent};
+    border-radius: {r.medium}px;
+}}
+
+QFrame[component="notice"][tone="success"] {{
+    border-left-color: {colours.success};
+}}
+
+QFrame[component="notice"][tone="warning"] {{
+    border-left-color: {colours.warning};
+}}
+
+QFrame[component="notice"][tone="danger"] {{
+    border-left-color: {colours.danger};
+}}
+
+QFrame[component="section-card"] {{
+    background-color: {colours.surface};
+    border: 1px solid {colours.border};
+    border-radius: {r.large}px;
+}}
+
+QFrame[component="toggle-row"] {{
+    background-color: {colours.surface_raised};
+    border: 1px solid {colours.border};
+    border-radius: {r.medium}px;
+}}
+
+QFrame[component="toggle-row"]:hover {{
+    background-color: {colours.surface_hover};
+    border-color: {colours.border_strong};
+}}
+
+QFrame[component="metric"] {{
+    background-color: {colours.surface_raised};
+    border: 1px solid {colours.border};
+    border-radius: {r.medium}px;
+}}
+
+QPushButton[role="nav"] {{
+    background-color: transparent;
+    color: {colours.text_muted};
+    border: 1px solid transparent;
+    border-radius: {r.medium}px;
+    padding: {s.medium}px {s.medium}px;
+    text-align: left;
+    font-weight: 600;
+}}
+
+QPushButton[role="nav"]:hover {{
+    background-color: {colours.surface_hover};
+    color: {colours.text};
+    border-color: transparent;
+}}
+
+QPushButton[role="nav"]:checked {{
+    background-color: {colours.accent_muted};
+    color: {colours.text};
+    border-left: 3px solid {colours.accent};
+}}
+
+QPushButton[role="compact"] {{
+    background-color: transparent;
+    color: {colours.text_muted};
+    border-color: {colours.border};
+    border-radius: {r.medium}px;
+    padding: {s.tiny}px {s.medium}px;
+    font-size: {TYPE.caption.size}pt;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+}}
+
+QPushButton[role="compact"]:hover {{
+    color: {colours.text};
+    border-color: {colours.accent_muted};
 }}
 
 /* --- tabs ------------------------------------------------------------- */
@@ -264,6 +503,10 @@ QPushButton:hover {{
     border-color: {colours.accent_muted};
 }}
 
+QPushButton:focus {{
+    border: 2px solid {colours.focus};
+}}
+
 QPushButton:pressed {{
     background-color: {colours.surface};
 }}
@@ -305,6 +548,12 @@ QPushButton[role="danger"]:hover {{
     background-color: {colours.danger};
     color: {colours.text_inverted};
     border-color: {colours.danger_hover};
+}}
+
+QPushButton[role="danger"]:disabled {{
+    background-color: {colours.surface};
+    color: {colours.text_muted};
+    border-color: {colours.border};
 }}
 
 /* --- inputs ----------------------------------------------------------- */
@@ -365,6 +614,7 @@ QComboBox QAbstractItemView {{
 
 /* --- check boxes ------------------------------------------------------ */
 QCheckBox {{
+    background: transparent;
     spacing: {s.small}px;
 }}
 
@@ -385,25 +635,47 @@ QCheckBox::indicator:checked {{
     border-color: {colours.accent};
 }}
 
+QCheckBox:focus {{
+    color: {colours.text};
+}}
+
+QCheckBox::indicator:focus {{
+    border: 2px solid {colours.focus};
+}}
+
 QCheckBox:disabled {{
     color: {colours.text_muted};
 }}
 
 /* --- lists ------------------------------------------------------------ */
-QListWidget {{
+QListWidget, QTreeWidget, QTableView {{
     background-color: {colours.surface_raised};
     border: 1px solid {colours.border};
     border-radius: {r.small}px;
     outline: none;
 }}
 
-QListWidget::item {{
+QListWidget::item, QTreeWidget::item, QTableView::item {{
     padding: {s.tiny}px {s.small}px;
 }}
 
-QListWidget::item:selected {{
+QListWidget::item:selected, QTreeWidget::item:selected, QTableView::item:selected {{
     background-color: {colours.accent_muted};
     color: {colours.text};
+}}
+
+QListWidget:focus, QTreeWidget:focus, QTableView:focus {{
+    border: 2px solid {colours.focus};
+}}
+
+QHeaderView::section {{
+    background-color: {colours.surface};
+    color: {colours.text_muted};
+    border: none;
+    border-bottom: 1px solid {colours.border_strong};
+    padding: {s.small}px;
+    font-size: {TYPE.caption.size}pt;
+    font-weight: 600;
 }}
 
 /* --- labels ----------------------------------------------------------- */

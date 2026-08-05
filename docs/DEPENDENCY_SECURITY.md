@@ -47,9 +47,10 @@ Direct runtime pins:
    Its root component must declare `Apache-2.0`.
 4. Download release wheels with hashes, then install the build environment with
    `--no-index` from that wheelhouse.
-5. Build the frozen executables from the offline environment.
-6. Run import and extraction with `STARCOMPANION_ENFORCE_OFFLINE=1`, which denies
-   Python IPv4/IPv6 socket creation and DNS lookup in the parent and helper.
+5. Build the Windows and Ubuntu frozen executables from offline environments.
+6. Launch the packaged GUI and run import/extraction plus the complete guarded
+   workflow with `STARCOMPANION_ENFORCE_OFFLINE=1`, which denies Python
+   IPv4/IPv6 socket creation and DNS lookup in the parent and helper.
 7. Reject new network-capable Python or Qt imports unless the network-surface
    policy and external-resource inventory are deliberately revised.
 8. Build the Python wheel and require `License-Expression: Apache-2.0` plus
@@ -62,9 +63,10 @@ Direct runtime pins:
     hashes plus `authenticode-report.json` into the manifest. See
     `RELEASE_SIGNING.md`.
 
-Local release validation installed the complete build lock from the downloaded
-wheelhouse with `--no-index`, built both one-file executables from that isolated
-environment, and completed the frozen import/extraction plus prepared-channel
+Release validation installs the complete build lock from downloaded,
+hash-verified wheelhouses with `--no-index`, builds both one-file executables on
+Windows and Ubuntu from those isolated environments, launches the frozen GUI,
+and completes the frozen import/extraction plus prepared-channel
 preview/apply/rollback workflow with the offline guard enabled.
 
 The offline guard covers StarCompanion's Python runtime. It does not claim to

@@ -112,6 +112,9 @@ def test_role_styles_exist_for_the_important_actions():
     css = theme.stylesheet(theme.DARK)
     assert 'QPushButton[role="primary"]' in css
     assert 'QPushButton[role="danger"]' in css
+    assert 'QPushButton[role="nav"]' in css
+    assert 'QLabel[role="badge"]' in css
+    assert "QFrame#AppSidebar" in css
 
 
 def test_applying_the_same_global_theme_is_idempotent():
@@ -169,6 +172,60 @@ def test_scales_are_ordered():
     s = theme.SPACING
     assert s.tiny < s.small < s.medium < s.large < s.xlarge < s.huge
     assert theme.RADIUS.none < theme.RADIUS.small < theme.RADIUS.medium
+
+
+def _relative_luminance(value: str) -> float:
+    channels = [int(value[index : index + 2], 16) / 255 for index in (1, 3, 5)]
+    linear = [
+        channel / 12.92
+        if channel <= 0.04045
+        else ((channel + 0.055) / 1.055) ** 2.4
+        for channel in channels
+    ]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def _contrast(first: str, second: str) -> float:
+    brighter, darker = sorted(
+        (_relative_luminance(first), _relative_luminance(second)), reverse=True
+    )
+    return (brighter + 0.05) / (darker + 0.05)
+
+
+@pytest.mark.parametrize("colours", [theme.DARK, theme.LIGHT])
+def test_semantic_text_colours_meet_wcag_aa_contrast(colours):
+    pairs = [
+        (colours.text, colours.canvas),
+        (colours.text, colours.surface),
+        (colours.text_muted, colours.canvas),
+        (colours.text_muted, colours.surface),
+        (colours.text_muted, colours.surface_raised),
+        (colours.text, colours.accent_muted),
+        (colours.text_inverted, colours.accent),
+        (colours.text_inverted, colours.danger),
+        (colours.success, colours.surface),
+        (colours.warning, colours.surface),
+        (colours.danger, colours.surface),
+    ]
+    assert all(_contrast(foreground, background) >= 4.5 for foreground, background in pairs)
+
+
+@pytest.mark.parametrize("colours", [theme.DARK, theme.LIGHT])
+def test_focus_ring_meets_non_text_contrast(colours):
+    assert _contrast(colours.focus, colours.canvas) >= 3
+    assert _contrast(colours.focus, colours.surface) >= 3
+
+
+def test_focus_indicators_exist_for_every_interactive_control_family():
+    css = theme.stylesheet(theme.DARK)
+    for selector in (
+        "QPushButton:focus",
+        "QLineEdit:focus",
+        "QComboBox:focus",
+        "QCheckBox::indicator:focus",
+        "QListWidget:focus",
+    ):
+        assert selector in css
 
 
 def test_fonts_fall_back_when_nothing_is_bundled():

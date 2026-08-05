@@ -1,6 +1,6 @@
 [project]
 name = "starcompanion"
-version = "0.1.0"
+version = "0.2.0"
 description = "Datamine Star Citizen contract data and build a customizable global.ini localization override"
 requires-python = ">=3.12"
 license = "Apache-2.0"

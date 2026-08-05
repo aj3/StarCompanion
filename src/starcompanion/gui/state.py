@@ -14,12 +14,14 @@ from PySide6.QtCore import QObject, Signal
 from ..config import Profile, load_builtin
 from ..model import ContractSet
 from ..render import RenderResult
+from ..source_graph import SourceGraph, SourceKind, SourceLayer, report as source_report
 
 
 class AppState(QObject):
     contractsChanged = Signal()
     profileChanged = Signal()
     pathsChanged = Signal()
+    userOverridesChanged = Signal()
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
@@ -29,6 +31,9 @@ class AppState(QObject):
         self.stock: Path | None = None
         self.backup_dir: Path | None = None
         self._rendered: RenderResult | None = None
+        self.user_override_scope: tuple[str, str] | None = None
+        self.user_overrides: dict[str, str] = {}
+        self.user_overrides_ready = True
 
     # --- contracts -----------------------------------------------------------
 
@@ -91,6 +96,54 @@ class AppState(QObject):
         if self._rendered is None:
             self._rendered = self.profile.build_renderer().render_all(self.contracts)
         return self._rendered
+
+    def begin_user_override_scope(self, scope: tuple[str, str] | None) -> None:
+        """Clear the previous channel before a background user.ini load."""
+        self.user_override_scope = scope
+        self.user_overrides = {}
+        self.user_overrides_ready = scope is None
+        self.userOverridesChanged.emit()
+
+    def set_user_overrides(
+        self,
+        scope: tuple[str, str],
+        values: dict[str, str],
+    ) -> bool:
+        """Publish a completed background load only if its scope is current."""
+        if scope != self.user_override_scope:
+            return False
+        self.user_overrides = dict(values)
+        self.user_overrides_ready = True
+        self.userOverridesChanged.emit()
+        return True
+
+    def source_merge(self):
+        rendered = self.render()
+        generated_provenance = {
+            key: tuple(
+                f"{item.provider}:{item.record_id}:{item.field_path}"
+                for item in rendered.provenance.get(key, ())
+            )
+            for key in rendered.values
+        }
+        layers = [
+            SourceLayer(
+                f"profile:{self.profile.name}",
+                SourceKind.GENERATED,
+                rendered.values,
+                provenance=generated_provenance,
+            )
+        ]
+        if self.user_overrides:
+            layers.append(SourceLayer("user.ini", SourceKind.USER, self.user_overrides))
+        return SourceGraph(layers).resolve()
+
+    def effective_values(self) -> dict[str, str]:
+        """The C3 generated→user winner map used by preview and apply."""
+        return self.source_merge().values
+
+    def source_report(self) -> dict[str, object]:
+        return source_report(self.source_merge())
 
     def backups(self) -> list[Path]:
         directory = self.backup_dir or (self.target.parent / "backups" if self.target else None)

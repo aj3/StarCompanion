@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
+from . import __version__
 from .install import GameInstall
 from .extract.p4k import P4KError
 from .portability import LanguagePackStore, PreferencesStore
@@ -137,7 +138,7 @@ def build_diagnostics(
     return {
         "schema": DIAGNOSTICS_SCHEMA,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "application": {"name": "StarCompanion", "version": "0.1.0"},
+        "application": {"name": "StarCompanion", "version": __version__},
         "runtime": {
             "python": platform.python_version(),
             "system": platform.system(),

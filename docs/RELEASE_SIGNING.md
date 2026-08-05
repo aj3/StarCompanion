@@ -4,8 +4,9 @@ StarCompanion's ordinary push and pull-request builds remain unsigned and do
 not receive signing credentials. Authenticode is available only through a
 manual `CI` workflow dispatch with `sign_release` enabled. That job is bound to
 the protected `release-signing` GitHub environment and runs only after the full
-Windows/Ubuntu test matrix, Ubuntu supply-chain audit, Windows offline build,
-and unsigned packaged smoke succeed.
+Windows/Ubuntu test matrix, Ubuntu supply-chain audit, and Windows unsigned
+offline build and packaged smoke succeed. Ubuntu is built and offline-smoked in
+a separate required job and is not Authenticode-signable.
 
 ## One-time GitHub configuration
 

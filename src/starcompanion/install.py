@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import string
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -121,7 +122,11 @@ class GameInstall:
         return self.label
 
 
-def find_installs(roots: list[Path] | None = None) -> list[GameInstall]:
+def find_installs(
+    roots: list[Path] | None = None,
+    *,
+    checkpoint: Callable[[], None] | None = None,
+) -> list[GameInstall]:
     """Every install found, LIVE first. Empty list if none.
 
     `roots` **replaces** the automatic drive scan rather than adding to it, so
@@ -131,10 +136,14 @@ def find_installs(roots: list[Path] | None = None) -> list[GameInstall]:
     found: dict[Path, GameInstall] = {}
 
     for base in _candidate_bases(roots):
+        if checkpoint is not None:
+            checkpoint()
         direct = identify(base)
         if direct is not None and direct.root.resolve() == Path(base).resolve():
             found[direct.root.resolve()] = direct
         for channel in CHANNELS:
+            if checkpoint is not None:
+                checkpoint()
             root = base / channel
             if not (root / ARCHIVE_NAME).is_file():
                 continue

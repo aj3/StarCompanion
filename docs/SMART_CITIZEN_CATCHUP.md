@@ -716,7 +716,42 @@ Acceptance:
 The GUI phase begins only after C5. Backend contracts may expose progress and
 provenance earlier, but new presentation work must not bypass the core models.
 
-### Sprint G0 — Design system and information architecture
+### Sprint C6 (G0) — Design system and information architecture
+
+**Status: complete.** The peer-tab layout is now a
+persistent Workspace/Advanced navigation rail with stable page identities,
+read-only profile/game/data context, bounded form viewports, full-height editor
+pages, surfaced profile/theme actions, and an always-visible offline/no-
+telemetry/confirm-before-write trust strip. The verified feature page objects
+and `AppState` connections remain intact. The Overview now presents readiness,
+local-provider health, empty/error states, quick presentation, and guarded
+update/undo actions through reusable semantic components. Theme and last-page
+state live in versioned portable UI preferences rather than render profiles;
+high-DPI screenshot geometry is gated at 100%, 150%, and 200%. See
+`C6_GUI_ARCHITECTURE.md` for the audit, visual-system contract, and shell
+boundary.
+
+Contract Content, Presentation, and Data & provenance now share semantic
+sections, toggle rows, metrics, truthful empty/error states, and cached
+provider-health cards. The provenance view reports provider/build identity,
+coverage, evidence, unmatched facts, and diagnostics without reinterpreting
+core status. Sidebar shortcuts and arrow navigation, deterministic page tab
+order, real Qt accessibility-interface names/descriptions, visible focus
+states, dual-theme WCAG contrast gates, responsive minimum-size review, and
+cross-page structural screenshot baselines complete the C6 accessibility pass.
+
+Custom Wording now uses scoped summary metrics, reusable sections, semantic
+valid/invalid states, and a responsive editor/preview without changing profile
+template behavior. Manual Apply prepares a fingerprint-bound, serializable C3
+operation plan; exposes add/change/remove/unchanged/skipped outcomes and
+per-key generated-source winners; exports the exact plan; and invalidates it
+whenever inputs change. Confirmed apply passes the reviewed identity into the
+existing atomic writer and transaction journal. Guided recovery distinguishes
+known interrupted states from unknown external states, blocks unsafe actions,
+creates a recovery backup before rollback, and verifies both selected backup
+and final target fingerprints. Both workflow pages stack within a vertical
+viewport at the minimum window width and join the 100%, 150%, and 200%
+screenshot matrix.
 
 - Separate UI preferences from output profiles.
 - Convert the theme work into documented tokens for color, typography, spacing,
@@ -732,6 +767,29 @@ provenance earlier, but new presentation work must not bypass the core models.
 
 ### Sprint G1 — Advanced string editor and preview
 
+**Status: complete for the requested editor workflow.** The Advanced workspace
+now projects the existing C3 stock → generated → user source graph and
+`InjectionPlan` into a `QAbstractTableModel`/`QSortFilterProxyModel` table. It
+creates no widget per cell, caches searchable record text, and exposes exact
+stock, rendered, merged, winning-source, provider-evidence, validation, and
+add/change/remove/unchanged outcomes. A 50,000-row synthetic regression gates
+first build and exact search performance.
+
+Search is debounced and combines with state, source, category, and provider
+filters. Editing occurs only in the complete-value inspector so table delegate
+commits cannot bypass validation debounce. The in-memory C3 command document
+supports bounded undo/redo and one-command multi-select reset. Saving emits one
+aggregate, channel/language-scoped command; load and save run through cancellable
+Qt workers, reject external `user.ini` changes, and are joined during window
+shutdown. Overview and Manual Apply consume the same loaded user layer and
+block while it is unavailable, preventing a fast click from dropping saved
+overrides.
+
+The inspector uses value/provenance tabs so complete text remains usable at the
+standard 1280×800 shell. The page joins the 100%, 150%, and 200% structural
+screenshot matrix and publishes deterministic focus order plus accessible
+names/descriptions.
+
 - Use a model/view table capable of thousands of rows without widget-per-cell
   rendering.
 - Add fast search and filters for modified, conflict, missing, provider, source,
@@ -743,6 +801,30 @@ provenance earlier, but new presentation work must not bypass the core models.
   thread.
 
 ### Sprint G2 — Operations, onboarding, and polish
+
+**Status: complete.** Overview now discovers installed channels in a background
+worker, presents an explicit channel selector, and republishes the selected
+target through the existing channel/language state boundary. The C4 blueprint
+tracker builds its stable catalog from the loaded `ContractSet`, performs all
+search/ownership/category/reward-source joins through `query_blueprints`, and
+loads, incrementally scans, saves, or recovers ownership only in cancellable Qt
+workers. Scan results are previewed before the revision-checked store is
+changed; unresolved names remain evidence rather than guessed ownership.
+
+Backup & recovery is now a default Tools destination using the existing C3/C5
+fingerprint, backup, journal, atomic restore, and final-hash verification path.
+Settings & help exposes built-in/external profiles, C5 manifest-verified
+settings export/import and interrupted-restore recovery, inspect-before-export
+redacted diagnostics, and in-memory searchable bundled guidance. Preferences,
+user wording, ownership, caches, backups, profiles, and diagnostics retain
+their separate lifecycles.
+
+All new filesystem/archive work runs through owned `QtOperationJob` workers;
+ownership is loaded lazily when its page is opened so unrelated target changes
+do not create background churn. Completed jobs are explicitly deleted after
+their threads stop, and window close joins every active G0–G2 worker. The
+Blueprints and Settings & help pages join the 100%, 150%, and 200% structural
+screenshot matrix and the screen-reader/control audit.
 
 - Guided first run and install/channel discovery.
 - Cancellable extraction/apply progress with honest stages and recovery advice.
