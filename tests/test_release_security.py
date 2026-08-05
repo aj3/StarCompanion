@@ -91,11 +91,26 @@ def test_project_declares_apache_license_and_notice() -> None:
         "LICENSE",
         "NOTICE",
         "THIRD_PARTY_NOTICES.md",
+        "licenses/GPL-3.0-only.txt",
+        "licenses/LGPL-3.0-only.txt",
     ]
     assert "Apache License" in (root / "LICENSE").read_text(encoding="utf-8")
     assert "StarCompanion contributors" in (root / "NOTICE").read_text(
         encoding="utf-8"
     )
+
+
+def test_qt_runtime_uses_reviewed_lgpl_license_text() -> None:
+    from runtime_licenses import RUNTIME_LICENSES
+
+    for name in ("pyside6", "pyside6-addons", "pyside6-essentials", "shiboken6"):
+        assert RUNTIME_LICENSES[name] == "LGPL-3.0-only"
+    assert "GNU LESSER GENERAL PUBLIC LICENSE" in (
+        ROOT / "licenses" / "LGPL-3.0-only.txt"
+    ).read_text(encoding="utf-8")
+    assert "GNU GENERAL PUBLIC LICENSE" in (
+        ROOT / "licenses" / "GPL-3.0-only.txt"
+    ).read_text(encoding="utf-8")
 
 
 def test_package_and_project_versions_stay_in_sync() -> None:

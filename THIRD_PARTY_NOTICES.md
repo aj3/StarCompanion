@@ -14,15 +14,16 @@ transitive dependencies. Exact versions and hashes are recorded in
 | MarkupSafe | BSD-3-Clause |
 | pycparser | BSD-3-Clause |
 | pydantic and pydantic-core | MIT |
-| PySide6, PySide6 Addons, PySide6 Essentials, and shiboken6 | LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only |
+| PySide6, PySide6 Addons, PySide6 Essentials, and shiboken6 | LGPL-3.0-only |
 | typing-extensions | PSF-2.0 |
 | typing-inspection | MIT |
 | tzdata | Apache-2.0 |
 | zstandard | BSD-3-Clause |
 | CPython | PSF-2.0 |
 
-StarCompanion uses the LGPL-3.0 option for the Qt for Python components. Their
-corresponding source and license information are available from the
+StarCompanion uses LGPL-3.0-only for the Qt for Python components. The release
+license bundle includes LGPL-3.0 and the incorporated GPL-3.0 terms. Corresponding
+source and license information are available from the
 [Qt for Python project](https://code.qt.io/cgit/pyside/pyside-setup.git/) and
 [Qt licensing documentation](https://www.qt.io/licensing/open-source-lgpl-obligations).
 StarCompanion does not modify those components.

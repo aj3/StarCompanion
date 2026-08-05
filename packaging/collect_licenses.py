@@ -12,6 +12,17 @@ from runtime_licenses import RUNTIME_LICENSES
 
 
 MAX_LICENSE_BYTES = 2 * 1024 * 1024
+ROOT = Path(__file__).parents[1]
+QT_COMPONENTS = {
+    "pyside6",
+    "pyside6-addons",
+    "pyside6-essentials",
+    "shiboken6",
+}
+QT_LICENSES = (
+    ROOT / "licenses" / "LGPL-3.0-only.txt",
+    ROOT / "licenses" / "GPL-3.0-only.txt",
+)
 
 
 def _license_files(name: str) -> list[tuple[str, str]]:
@@ -69,9 +80,34 @@ def collect(sbom_path: Path, output: Path) -> dict[str, object]:
                 "=" * 78,
             ]
         )
+        if name in QT_COMPONENTS:
+            sections.extend(
+                ["Qt for Python family license text is consolidated below.", ""]
+            )
+            continue
         for relative, text in _license_files(name):
             sections.extend([f"--- {relative} ---", text.rstrip(), ""])
             records += 1
+
+    sections.extend(
+        [
+            "=" * 78,
+            "Qt for Python family",
+            "SPDX: LGPL-3.0-only",
+            "=" * 78,
+        ]
+    )
+    for path in QT_LICENSES:
+        if not path.is_file() or path.stat().st_size > MAX_LICENSE_BYTES:
+            raise ValueError(f"reviewed Qt license file is absent or invalid: {path.name}")
+        sections.extend(
+            [
+                f"--- licenses/{path.name} ---",
+                path.read_text(encoding="utf-8").rstrip(),
+                "",
+            ]
+        )
+        records += 1
 
     python_name, python_text = _python_license()
     sections.extend(

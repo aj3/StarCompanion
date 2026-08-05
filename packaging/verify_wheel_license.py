@@ -18,7 +18,13 @@ def verify(wheel: Path, root: Path) -> dict[str, object]:
         metadata = BytesParser().parsebytes(archive.read(metadata_names[0]))
         if metadata.get("License-Expression") != "Apache-2.0":
             raise ValueError("wheel License-Expression must be Apache-2.0")
-        required = {"LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"}
+        required = {
+            "LICENSE",
+            "NOTICE",
+            "THIRD_PARTY_NOTICES.md",
+            "licenses/GPL-3.0-only.txt",
+            "licenses/LGPL-3.0-only.txt",
+        }
         if set(metadata.get_all("License-File", ())) != required:
             raise ValueError("wheel must declare all project and third-party notices")
 

@@ -1678,7 +1678,9 @@
       ],
       "licenses": [
         {
-          "expression": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+          "license": {
+            "id": "LGPL-3.0-only"
+          }
         }
       ],
       "name": "pyside6",
@@ -1720,7 +1722,9 @@
       ],
       "licenses": [
         {
-          "expression": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+          "license": {
+            "id": "LGPL-3.0-only"
+          }
         }
       ],
       "name": "pyside6-addons",
@@ -1762,7 +1766,9 @@
       ],
       "licenses": [
         {
-          "expression": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+          "license": {
+            "id": "LGPL-3.0-only"
+          }
         }
       ],
       "name": "pyside6-essentials",
@@ -1804,7 +1810,9 @@
       ],
       "licenses": [
         {
-          "expression": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+          "license": {
+            "id": "LGPL-3.0-only"
+          }
         }
       ],
       "name": "shiboken6",
