@@ -131,7 +131,8 @@ captures an actual PNG, and verifies:
 - device-pixel ratio;
 - major shell, dashboard, and card geometry against a versioned JSON baseline;
 - exact Windows rectangle geometry plus reviewed, bounded Ubuntu horizontal
-  and vertical font-metric variance;
+  and vertical font-metric variance, with strict per-rectangle overrides where
+  a substituted font deterministically changes page flow;
 - process-isolated core, shared-Qt, and screenshot CI domains so Qt platform
   teardown is deterministic on both Windows and Ubuntu;
 - the presence of semantic canvas, surface, and accent colors; and

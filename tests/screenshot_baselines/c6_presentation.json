@@ -13,6 +13,9 @@
     "title_section": [253, 522, 1000, 339],
     "length_section": [253, 877, 1000, 159]
   },
+  "linux_rects": {
+    "length_section": [253, 787, 1000, 153]
+  },
   "minimum_colour_samples": {
     "#0b0f14": 500,
     "#121820": 500,

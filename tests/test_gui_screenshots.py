@@ -34,6 +34,15 @@ def _assert_platform_rect(actual, expected, tolerance: int) -> None:
     assert actual[3] == pytest.approx(expected[3], abs=vertical_tolerance)
 
 
+def _assert_baseline_rect(actual, expected, baseline, name: str) -> None:
+    """Use strict reviewed platform overrides before general font tolerances."""
+    linux_expected = baseline.get("linux_rects", {}).get(name)
+    if sys.platform.startswith("linux") and linux_expected is not None:
+        assert actual == pytest.approx(linux_expected, abs=baseline["tolerance"])
+        return
+    _assert_platform_rect(actual, expected, baseline["tolerance"])
+
+
 def test_linux_font_tolerance_remains_bounded_on_both_axes(monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
 
@@ -42,6 +51,18 @@ def test_linux_font_tolerance_remains_bounded_on_both_axes(monkeypatch):
         _assert_platform_rect([125, 140, 500, 160], [100, 100, 500, 120], 4)
     with pytest.raises(AssertionError):
         _assert_platform_rect([100, 165, 500, 160], [100, 100, 500, 120], 4)
+
+
+def test_linux_rect_override_uses_strict_baseline_tolerance(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    baseline = {
+        "tolerance": 4,
+        "linux_rects": {"section": [100, 50, 500, 120]},
+    }
+
+    _assert_baseline_rect([100, 54, 500, 120], [100, 100, 500, 120], baseline, "section")
+    with pytest.raises(AssertionError):
+        _assert_baseline_rect([100, 55, 500, 120], [100, 100, 500, 120], baseline, "section")
 
 
 @pytest.mark.parametrize("scale", [1.0, 1.5, 2.0])
@@ -76,7 +97,7 @@ def test_overview_screenshot_matches_high_dpi_baseline(scale, tmp_path):
     assert metrics["physical_size"] == [round(1280 * scale), round(800 * scale)]
     assert metrics["device_pixel_ratio"] == pytest.approx(scale)
     for name, expected in baseline["rects"].items():
-        _assert_platform_rect(metrics["rects"][name], expected, baseline["tolerance"])
+        _assert_baseline_rect(metrics["rects"][name], expected, baseline, name)
     for colour, minimum in baseline["minimum_colour_samples"].items():
         assert metrics["colours"][colour] >= minimum
 
@@ -128,7 +149,7 @@ def test_modern_page_screenshot_matches_structural_baseline(page, scale, tmp_pat
     assert metrics["physical_size"] == [round(1280 * scale), round(800 * scale)]
     assert metrics["device_pixel_ratio"] == pytest.approx(scale)
     for name, expected in baseline["rects"].items():
-        _assert_platform_rect(metrics["rects"][name], expected, baseline["tolerance"])
+        _assert_baseline_rect(metrics["rects"][name], expected, baseline, name)
     for colour, minimum in baseline["minimum_colour_samples"].items():
         assert metrics["colours"][colour] >= minimum
 
