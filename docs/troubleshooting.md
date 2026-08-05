@@ -53,8 +53,10 @@ pointing at `<install>/Data.p4k`.
 
 ## "profile schema_version N is not supported"
 
-The profile was written by a different build. If it is newer, update
-StarCompanion; if older, re-save it from a current profile.
+The profile was written by a different build. Version 1 profiles migrate
+automatically to the current structured-wording schema. For a newer version,
+update StarCompanion; unsupported pre-v1 files must be recreated from a current
+profile.
 
 ## Changes applied but nothing looks different in game
 
@@ -65,9 +67,12 @@ StarCompanion; if older, re-save it from a current profile.
 
 ## A template shows "Template error" in the preview
 
-Normal while typing. The preview reports the problem and recovers as soon as the
-template is valid again; nothing is written from a broken template. "Use
-built-in" reverts that mission giver.
+Templates are inactive unless **Enable advanced custom templates** is selected.
+After enabling it, an error is normal while typing: the preview reports the
+problem and recovers as soon as the template is valid again. Nothing is written
+from a broken template. Disabling advanced mode preserves the source but returns
+rendering to validated structured wording; restoring generated wording removes
+the selected override.
 
 ## Rendering skipped some entries
 

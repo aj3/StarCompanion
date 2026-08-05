@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "minimal",
   "description": "Rep and blueprint flag in titles only; descriptions left as CIG wrote them.",
   "fields": {
@@ -20,6 +20,13 @@
       "bracket_bp": true,
       "prefix": "none"
     }
+  },
+  "wording": {
+    "mode": "structured",
+    "section_order": ["reputation", "scrip", "items", "scenario", "blueprints"],
+    "labels": {},
+    "reputation_separator": " / ",
+    "thousands_separator": true
   },
   "templates": {},
   "injection": {

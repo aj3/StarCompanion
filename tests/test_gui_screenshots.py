@@ -107,6 +107,7 @@ def test_overview_screenshot_matches_high_dpi_baseline(scale, tmp_path):
     [
         "content",
         "presentation",
+        "presentation-wording",
         "blueprints",
         "provenance",
         "templates",

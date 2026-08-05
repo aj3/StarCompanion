@@ -9,6 +9,7 @@ in-game.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -28,6 +29,24 @@ TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
 
 _REAL_NEWLINE = re.compile(r"[ \t]*\r?\n")
 
+
+def validate_wording_label(value: str) -> str:
+    """Validate a plain-text label before it reaches a game string."""
+    if value != value.strip() or not value or len(value) > 48:
+        raise ValueError("wording labels must be 1-48 trimmed characters")
+    if value.endswith(":"):
+        raise ValueError(
+            "wording labels omit the trailing colon added by the renderer"
+        )
+    if any(character in value for character in "<>\\\r\n\0") or any(
+        unicodedata.category(character) in {"Cc", "Cf", "Cs", "Zl", "Zp"}
+        for character in value
+    ):
+        raise ValueError(
+            "wording labels cannot contain tags, escapes, controls, "
+            "or direction overrides"
+        )
+    return value
 
 
 class TemplateRenderError(RuntimeError):
@@ -62,6 +81,37 @@ class Field:
     ALL = (REPUTATION, SCRIP, SCENARIO, POOLS, GATES, REGIONAL, TITLE, ITEMS)
 
 
+class Section:
+    """Validated reward-section identifiers used by structured profiles."""
+
+    REPUTATION = "reputation"
+    SCRIP = "scrip"
+    ITEMS = "items"
+    SCENARIO = "scenario"
+    BLUEPRINTS = "blueprints"
+
+    ALL = (REPUTATION, SCRIP, ITEMS, SCENARIO, BLUEPRINTS)
+
+
+@dataclass(frozen=True)
+class RenderLabels:
+    """Plain-text labels used by the built-in structured templates."""
+
+    reputation: str = "Reputation Awarded"
+    scrip: str = "MG Scrip"
+    items: str = "Item Rewards"
+    scenario: str = "Scenario Progress Points"
+    blueprints: str = "Potential Blueprints"
+    multiple_blueprints: str = "Multiple Blueprint Pools"
+    chance: str = "Award chance"
+    regional: str = "[Regional Variants] example locations"
+    owned: str = "Owned"
+
+    def __post_init__(self) -> None:
+        for value in self.__dict__.values():
+            validate_wording_label(value)
+
+
 @dataclass
 class RenderOptions:
     """What appears and how. Phase 3 builds these from a saved profile."""
@@ -86,6 +136,10 @@ class RenderOptions:
     title_prefix: str = TitlePrefix.NONE
     max_pool_items: int | None = None
     """Truncate long pools; None keeps everything."""
+    section_order: tuple[str, ...] = Section.ALL
+    labels: RenderLabels = field(default_factory=RenderLabels)
+    reputation_separator: str = " / "
+    thousands_separator: bool = True
 
     def __post_init__(self):
         for tag in (self.emphasis, *self.emphasis_by_field.values()):
@@ -100,9 +154,25 @@ class RenderOptions:
                 f"unknown emphasis field(s) {sorted(unknown)}; "
                 f"choose from {sorted(Field.ALL)}"
             )
+        if len(self.section_order) != len(Section.ALL) or set(
+            self.section_order
+        ) != set(Section.ALL):
+            raise ValueError(
+                "section_order must contain each structured reward section exactly once"
+            )
+        if self.reputation_separator not in {" / ", "/", " • "}:
+            raise ValueError("unsupported reputation separator")
 
     def emphasis_for(self, field_name: str | None) -> str:
         return self.emphasis_by_field.get(field_name or "", self.emphasis)
+
+    def format_number(self, value: int) -> str:
+        return f"{value:,}" if self.thousands_separator else str(value)
+
+    def format_reputation(self, values: list[int]) -> str:
+        return self.reputation_separator.join(
+            self.format_number(value) for value in values
+        )
 
 
 @dataclass

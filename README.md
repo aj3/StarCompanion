@@ -81,8 +81,10 @@ takes a backup, and there is an **Undo my last change** button beside it.
 It also warns if your `USER.cfg` is missing `g_language`, since without that
 setting the game ignores the override entirely and nothing appears to happen.
 
-*Presentation* changes how the added text looks. *Custom wording* and the
-virtualized *String editor* handle explicit advanced edits. *Blueprints* joins
+*Presentation* changes style, generated labels, information order, and number
+formatting through validated controls. *Custom wording* is an explicit advanced
+mode for sandboxed templates, while the virtualized *String editor* handles
+individual reviewed values. *Blueprints* joins
 the local C4 catalog to channel-scoped ownership and incrementally scans local
 game logs only after you request it.
 
@@ -257,7 +259,9 @@ protected manual release operation documented in
 | `minimal` | Rep and a blueprint flag in titles only; CIG's prose untouched |
 | `rank-first` | Giver and rank lead every title; rep emphasised above gate notes |
 
-Profiles are versioned JSON — save, share, and reload them.
+Profiles are versioned JSON — save, share, and reload them. Version 1 profiles
+migrate safely to version 2: ordinary profiles use structured wording, while a
+profile containing custom templates retains them in explicit advanced mode.
 
 ## Installing the result
 
@@ -288,7 +292,8 @@ Data.p4k ──► p4k reader ──► stock global.ini ──► contract disc
                                                                       ├─► domain model
 optional: contracts.ini / SCMDB export ──► reward values ─────────────┘        │
                                                                                ▼
-                        profile ──► Jinja templates ──► renderer
+              profile ──► structured wording rules ──► renderer
+                        ╰─► sandboxed templates (advanced opt-in)
                                                                                │
  stock → language overlay → imports → generated → user.ini ──► validator
                                                                 │
@@ -303,9 +308,10 @@ joins reputation, blueprint pools, and direct item rewards. The first read and
 DataForge pass takes about a minute on the tested LIVE build, then it is cached
 per game build so a patch re-reads automatically.
 
-Every rendered value passes the validator before it can be written; anything
-that would break in game is skipped rather than emitted, even if your own
-template produced it.
+Every label and section order is validated before rendering, and every rendered
+value passes the output validator before it can be written. Anything that would
+break in game is skipped rather than emitted, even if an advanced template
+produced it.
 
 ## Community reward data (switched off)
 

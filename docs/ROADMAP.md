@@ -37,6 +37,12 @@ that phase's **Resume prompt**.
 | | 9b. Mission XML layer | ✅ Done — reader shipped, premise disproved |
 | 4 · Ship | 10. Packaging & release | ✅ Done — 292 tests |
 
+The catch-up program has completed C0–C6 and G1–G2. Post-parity **Sprint G3 —
+Structured Presentation Rules** is also complete: typed profile wording,
+automatic v1→v2 migration, safe labels/order/numeric formatting, explicit
+advanced-template opt-in, and high-DPI GUI regression coverage. See
+[G3_STRUCTURED_PRESENTATION.md](G3_STRUCTURED_PRESENTATION.md).
+
 ---
 
 # Sprint 0 · Foundation ✅

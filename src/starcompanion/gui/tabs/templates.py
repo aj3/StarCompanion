@@ -70,6 +70,15 @@ class TemplatesTab(QWidget):
             "Advanced per-mission-giver template editor with a read-only live preview."
         )
 
+        self.enable_advanced = QCheckBox("Enable advanced custom templates")
+        self.enable_advanced.setAccessibleName("Enable advanced custom templates")
+        self.enable_advanced.setAccessibleDescription(
+            "Explicitly allow sandboxed Jinja templates stored in this output profile."
+        )
+        self.enable_advanced.toggled.connect(self._set_advanced_mode)
+
+        self.advanced_notice = NoticeBanner(tone=Tone.INFO)
+
         self.org = QComboBox()
         self.org.setAccessibleName("Mission giver")
         self.org.setAccessibleDescription("Select which mission giver template to edit.")
@@ -162,6 +171,8 @@ class TemplatesTab(QWidget):
             "Custom wording is scoped to one mission giver and title or description. "
             "Other contracts continue using the profile's generated wording.",
         )
+        self.context_section.add_widget(self.enable_advanced)
+        self.context_section.add_widget(self.advanced_notice)
         self.context_section.add_layout(chooser)
         self.context_section.add_widget(self.show_help)
         self.context_section.add_widget(self.explainer)
@@ -173,6 +184,7 @@ class TemplatesTab(QWidget):
         layout.addWidget(self.splitter, 1)
 
         focus_order = [
+            self.enable_advanced,
             self.show_help,
             self.org,
             self.kind,
@@ -227,6 +239,31 @@ class TemplatesTab(QWidget):
 
     # --- editing -------------------------------------------------------------
 
+    def _set_advanced_mode(self, enabled: bool) -> None:
+        if self._loading:
+            return
+        self.state.profile.wording.mode = "advanced" if enabled else "structured"
+        self.state.touch_profile()
+
+    def _apply_mode(self) -> bool:
+        advanced = self.state.profile.wording.mode == "advanced"
+        self.enable_advanced.blockSignals(True)
+        self.enable_advanced.setChecked(advanced)
+        self.enable_advanced.blockSignals(False)
+        self.editor.setEnabled(advanced)
+        self.reset_button.setEnabled(advanced)
+        if advanced:
+            self.advanced_notice.set_tone(Tone.WARNING)
+            self.advanced_notice.setText(
+                "Advanced mode is active. Templates are sandboxed and validated, but can override structured wording."
+            )
+        else:
+            self.advanced_notice.set_tone(Tone.INFO)
+            self.advanced_notice.setText(
+                "Structured mode is active. Stored templates remain inactive until you explicitly enable them."
+            )
+        return advanced
+
     def _reload_editor(self) -> None:
         if self._loading:
             return
@@ -274,6 +311,7 @@ class TemplatesTab(QWidget):
     # --- preview -------------------------------------------------------------
 
     def update_preview(self) -> None:
+        advanced = self._apply_mode()
         custom_count = sum(
             int(entry.title is not None) + int(entry.desc is not None)
             for entry in self.state.profile.templates.values()
@@ -289,7 +327,11 @@ class TemplatesTab(QWidget):
             else None
         )
         self.selection_metric.set_value(
-            "Custom" if selected_source else "Generated",
+            "Custom"
+            if selected_source and advanced
+            else "Stored (inactive)"
+            if selected_source
+            else "Generated",
             self.kind.currentText().lower(),
         )
         contract = self.state.sample_contract(self.org_id)
@@ -323,5 +365,9 @@ class TemplatesTab(QWidget):
         self.preview.setPlainText(value)
         self.preview_metric.set_value(f"{len(value):,}", "characters")
         self.status.set_tone(Tone.SUCCESS)
-        source = "custom pattern" if selected_source else "generated profile wording"
+        source = (
+            "custom pattern"
+            if selected_source and advanced
+            else "generated profile wording"
+        )
         self.status.setText(f"Preview ready from {source}: {key}")

@@ -8,9 +8,8 @@
     "header": [244, 0, 1036, 98],
     "stack": [244, 98, 1036, 672],
     "status": [244, 770, 1036, 30],
-    "tabs": [277, 180, 970, 557],
-    "profile_summary": [304, 304, 916, 73],
-    "profile_builtin": [304, 389, 916, 30]
+    "wording_section": [253, 278, 1000, 492],
+    "length_section": [253, 786, 1000, 159]
   },
   "minimum_colour_samples": {
     "#0b0f14": 500,

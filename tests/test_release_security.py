@@ -140,7 +140,7 @@ def test_sbom_finalizer_records_and_verifier_requires_project_license(
     sbom.write_bytes((ROOT / "sbom" / "starcompanion-runtime.cdx.json").read_bytes())
 
     FINALIZE_SBOM(sbom, project)
-    assert VERIFY_SBOM(sbom, project)["component"] == "starcompanion==0.2.0"
+    assert VERIFY_SBOM(sbom, project)["component"] == "starcompanion==0.3.0"
 
     changed = json.loads(sbom.read_text(encoding="utf-8"))
     changed["metadata"]["component"].pop("licenses")
@@ -257,12 +257,12 @@ def test_windows_metadata_is_generated_from_project_version(tmp_path: Path) -> N
 
     version = writer(ROOT, tmp_path)
 
-    assert version == "0.2.0.0"
+    assert version == "0.3.0.0"
     gui = (tmp_path / "StarCompanion.exe.version-info.txt").read_text(
         encoding="utf-8"
     )
     assert "StringStruct('ProductName', 'StarCompanion')" in gui
-    assert "StringStruct('ProductVersion', '0.2.0.0')" in gui
+    assert "StringStruct('ProductVersion', '0.3.0.0')" in gui
     assert "StringStruct('OriginalFilename', 'StarCompanion.exe')" in gui
     assert "Copyright 2026 aj3 and StarCompanion contributors" in gui
 

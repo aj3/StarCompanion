@@ -1,5 +1,21 @@
 """Localization rendering interfaces."""
 
-from .renderer import RenderOptions, RenderResult, Renderer, TemplateRenderError
+from .renderer import (
+    RenderLabels,
+    RenderOptions,
+    RenderResult,
+    Renderer,
+    Section,
+    TemplateRenderError,
+    validate_wording_label,
+)
 
-__all__ = ["RenderOptions", "RenderResult", "Renderer", "TemplateRenderError"]
+__all__ = [
+    "RenderLabels",
+    "RenderOptions",
+    "RenderResult",
+    "Renderer",
+    "Section",
+    "TemplateRenderError",
+    "validate_wording_label",
+]

@@ -199,6 +199,57 @@ def test_max_pool_items_truncates():
     assert "- C" not in value
 
 
+def test_structured_labels_are_applied_without_template_source():
+    from starcompanion.render import RenderLabels
+
+    value = render(
+        make_contract(),
+        labels=RenderLabels(reputation="Standing earned"),
+    )
+    assert "Standing earned" in value
+    assert "Reputation Awarded" not in value
+
+
+def test_direct_render_labels_reject_control_and_markup_content():
+    from starcompanion.render import RenderLabels
+
+    with pytest.raises(ValueError, match="cannot contain"):
+        RenderLabels(reputation="bad<tag>")
+    with pytest.raises(ValueError, match="direction overrides"):
+        RenderLabels(reputation="safe\u202eevil")
+
+
+def test_structured_section_order_is_respected():
+    contract = make_contract(
+        reward=Reward(
+            reputation=[100],
+            item_rewards=["Aves Core"],
+            blueprint_pools=[BlueprintPool(items=["Atlas Frame"])],
+        )
+    )
+    value = render(
+        contract,
+        section_order=("blueprints", "items", "reputation", "scrip", "scenario"),
+    )
+    assert value.index("Potential Blueprints") < value.index("Item Rewards")
+    assert value.index("Item Rewards") < value.index("Reputation Awarded")
+
+
+def test_structured_number_formatting_is_applied():
+    contract = make_contract(reward=Reward(reputation=[12000, 24000]))
+    assert "12,000 • 24,000" in render(contract, reputation_separator=" • ")
+    assert "12000/24000" in render(
+        contract,
+        reputation_separator="/",
+        thousands_separator=False,
+    )
+
+
+def test_render_options_reject_incomplete_section_order():
+    with pytest.raises(ValueError, match="exactly once"):
+        RenderOptions(section_order=("reputation",))
+
+
 # --- titles ------------------------------------------------------------------
 
 

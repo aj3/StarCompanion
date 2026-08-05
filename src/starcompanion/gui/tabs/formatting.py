@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGridLayout,
     QLabel,
+    QLineEdit,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -28,9 +29,11 @@ from ..labels import (
     FIELD_NAMES,
     INHERIT,
     PREFIX_CAPTION,
+    REPUTATION_SEPARATORS,
     STYLE_CAPTION,
     TEXT_STYLES,
     TITLE_PREFIXES,
+    WORDING_ORDERS,
     can_preview,
     preview_html,
     preview_note,
@@ -70,6 +73,8 @@ class FormattingTab(QWidget):
         self.title_section = self._build_title_box()
         sections.addWidget(self.style_section)
         sections.addWidget(self.title_section)
+        self.wording_section = self._build_wording_box()
+        sections.addWidget(self.wording_section)
         self.length_box = self._build_length_box()
         sections.addWidget(self.length_box)
         layout.addLayout(sections)
@@ -82,6 +87,10 @@ class FormattingTab(QWidget):
             self.prefix,
             self.bracket_rep,
             self.bracket_bp,
+            self.wording_order,
+            self.reputation_separator,
+            self.thousands_separator,
+            *self.wording_labels.values(),
             self.max_items,
         ]
         for current, following in zip(focus_order, focus_order[1:]):
@@ -279,6 +288,132 @@ class FormattingTab(QWidget):
         setattr(self.state.profile.formatting.title, name, value)
         self.state.touch_profile()
 
+    # --- structured wording -------------------------------------------------
+
+    def _build_wording_box(self) -> SectionCard:
+        box = SectionCard(
+            "Generated wording",
+            "Use validated controls for labels, ordering, and reward-number formatting.",
+        )
+
+        self.wording_order = QComboBox()
+        self.wording_order.setAccessibleName("Generated reward section order")
+        self.wording_order.setAccessibleDescription(
+            "Reorders complete reward sections without hiding any enabled information."
+        )
+        for order, name, _hint in WORDING_ORDERS:
+            self.wording_order.addItem(name, order)
+        self.wording_order.currentIndexChanged.connect(self._set_wording_order)
+
+        self.wording_order_hint = _muted("")
+        order_form = QFormLayout()
+        order_form.addRow("Information order", self.wording_order)
+        box.add_layout(order_form)
+        box.add_widget(self.wording_order_hint)
+
+        self.reputation_separator = QComboBox()
+        self.reputation_separator.setAccessibleName("Reputation value separator")
+        self.reputation_separator.setAccessibleDescription(
+            "Choose the validated separator between difficulty-dependent reputation values."
+        )
+        for value, name in REPUTATION_SEPARATORS:
+            self.reputation_separator.addItem(name, value)
+        self.reputation_separator.currentIndexChanged.connect(
+            self._set_reputation_separator
+        )
+
+        self.thousands_separator = QCheckBox("Use thousands separators")
+        self.thousands_separator.setAccessibleName(
+            "Use thousands separators in generated numbers"
+        )
+        self.thousands_separator.setAccessibleDescription(
+            "Formats twelve thousand as 12,000 instead of 12000."
+        )
+        self.thousands_separator.toggled.connect(self._set_thousands_separator)
+
+        number_form = QFormLayout()
+        number_form.addRow("Reputation values", self.reputation_separator)
+        number_form.addRow("", self.thousands_separator)
+        box.add_layout(number_form)
+
+        label_names = {
+            "reputation": "Reputation",
+            "scrip": "MG Scrip",
+            "items": "Item rewards",
+            "scenario": "Scenario points",
+            "blueprints": "Blueprint pools",
+        }
+        self.wording_labels: dict[str, QLineEdit] = {}
+        label_form = QFormLayout()
+        for field, shown in label_names.items():
+            editor = QLineEdit()
+            editor.setMaxLength(48)
+            editor.setAccessibleName(f"{shown} generated label")
+            editor.setAccessibleDescription(
+                "Plain text only; tags, line breaks, escapes, and control characters are rejected."
+            )
+            editor.editingFinished.connect(
+                lambda label=field: self._set_wording_label(label)
+            )
+            self.wording_labels[field] = editor
+            label_form.addRow(shown, editor)
+        box.add_layout(label_form)
+
+        self.wording_status = NoticeBanner(
+            "Structured wording is validated before it reaches the renderer.",
+            tone=Tone.SUCCESS,
+        )
+        box.add_widget(self.wording_status)
+        return box
+
+    def _set_wording_order(self, index: int) -> None:
+        order = self.wording_order.itemData(index)
+        if not order:
+            return
+        hint = next(
+            (hint for value, _name, hint in WORDING_ORDERS if value == tuple(order)),
+            "Custom validated order loaded from this profile.",
+        )
+        self.wording_order_hint.setText(hint)
+        if self._loading:
+            return
+        self.state.profile.wording.section_order = tuple(order)
+        self.state.touch_profile()
+
+    def _set_reputation_separator(self, index: int) -> None:
+        value = self.reputation_separator.itemData(index)
+        if self._loading or value is None:
+            return
+        self.state.profile.wording.reputation_separator = value
+        self.state.touch_profile()
+
+    def _set_thousands_separator(self, checked: bool) -> None:
+        if self._loading:
+            return
+        self.state.profile.wording.thousands_separator = checked
+        self.state.touch_profile()
+
+    def _set_wording_label(self, field: str) -> None:
+        if self._loading:
+            return
+        editor = self.wording_labels[field]
+        try:
+            setattr(self.state.profile.wording.labels, field, editor.text())
+        except ValueError as exc:
+            self._loading = True
+            try:
+                editor.setText(getattr(self.state.profile.wording.labels, field))
+            finally:
+                self._loading = False
+            self.wording_status.set_tone(Tone.DANGER)
+            self.wording_status.setText(f"That label was not saved: {exc}")
+            return
+        self.wording_status.set_tone(Tone.SUCCESS)
+        self.wording_status.setText(
+            "Structured wording is valid and ready for preview."
+        )
+        self.state.touch_profile()
+
     # --- length --------------------------------------------------------------
 
     def _build_length_box(self) -> SectionCard:
@@ -344,6 +479,33 @@ class FormattingTab(QWidget):
 
             self.bracket_rep.setChecked(formatting.title.bracket_rep)
             self.bracket_bp.setChecked(formatting.title.bracket_bp)
+
+            wording = self.state.profile.wording
+            while self.wording_order.count() > len(WORDING_ORDERS):
+                self.wording_order.removeItem(self.wording_order.count() - 1)
+            order = tuple(wording.section_order)
+            order_index = self.wording_order.findData(order)
+            if order_index < 0:
+                self.wording_order.addItem("Custom profile order", order)
+                order_index = self.wording_order.count() - 1
+            self.wording_order.setCurrentIndex(order_index)
+            self.wording_order_hint.setText(
+                next(
+                    (
+                        hint
+                        for value, _name, hint in WORDING_ORDERS
+                        if value == order
+                    ),
+                    "Custom validated order loaded from this profile.",
+                )
+            )
+            separator_index = self.reputation_separator.findData(
+                wording.reputation_separator
+            )
+            self.reputation_separator.setCurrentIndex(max(0, separator_index))
+            self.thousands_separator.setChecked(wording.thousands_separator)
+            for field, editor in self.wording_labels.items():
+                editor.setText(getattr(wording.labels, field))
             self.max_items.setValue(formatting.max_pool_items or 0)
         finally:
             self._loading = False

@@ -12,19 +12,29 @@ import json
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from .inject import MergeMode
 from .model import ContractSet
 from .render.renderer import (
     Field as RenderField,
+    RenderLabels,
     RenderOptions,
     Renderer,
+    Section,
     TitlePrefix,
+    validate_wording_label,
 )
 from .validate import EMPHASIS_TAGS
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 PROFILE_DIR = Path(__file__).parent / "profiles"
 
@@ -96,6 +106,55 @@ class Formatting(Strict):
         return value
 
 
+class WordingLabels(Strict):
+    """Safe plain-text labels for generated contract facts."""
+
+    reputation: str = "Reputation Awarded"
+    scrip: str = "MG Scrip"
+    items: str = "Item Rewards"
+    scenario: str = "Scenario Progress Points"
+    blueprints: str = "Potential Blueprints"
+    multiple_blueprints: str = "Multiple Blueprint Pools"
+    chance: str = "Award chance"
+    regional: str = "[Regional Variants] example locations"
+    owned: str = "Owned"
+
+    @field_validator(
+        "reputation",
+        "scrip",
+        "items",
+        "scenario",
+        "blueprints",
+        "multiple_blueprints",
+        "chance",
+        "regional",
+        "owned",
+    )
+    @classmethod
+    def _safe_label(cls, value: str) -> str:
+        return validate_wording_label(value)
+
+
+SectionName = Literal["reputation", "scrip", "items", "scenario", "blueprints"]
+
+
+class StructuredWording(Strict):
+    """Typed wording controls; templates remain an explicit advanced mode."""
+
+    mode: Literal["structured", "advanced"] = "structured"
+    section_order: tuple[SectionName, ...] = Section.ALL
+    labels: WordingLabels = Field(default_factory=WordingLabels)
+    reputation_separator: Literal[" / ", "/", " • "] = " / "
+    thousands_separator: bool = True
+
+    @field_validator("section_order")
+    @classmethod
+    def _complete_section_order(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(value) != len(Section.ALL) or set(value) != set(Section.ALL):
+            raise ValueError("section order must contain every reward section exactly once")
+        return value
+
+
 class Appearance(Strict):
     """How the interface looks. Additive with a default, so profiles written
     before this existed still load."""
@@ -120,22 +179,47 @@ class Injection(Strict):
 
 
 class Profile(Strict):
-    schema_version: Literal[1] = SCHEMA_VERSION
+    schema_version: Literal[2] = SCHEMA_VERSION
     name: str = "default"
     description: str = ""
     fields: FieldToggles = Field(default_factory=FieldToggles)
     formatting: Formatting = Field(default_factory=Formatting)
+    wording: StructuredWording = Field(default_factory=StructuredWording)
     appearance: Appearance = Field(default_factory=Appearance)
     templates: dict[str, OrgTemplates] = Field(default_factory=dict)
     """Keyed by org id (casefolded), matching `Org.id`."""
     injection: Injection = Field(default_factory=Injection)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _preserve_direct_template_profiles(cls, value):
+        if isinstance(value, dict) and value.get("templates") and "wording" not in value:
+            value = dict(value)
+            value["wording"] = {"mode": "advanced"}
+        return value
+
     # --- persistence ---------------------------------------------------------
 
     @classmethod
     def loads(cls, text: str) -> Profile:
-        data = json.loads(text)
+        def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+            result: dict[str, object] = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError(f"duplicate profile key {key!r}")
+                result[key] = value
+            return result
+
+        data = json.loads(text, object_pairs_hook=unique_object)
+        if not isinstance(data, dict):
+            raise ValueError("profile JSON must contain one object")
         found = data.get("schema_version", SCHEMA_VERSION)
+        if found == 1:
+            data["schema_version"] = SCHEMA_VERSION
+            data["wording"] = {
+                "mode": "advanced" if data.get("templates") else "structured"
+            }
+            found = SCHEMA_VERSION
         if found != SCHEMA_VERSION:
             # Checked before model validation so the message names the real
             # problem instead of a confusing Literal mismatch.
@@ -171,10 +255,16 @@ class Profile(Strict):
             title_bracket_bp=self.formatting.title.bracket_bp,
             title_prefix=self.formatting.title.prefix,
             max_pool_items=self.formatting.max_pool_items,
+            section_order=tuple(self.wording.section_order),
+            labels=RenderLabels(**self.wording.labels.model_dump()),
+            reputation_separator=self.wording.reputation_separator,
+            thousands_separator=self.wording.thousands_separator,
         )
 
     def template_overrides(self) -> dict[str, str]:
         """Inline templates in the loader's naming scheme."""
+        if self.wording.mode != "advanced":
+            return {}
         overrides: dict[str, str] = {}
         for org_id, templates in self.templates.items():
             if templates.title:
@@ -220,9 +310,11 @@ __all__ = [
     "Injection",
     "OrgTemplates",
     "Profile",
+    "StructuredWording",
     "TitleFormatting",
     "UnsupportedProfileVersion",
     "ValidationError",
+    "WordingLabels",
     "builtin_profiles",
     "load_builtin",
 ]

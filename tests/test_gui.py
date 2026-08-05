@@ -530,6 +530,43 @@ def test_presentation_summary_tracks_existing_profile_controls(window):
     assert window.formatting.length_metric.value.text() == "9"
 
 
+def test_structured_wording_controls_update_profile_and_rendering(window):
+    label = window.formatting.wording_labels["reputation"]
+    label.setText("Standing earned")
+    label.editingFinished.emit()
+    separator = window.formatting.reputation_separator
+    separator.setCurrentIndex(separator.findData("/"))
+
+    assert window.state.profile.wording.labels.reputation == "Standing earned"
+    assert window.state.profile.wording.reputation_separator == "/"
+    assert "Standing earned" in window.state.render().values["Org_x_desc"]
+
+
+def test_invalid_structured_label_is_rejected_and_restored(window):
+    label = window.formatting.wording_labels["reputation"]
+    original = label.text()
+    label.setText("bad<tag>")
+    label.editingFinished.emit()
+
+    assert label.text() == original
+    assert window.formatting.wording_status.property("tone") == "danger"
+    assert window.state.profile.wording.labels.reputation == original
+
+
+def test_structured_wording_order_uses_complete_validated_presets(window):
+    combo = window.formatting.wording_order
+    combo.setCurrentIndex(combo.findText("Blueprints first"))
+
+    assert window.state.profile.wording.section_order[0] == "blueprints"
+    assert set(window.state.profile.wording.section_order) == {
+        "reputation",
+        "scrip",
+        "items",
+        "scenario",
+        "blueprints",
+    }
+
+
 # --- accessibility ----------------------------------------------------------
 
 
@@ -542,6 +579,10 @@ def test_target_page_controls_have_screen_reader_names_and_descriptions(window):
         window.formatting.prefix,
         window.formatting.bracket_rep,
         window.formatting.bracket_bp,
+        window.formatting.wording_order,
+        window.formatting.reputation_separator,
+        window.formatting.thousands_separator,
+        *window.formatting.wording_labels.values(),
         window.formatting.max_items,
         window.source.path_edit,
         window.source.browse_button,
@@ -549,6 +590,7 @@ def test_target_page_controls_have_screen_reader_names_and_descriptions(window):
         window.source.load_cache_button,
         window.source.save_cache_button,
         window.templates.show_help,
+        window.templates.enable_advanced,
         window.templates.org,
         window.templates.kind,
         window.templates.reset_button,
@@ -964,14 +1006,37 @@ def test_preview_shows_the_rendered_value(window):
     assert "Do a thing" in window.templates.preview.toPlainText()
 
 
+def _enable_advanced_templates(window):
+    window.templates.enable_advanced.setChecked(True)
+    assert window.state.profile.wording.mode == "advanced"
+
+
+def test_custom_templates_are_explicitly_disabled_by_default(window):
+    assert window.state.profile.wording.mode == "structured"
+    assert not window.templates.enable_advanced.isChecked()
+    assert not window.templates.editor.isEnabled()
+
+
 def test_editing_a_template_updates_the_preview_and_profile(window):
+    _enable_advanced_templates(window)
     window.templates.editor.setPlainText("CUSTOM {{ base }}")
 
     assert window.templates.preview.toPlainText().startswith("CUSTOM")
     assert window.state.profile.templates["org"].title == "CUSTOM {{ base }}"
 
 
+def test_disabling_advanced_templates_preserves_but_deactivates_them(window):
+    _enable_advanced_templates(window)
+    window.templates.editor.setPlainText("CUSTOM {{ base }}")
+    window.templates.enable_advanced.setChecked(False)
+
+    assert window.state.profile.templates["org"].title == "CUSTOM {{ base }}"
+    assert window.templates.selection_metric.value.text() == "Stored (inactive)"
+    assert not window.templates.preview.toPlainText().startswith("CUSTOM")
+
+
 def test_broken_template_reports_inline_and_does_not_raise(window):
+    _enable_advanced_templates(window)
     window.templates.editor.setPlainText("{{ nope_undefined }}")
 
     assert "not valid yet" in window.templates.status.text()
@@ -979,6 +1044,7 @@ def test_broken_template_reports_inline_and_does_not_raise(window):
 
 
 def test_recovering_from_a_broken_template(window):
+    _enable_advanced_templates(window)
     window.templates.editor.setPlainText("{{ nope_undefined }}")
     window.templates.editor.setPlainText("FIXED {{ base }}")
 
@@ -987,6 +1053,7 @@ def test_recovering_from_a_broken_template(window):
 
 
 def test_use_builtin_clears_the_override(window):
+    _enable_advanced_templates(window)
     window.templates.editor.setPlainText("CUSTOM")
     assert "org" in window.state.profile.templates
 
@@ -995,6 +1062,7 @@ def test_use_builtin_clears_the_override(window):
 
 
 def test_template_override_is_scoped_to_its_org(window, tmp_path):
+    _enable_advanced_templates(window)
     two = tmp_path / "two.ini"
     two.write_bytes(
         (BOM + "Alpha_x_title=A <EM4>[1 Rep]</EM4>\nBeta_y_title=B <EM4>[2 Rep]</EM4>\n").encode()
@@ -1010,6 +1078,7 @@ def test_template_override_is_scoped_to_its_org(window, tmp_path):
 
 
 def test_custom_wording_uses_reusable_summary_and_section_components(window):
+    _enable_advanced_templates(window)
     window.templates.editor.setPlainText("CUSTOM {{ base }}")
 
     assert window.templates.override_metric.value.text() == "1"
@@ -1021,6 +1090,7 @@ def test_custom_wording_uses_reusable_summary_and_section_components(window):
 
 
 def test_invalid_custom_wording_is_announced_as_blocked(window):
+    _enable_advanced_templates(window)
     window.templates.editor.setPlainText("{{ undefined_value }}")
 
     assert window.templates.preview_metric.value.text() == "Invalid"

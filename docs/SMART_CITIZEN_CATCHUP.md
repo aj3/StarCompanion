@@ -834,6 +834,30 @@ screenshot matrix and the screen-reader/control audit.
   concise privacy screen confirming zero telemetry/network behavior.
 - Package smoke tests, accessibility pass, usability test, and release notes.
 
+### Sprint G3 — Structured presentation rules
+
+**Status: complete.** Output profiles now default to typed structured wording
+rather than template execution. The validated model controls complete reward-
+section ordering, nine plain-text labels, reputation separators, and thousands
+formatting; field visibility, emphasis, title prefixes, and pool limits remain
+in their existing typed models. Labels reject markup, escapes, control
+characters, Unicode direction overrides, surrounding whitespace, and lengths
+above 48 characters. Section order must contain every known reward section
+exactly once, so rearranging information cannot silently omit it.
+
+Profile schema v2 migrates v1 documents in memory. A v1 profile without custom
+templates enters structured mode; one with templates retains them and enters
+advanced mode so existing output is preserved. New profiles keep template
+source dormant unless the user explicitly enables advanced custom templates.
+Jinja remains immutable-sandboxed, live-previewed, and subject to the same
+final value validator.
+
+Presentation exposes reviewed order presets, safe labels, and numeric controls
+without filesystem or extraction work. Custom Wording clearly reports active
+versus stored-inactive templates and disables editing until advanced mode is
+enabled. Both states join keyboard/screen-reader coverage, and the structured
+wording viewport has 100%, 150%, and 200% screenshot regression gates.
+
 ## Recommended improvements beyond parity
 
 Smart Citizen is useful evidence about what players value, but matching all of
@@ -859,6 +883,8 @@ The application should reopen to a dashboard and make “Review changes” the
 primary action whenever inputs or the game build change.
 
 ### 2. Replace template-first customization with structured formatting rules
+
+**Implemented by Sprint G3.** The text below records the design requirement.
 
 Jinja remains valuable as an expert escape hatch, but it is too powerful and
 too hard to validate as the primary customization model. Introduce typed rules

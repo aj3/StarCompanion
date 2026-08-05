@@ -153,7 +153,8 @@ same component vocabulary as Overview:
 - Contract Content groups typed output toggles into described `ToggleRow`
   controls and reports enabled-field plus local-reward coverage aggregates.
 - Presentation summarizes its active text, title, and list-length choices,
-  then presents the existing controls in full-width `SectionCard` regions.
+  then presents style, title, structured labels, complete section ordering,
+  numeric formatting, and list controls in full-width `SectionCard` regions.
   The single-column structure is deliberate: it remains readable at the
   minimum window size, with keyboard zoom, and with longer translated text.
 - Data & provenance reports contract, mission-giver, localization-key, and
@@ -184,11 +185,13 @@ coverage, inspect archives, or alter rendering behavior.
 
 ## Wording, operation-plan, and recovery workspaces
 
-Custom Wording retains the existing profile-template mutations and live
-renderer. It now presents mission-giver scope, selected title/description
+Custom Wording retains existing profile-template source and the live renderer,
+but G3 makes execution an explicit advanced-mode opt-in. It presents
+mission-giver scope, selected title/description
 state, active custom-scope count, preview length, safe generated state, and
 inline template failure through the same metrics, sections, and semantic
-notices used elsewhere. Its editor and preview stay side by side on desktop
+notices used elsewhere. Disabling advanced mode keeps template source dormant
+and restores typed structured rendering. Its editor and preview stay side by side on desktop
 and stack inside the vertical viewport at the minimum supported width.
 
 Manual Apply now renders the C3 `InjectionPlan` rather than a second GUI-only

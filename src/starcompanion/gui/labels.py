@@ -109,3 +109,28 @@ PREFIX_CAPTION = (
     "change can re-sort it. Putting this at the front of each title is the "
     "next best thing: the list becomes easy to scan."
 )
+
+# Complete orders only: choosing a layout never hides a reward category.
+WORDING_ORDERS: tuple[tuple[tuple[str, ...], str, str], ...] = (
+    (
+        ("reputation", "scrip", "items", "scenario", "blueprints"),
+        "Balanced",
+        "Reputation and currencies first, followed by items and blueprints.",
+    ),
+    (
+        ("blueprints", "reputation", "items", "scrip", "scenario"),
+        "Blueprints first",
+        "Blueprint pools lead the generated section, followed by other rewards.",
+    ),
+    (
+        ("reputation", "blueprints", "items", "scrip", "scenario"),
+        "Core rewards first",
+        "Reputation and blueprints lead; less common reward types follow.",
+    ),
+)
+
+REPUTATION_SEPARATORS: tuple[tuple[str, str], ...] = (
+    (" / ", "Spaced slash — 300 / 16,000"),
+    ("/", "Compact slash — 300/16,000"),
+    (" • ", "Bullet — 300 • 16,000"),
+)
