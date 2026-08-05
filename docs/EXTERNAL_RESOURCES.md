@@ -20,13 +20,12 @@ user-selected Star Citizen installation and its `Data.p4k` archive.
 Language packs and portable settings are selected from local files only; no
 translation, synchronization, telemetry, or settings service is contacted.
 
-Release infrastructure has one separate, opt-in network dependency: a manually
-approved Authenticode release uses Windows `signtool` to contact the RFC 3161
-timestamp URL configured by the release operator. No provider or URL is
-hard-coded, and the selected service must be disclosed in that release's notes.
-This happens only on the GitHub Actions signing runner after all CI gates pass;
-neither installed executable contacts the timestamp service. Ordinary CI and
-local builds remain unsigned and do not contact it.
+Release infrastructure has one separate, opt-in network dependency: after
+Foundation approval, a manually approved GitHub Actions job submits an already
+tested artifact to SignPath.io for Authenticode signing and timestamping. This
+happens only between GitHub and SignPath after all CI gates pass; neither
+installed executable contacts the signing or timestamp services. Ordinary CI
+and local builds remain unsigned and do not contact them.
 
 Development reference only: Smart Citizen v2.3.0's Apache-2.0 source was
 reviewed to confirm DataForge relationships for mission reputation and crafting

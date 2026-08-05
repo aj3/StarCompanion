@@ -7,20 +7,33 @@ import json
 import tomllib
 from pathlib import Path
 
+from runtime_licenses import RUNTIME_LICENSES, cyclonedx_license
+
 
 def finalize(sbom_path: Path, project_path: Path) -> None:
     project = tomllib.loads(project_path.read_text(encoding="utf-8"))["project"]
     sbom = json.loads(sbom_path.read_text(encoding="utf-8"))
     root = sbom["metadata"]["component"]
     root["licenses"] = [{"license": {"id": project["license"]}}]
+    components = {
+        component["name"].casefold(): component
+        for component in sbom.get("components", ())
+    }
+    if set(components) != set(RUNTIME_LICENSES):
+        missing = sorted(set(components) - set(RUNTIME_LICENSES))
+        stale = sorted(set(RUNTIME_LICENSES) - set(components))
+        raise ValueError(
+            f"runtime license review is incomplete: missing={missing}, stale={stale}"
+        )
+    for name, expression in RUNTIME_LICENSES.items():
+        components[name]["licenses"] = cyclonedx_license(expression)
     direct_names = {
         dependency.split("==", 1)[0].casefold()
         for dependency in project["dependencies"]
     }
     direct_refs = sorted(
-        component["bom-ref"]
-        for component in sbom.get("components", ())
-        if component.get("name", "").casefold() in direct_names
+        components[name]["bom-ref"]
+        for name in direct_names
     )
     if len(direct_refs) != len(direct_names):
         raise ValueError("cannot map every direct dependency into the generated SBOM")

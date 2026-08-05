@@ -4,7 +4,14 @@ version = "0.2.0"
 description = "Datamine Star Citizen contract data and build a customizable global.ini localization override"
 requires-python = ">=3.12"
 license = "Apache-2.0"
-license-files = ["LICENSE", "NOTICE"]
+license-files = [
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md",
+    "licenses/GPL-3.0-only.txt",
+    "licenses/LGPL-3.0-only.txt",
+    "licenses/PSF-2.0.txt",
+]
 dependencies = [
     "PySide6==6.11.0",
     "Jinja2==3.1.6",

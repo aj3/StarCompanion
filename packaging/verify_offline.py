@@ -53,9 +53,17 @@ def verify(
     sbom: Path,
     license_path: Path,
     notice_path: Path,
+    third_party_licenses: Path,
     authenticode_report: Path | None = None,
 ) -> dict[str, object]:
-    for artifact in (cli, gui, sbom, license_path, notice_path):
+    for artifact in (
+        cli,
+        gui,
+        sbom,
+        license_path,
+        notice_path,
+        third_party_licenses,
+    ):
         if not artifact.is_file():
             raise FileNotFoundError(artifact)
     sbom_summary = verify_sbom(sbom, Path("pyproject.toml"))
@@ -236,6 +244,7 @@ def verify(
         sbom.name: _sha256(sbom),
         license_path.name: _sha256(license_path),
         notice_path.name: _sha256(notice_path),
+        third_party_licenses.name: _sha256(third_party_licenses),
     }
     authenticode: dict[str, object] = {"status": "not-requested"}
     if authenticode_report is not None:
@@ -272,6 +281,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--license", type=Path, default=Path("LICENSE"))
     parser.add_argument("--notice", type=Path, default=Path("NOTICE"))
+    parser.add_argument(
+        "--third-party-licenses",
+        type=Path,
+        default=Path("dist/THIRD_PARTY_LICENSES.txt"),
+    )
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--authenticode-report", type=Path)
     args = parser.parse_args(argv)
@@ -281,6 +295,7 @@ def main(argv: list[str] | None = None) -> int:
         args.sbom.resolve(),
         args.license.resolve(),
         args.notice.resolve(),
+        args.third_party_licenses.resolve(),
         args.authenticode_report.resolve()
         if args.authenticode_report is not None
         else None,

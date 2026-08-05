@@ -1,6 +1,6 @@
 # Dependency and release supply-chain policy
 
-**Audit date:** 2026-08-04
+**Audit date:** 2026-08-05
 
 ## Locked surfaces
 
@@ -54,13 +54,15 @@ Direct runtime pins:
 7. Reject new network-capable Python or Qt imports unless the network-surface
    policy and external-resource inventory are deliberately revised.
 8. Build the Python wheel and require `License-Expression: Apache-2.0` plus
-   byte-identical bundled copies of LICENSE and NOTICE.
-9. Publish executable, SBOM, LICENSE, and NOTICE SHA-256 values in
+   byte-identical bundled copies of LICENSE, NOTICE, and third-party notices.
+9. Collect dependency and CPython license material from the pinned environment
+   and publish its SHA-256 value with the executables, SBOM, and project notices.
+10. Publish executable, SBOM, license, and notice SHA-256 values in
    `release-manifest.json`.
-10. For a signed release, require the protected `release-signing` environment,
-    sign and RFC 3161 timestamp both executables together, verify their signer
-    and timestamp, rerun the disconnected packaged smoke, and bind the signed
-    hashes plus `authenticode-report.json` into the manifest. See
+11. For a signed release, require the protected `release-signing` environment,
+    submit the GitHub artifact to SignPath, verify the SignPath Foundation
+    signer and timestamps, rerun the disconnected packaged smoke, and bind the
+    signed hashes plus `authenticode-report.json` into the manifest. See
     `RELEASE_SIGNING.md`.
 
 Release validation installs the complete build lock from downloaded,

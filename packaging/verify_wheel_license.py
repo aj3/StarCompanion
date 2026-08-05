@@ -18,18 +18,26 @@ def verify(wheel: Path, root: Path) -> dict[str, object]:
         metadata = BytesParser().parsebytes(archive.read(metadata_names[0]))
         if metadata.get("License-Expression") != "Apache-2.0":
             raise ValueError("wheel License-Expression must be Apache-2.0")
-        if set(metadata.get_all("License-File", ())) != {"LICENSE", "NOTICE"}:
-            raise ValueError("wheel must declare LICENSE and NOTICE")
+        required = {
+            "LICENSE",
+            "NOTICE",
+            "THIRD_PARTY_NOTICES.md",
+            "licenses/GPL-3.0-only.txt",
+            "licenses/LGPL-3.0-only.txt",
+            "licenses/PSF-2.0.txt",
+        }
+        if set(metadata.get_all("License-File", ())) != required:
+            raise ValueError("wheel must declare all project and third-party notices")
 
         dist_info = metadata_names[0].rsplit("/", 1)[0]
-        for filename in ("LICENSE", "NOTICE"):
+        for filename in sorted(required):
             member = f"{dist_info}/licenses/{filename}"
             if member not in names:
                 raise ValueError(f"wheel does not bundle {filename}")
             if archive.read(member) != (root / filename).read_bytes():
                 raise ValueError(f"wheel {filename} differs from repository copy")
 
-    return {"wheel": wheel.name, "license": "Apache-2.0", "files": ["LICENSE", "NOTICE"]}
+    return {"wheel": wheel.name, "license": "Apache-2.0", "files": sorted(required)}
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -6,11 +6,23 @@
 # Templates and profiles are package data loaded at runtime by path, so they
 # must be collected explicitly -- PyInstaller only follows imports.
 
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files
 
 SRC = Path(SPECPATH).parent / "src"
+VERSION_INFO = Path(SPECPATH).parent / "build" / "version-info"
+GUI_VERSION = (
+    str(VERSION_INFO / "StarCompanion.exe.version-info.txt")
+    if sys.platform == "win32"
+    else None
+)
+CLI_VERSION = (
+    str(VERSION_INFO / "starcompanion-cli.exe.version-info.txt")
+    if sys.platform == "win32"
+    else None
+)
 
 datas = [
     (str(SRC / "starcompanion" / "templates"), "starcompanion/templates"),
@@ -66,6 +78,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    version=GUI_VERSION,
 )
 
 
@@ -117,4 +130,5 @@ cli_exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    version=CLI_VERSION,
 )

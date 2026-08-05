@@ -1,0 +1,7 @@
+# Release-sensitive files remain maintainer-owned.
+* @aj3
+/.github/workflows/ @aj3
+/.signpath/ @aj3
+/CODE_SIGNING_POLICY.md @aj3
+/packaging/ @aj3
+/requirements/ @aj3

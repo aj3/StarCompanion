@@ -1,7 +1,11 @@
 # StarCompanion
 
-Current release candidate: **v0.2.0** (C6/G1/G2 desktop experience over the
-verified C0-C5 core).
+[![CI](https://github.com/aj3/StarCompanion/actions/workflows/ci.yml/badge.svg)](https://github.com/aj3/StarCompanion/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/aj3/StarCompanion)](https://github.com/aj3/StarCompanion/releases/latest)
+[![License](https://img.shields.io/github/license/aj3/StarCompanion)](LICENSE)
+
+Latest release: **v0.2.0** (C6/G1/G2 desktop experience over the verified
+C0-C5 core).
 
 Reads Star Citizen's own game files and builds a **customisable** `global.ini`
 localization override — so contract titles and descriptions show the reward
@@ -504,6 +508,11 @@ Format notes for the p4k and DataCore layouts are in
 from a reference tool; consulted format sources are disclosed in
 [NOTICE](NOTICE) and [docs/EXTERNAL_RESOURCES.md](docs/EXTERNAL_RESOURCES.md).
 
+Public build instructions are in [BUILDING.md](BUILDING.md). Contributions are
+welcome under [CONTRIBUTING.md](CONTRIBUTING.md), and security reports follow
+[SECURITY.md](SECURITY.md). Participation follows the
+[code of conduct](CODE_OF_CONDUCT.md).
+
 ## Provenance
 
 Everything under `src/` was written for this project. To state the specifics,
@@ -528,6 +537,21 @@ since "informed by other tools" is easy to say and hard to check:
 These are checkable: `grep -rn "import requests\|subprocess\|eval(" src/`
 returns nothing.
 
+## Code signing policy
+
+StarCompanion is preparing an application to the SignPath Foundation open
+source program. The complete [code signing policy](CODE_SIGNING_POLICY.md)
+defines source ownership, team roles, GitHub-hosted builds, manual release
+approval, artifact restrictions, and verification. Once the application is
+accepted: **Free code signing provided by
+[SignPath.io](https://signpath.io/), certificate by
+[SignPath Foundation](https://signpath.org/).** No release claims a SignPath
+signature until the application and individual signing request are approved.
+
+StarCompanion's [privacy policy](PRIVACY.md) states what local information is
+read and confirms that the application has no telemetry, updater, background
+network client, or automatic data upload.
+
 ## Credits
 
 - [MrKraken's StarStrings](https://github.com/MrKraken/StarStrings) — the
@@ -541,7 +565,8 @@ returns nothing.
 
 StarCompanion is licensed under the
 [Apache License 2.0](LICENSE). Required attribution and project notices are in
-[NOTICE](NOTICE).
+[NOTICE](NOTICE), with runtime dependency licensing summarized in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Unofficial Star Citizen fan project, not affiliated with the Cloud Imperium
 group of companies. All content not authored here is property of its respective
