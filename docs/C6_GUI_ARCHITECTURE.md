@@ -130,6 +130,8 @@ captures an actual PNG, and verifies:
 - exact logical and physical canvas dimensions;
 - device-pixel ratio;
 - major shell, dashboard, and card geometry against a versioned JSON baseline;
+- exact Windows rectangle geometry plus strict cross-platform horizontal
+  geometry and bounded Ubuntu vertical font-metric variance;
 - the presence of semantic canvas, surface, and accent colors; and
 - a non-trivial encoded image.
 
