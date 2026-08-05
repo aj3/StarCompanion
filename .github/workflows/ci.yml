@@ -46,9 +46,21 @@ jobs:
         run: pip install --require-hashes -r requirements/dev.txt
 
       # No game install on CI: fixtures are built from the format spec, and
-      # tests needing real data skip themselves.
-      - name: Test
-        run: pytest -q
+      # tests needing real data skip themselves.  Keep the long-lived Qt app
+      # and screenshot subprocesses in separate pytest processes so platform
+      # plugin teardown cannot retain a worker at suite shutdown.
+      - name: Test core
+        run: pytest -q --ignore=tests/test_gui.py --ignore=tests/test_gui_screenshots.py
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+      - name: Test shared Qt lifecycle
+        run: pytest -vv -s tests/test_gui.py
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+      - name: Test high-DPI screenshots
+        run: pytest -q tests/test_gui_screenshots.py
         env:
           QT_QPA_PLATFORM: offscreen
 

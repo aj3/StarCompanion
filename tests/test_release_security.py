@@ -237,6 +237,9 @@ def test_release_workflow_builds_and_offline_smokes_both_platforms() -> None:
     assert "build-ubuntu:" in workflow
     assert "StarCompanion-windows-unsigned" in workflow
     assert "StarCompanion-ubuntu-unsigned" in workflow
+    assert "pytest -q --ignore=tests/test_gui.py" in workflow
+    assert "pytest -vv -s tests/test_gui.py" in workflow
+    assert "pytest -q tests/test_gui_screenshots.py" in workflow
     assert workflow.count("packaging/verify_offline.py") == 1
     assert workflow.count("packaging\\verify_offline.py") == 2
 
