@@ -28,8 +28,8 @@ confirmation, backup, integrity, and rollback controls.
 
 ### Reputation
 
-StarCompanion has published Windows and Ubuntu releases and will make its
-Apache-2.0 repository public before submitting this application. Releases are
+StarCompanion has published Windows and Ubuntu releases from its public
+Apache-2.0 repository. Releases are
 linked to reviewed source, a tagged commit, a complete GitHub-hosted
 Windows/Ubuntu test and build matrix,
 hash-verified dependencies, a CycloneDX SBOM, packaged offline smoke tests, and
@@ -52,7 +52,7 @@ Do not commit personal contact details or SignPath credentials to this file.
 
 ## Readiness checklist
 
-- [ ] Repository visibility is public.
+- [x] Repository visibility is public.
 - [x] Apache-2.0 license and project NOTICE are present.
 - [x] No proprietary game data or third-party implementation is distributed.
 - [x] v0.2.0 is already released in the form to be signed.
