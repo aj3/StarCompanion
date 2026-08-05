@@ -10,7 +10,7 @@
       product-version="${version}"
       file-version="${version}"
       company-name="StarCompanion contributors"
-      copyright="Copyright 2026 StarCompanion contributors"
+      copyright="Copyright 2026 aj3 and StarCompanion contributors"
       original-filename="${file.name}">
       <include path="dist/StarCompanion.exe" />
       <include path="dist/starcompanion-cli.exe" />
@@ -25,6 +25,7 @@
     <file path="sbom/starcompanion-runtime.cdx.json" />
     <file path="LICENSE" />
     <file path="NOTICE" />
+    <file path="COPYRIGHT" />
     <file path="THIRD_PARTY_NOTICES.md" />
   </zip-file>
 </artifact-configuration>

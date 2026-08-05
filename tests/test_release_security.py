@@ -90,15 +90,19 @@ def test_project_declares_apache_license_and_notice() -> None:
     assert project["license-files"] == [
         "LICENSE",
         "NOTICE",
+        "COPYRIGHT",
         "THIRD_PARTY_NOTICES.md",
         "licenses/GPL-3.0-only.txt",
         "licenses/LGPL-3.0-only.txt",
         "licenses/PSF-2.0.txt",
     ]
     assert "Apache License" in (root / "LICENSE").read_text(encoding="utf-8")
-    assert "StarCompanion contributors" in (root / "NOTICE").read_text(
+    assert "aj3 and StarCompanion contributors" in (root / "NOTICE").read_text(
         encoding="utf-8"
     )
+    assert "Copyright 2026 aj3 and StarCompanion contributors" in (
+        root / "COPYRIGHT"
+    ).read_text(encoding="utf-8")
 
 
 def test_qt_runtime_uses_reviewed_lgpl_license_text() -> None:
@@ -260,6 +264,7 @@ def test_windows_metadata_is_generated_from_project_version(tmp_path: Path) -> N
     assert "StringStruct('ProductName', 'StarCompanion')" in gui
     assert "StringStruct('ProductVersion', '0.2.0.0')" in gui
     assert "StringStruct('OriginalFilename', 'StarCompanion.exe')" in gui
+    assert "Copyright 2026 aj3 and StarCompanion contributors" in gui
 
 
 def test_release_workflow_builds_and_offline_smokes_both_platforms() -> None:

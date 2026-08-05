@@ -21,6 +21,7 @@ def verify(wheel: Path, root: Path) -> dict[str, object]:
         required = {
             "LICENSE",
             "NOTICE",
+            "COPYRIGHT",
             "THIRD_PARTY_NOTICES.md",
             "licenses/GPL-3.0-only.txt",
             "licenses/LGPL-3.0-only.txt",

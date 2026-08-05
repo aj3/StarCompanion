@@ -175,6 +175,7 @@ jobs:
                 $info.ProductVersion -ne $expectedVersion -or
                 $info.FileVersion -ne $expectedVersion -or
                 $info.CompanyName -ne "StarCompanion contributors" -or
+                $info.LegalCopyright -ne "Copyright 2026 aj3 and StarCompanion contributors" -or
                 $info.OriginalFilename -ne $expected[$name]) {
               throw "Unexpected Windows version metadata for $name"
             }
@@ -206,6 +207,7 @@ jobs:
             sbom/starcompanion-runtime.cdx.json
             LICENSE
             NOTICE
+            COPYRIGHT
             THIRD_PARTY_NOTICES.md
           if-no-files-found: error
 
@@ -271,6 +273,7 @@ jobs:
             sbom/starcompanion-runtime.cdx.json
             LICENSE
             NOTICE
+            COPYRIGHT
             THIRD_PARTY_NOTICES.md
           if-no-files-found: error
 
@@ -314,6 +317,7 @@ jobs:
           --sbom signed\sbom\starcompanion-runtime.cdx.json
           --license signed\LICENSE
           --notice signed\NOTICE
+          --copyright signed\COPYRIGHT
           --third-party-licenses signed\dist\THIRD_PARTY_LICENSES.txt
           --authenticode-report signed\dist\authenticode-report.json
           --manifest signed\dist\release-manifest.json
@@ -330,5 +334,6 @@ jobs:
             signed/sbom/starcompanion-runtime.cdx.json
             signed/LICENSE
             signed/NOTICE
+            signed/COPYRIGHT
             signed/THIRD_PARTY_NOTICES.md
           if-no-files-found: error

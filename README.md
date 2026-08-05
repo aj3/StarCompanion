@@ -566,7 +566,9 @@ network client, or automatic data upload.
 StarCompanion is licensed under the
 [Apache License 2.0](LICENSE). Required attribution and project notices are in
 [NOTICE](NOTICE), with runtime dependency licensing summarized in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Project-specific ownership is
+recorded in [COPYRIGHT](COPYRIGHT); the bracketed example in LICENSE remains
+because it is part of Apache's canonical license appendix.
 
 Unofficial Star Citizen fan project, not affiliated with the Cloud Imperium
 group of companies. All content not authored here is property of its respective

@@ -53,6 +53,7 @@ def verify(
     sbom: Path,
     license_path: Path,
     notice_path: Path,
+    copyright_path: Path,
     third_party_licenses: Path,
     authenticode_report: Path | None = None,
 ) -> dict[str, object]:
@@ -62,6 +63,7 @@ def verify(
         sbom,
         license_path,
         notice_path,
+        copyright_path,
         third_party_licenses,
     ):
         if not artifact.is_file():
@@ -244,6 +246,7 @@ def verify(
         sbom.name: _sha256(sbom),
         license_path.name: _sha256(license_path),
         notice_path.name: _sha256(notice_path),
+        copyright_path.name: _sha256(copyright_path),
         third_party_licenses.name: _sha256(third_party_licenses),
     }
     authenticode: dict[str, object] = {"status": "not-requested"}
@@ -281,6 +284,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--license", type=Path, default=Path("LICENSE"))
     parser.add_argument("--notice", type=Path, default=Path("NOTICE"))
+    parser.add_argument("--copyright", type=Path, default=Path("COPYRIGHT"))
     parser.add_argument(
         "--third-party-licenses",
         type=Path,
@@ -295,6 +299,7 @@ def main(argv: list[str] | None = None) -> int:
         args.sbom.resolve(),
         args.license.resolve(),
         args.notice.resolve(),
+        args.copyright.resolve(),
         args.third_party_licenses.resolve(),
         args.authenticode_report.resolve()
         if args.authenticode_report is not None

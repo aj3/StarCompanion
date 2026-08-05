@@ -43,7 +43,8 @@ exactly these project-owned PE files:
 
 Both files must have the project name, version, company, copyright, and original
 filename generated from `pyproject.toml`. The remaining manifest, SBOM, project
-license, and third-party notice files must be present but are not signed.
+license, concrete copyright, and third-party notice files must be present but
+are not signed.
 
 After SignPath returns the archive, `packaging/report_signpath.ps1` independently
 requires a valid SignPath Foundation Authenticode signature and timestamp on

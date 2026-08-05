@@ -34,7 +34,7 @@ def _render(version: str, numbers: tuple[int, int, int, int], filename: str) -> 
       StringStruct('FileDescription', '{description}'),
       StringStruct('FileVersion', '{version}'),
       StringStruct('InternalName', '{Path(filename).stem}'),
-      StringStruct('LegalCopyright', 'Copyright 2026 StarCompanion contributors'),
+      StringStruct('LegalCopyright', 'Copyright 2026 aj3 and StarCompanion contributors'),
       StringStruct('OriginalFilename', '{filename}'),
       StringStruct('ProductName', 'StarCompanion'),
       StringStruct('ProductVersion', '{version}')
