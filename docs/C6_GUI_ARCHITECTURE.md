@@ -135,6 +135,7 @@ captures an actual PNG, and verifies:
   a substituted font deterministically changes page flow;
 - process-isolated core, shared-Qt, and screenshot CI domains so Qt platform
   teardown is deterministic on both Windows and Ubuntu;
+- monotonic, non-nested GUI job waiters with bounded cancellation;
 - the presence of semantic canvas, surface, and accent colors; and
 - a non-trivial encoded image.
 

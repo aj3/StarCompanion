@@ -6,6 +6,7 @@ pipeline behaviour already covered elsewhere.
 """
 
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -1734,15 +1735,18 @@ def _blueprint_contracts():
     return ContractSet([contract], {org.id: org})
 
 
-def _wait_for_jobs(qapp, owner, *, attempts=400):
-    from PySide6.QtTest import QTest
-
-    for _ in range(attempts):
+def _wait_for_jobs(qapp, owner, *, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    while owner._jobs and time.monotonic() < deadline:
         qapp.processEvents()
-        if not owner._jobs:
-            return
-        QTest.qWait(10)
-    pytest.fail("background GUI operation did not finish")
+        time.sleep(0.01)
+    qapp.processEvents()
+    if not owner._jobs:
+        return
+    for job in tuple(owner._jobs):
+        job.shutdown(1000)
+    qapp.processEvents()
+    pytest.fail("background GUI operation did not finish before bounded shutdown")
 
 
 def test_g2_discovers_and_switches_installed_channels_off_the_gui_thread(
