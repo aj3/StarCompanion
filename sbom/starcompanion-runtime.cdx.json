@@ -2402,6 +2402,28 @@
     "component": {
       "bom-ref": "root-component",
       "description": "Datamine Star Citizen contract data and build a customizable global.ini localization override",
+      "externalReferences": [
+        {
+          "comment": "from pyproject urls: Documentation",
+          "type": "documentation",
+          "url": "https://github.com/aj3/StarCompanion#readme"
+        },
+        {
+          "comment": "from pyproject urls: Issues",
+          "type": "issue-tracker",
+          "url": "https://github.com/aj3/StarCompanion/issues"
+        },
+        {
+          "comment": "from pyproject urls: Repository",
+          "type": "vcs",
+          "url": "https://github.com/aj3/StarCompanion"
+        },
+        {
+          "comment": "from pyproject urls: Homepage",
+          "type": "website",
+          "url": "https://github.com/aj3/StarCompanion"
+        }
+      ],
       "licenses": [
         {
           "license": {
