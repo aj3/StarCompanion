@@ -24,6 +24,7 @@ def verify(wheel: Path, root: Path) -> dict[str, object]:
             "THIRD_PARTY_NOTICES.md",
             "licenses/GPL-3.0-only.txt",
             "licenses/LGPL-3.0-only.txt",
+            "licenses/PSF-2.0.txt",
         }
         if set(metadata.get_all("License-File", ())) != required:
             raise ValueError("wheel must declare all project and third-party notices")

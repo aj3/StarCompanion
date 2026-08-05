@@ -10,6 +10,7 @@ license-files = [
     "THIRD_PARTY_NOTICES.md",
     "licenses/GPL-3.0-only.txt",
     "licenses/LGPL-3.0-only.txt",
+    "licenses/PSF-2.0.txt",
 ]
 dependencies = [
     "PySide6==6.11.0",

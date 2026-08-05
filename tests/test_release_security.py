@@ -93,6 +93,7 @@ def test_project_declares_apache_license_and_notice() -> None:
         "THIRD_PARTY_NOTICES.md",
         "licenses/GPL-3.0-only.txt",
         "licenses/LGPL-3.0-only.txt",
+        "licenses/PSF-2.0.txt",
     ]
     assert "Apache License" in (root / "LICENSE").read_text(encoding="utf-8")
     assert "StarCompanion contributors" in (root / "NOTICE").read_text(
@@ -110,6 +111,9 @@ def test_qt_runtime_uses_reviewed_lgpl_license_text() -> None:
     ).read_text(encoding="utf-8")
     assert "GNU GENERAL PUBLIC LICENSE" in (
         ROOT / "licenses" / "GPL-3.0-only.txt"
+    ).read_text(encoding="utf-8")
+    assert "PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2" in (
+        ROOT / "licenses" / "PSF-2.0.txt"
     ).read_text(encoding="utf-8")
 
 

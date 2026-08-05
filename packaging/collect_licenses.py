@@ -45,15 +45,10 @@ def _license_files(name: str) -> list[tuple[str, str]]:
 
 
 def _python_license() -> tuple[str, str]:
-    candidates = (
-        Path(sys.base_prefix) / "LICENSE.txt",
-        Path(sys.base_prefix) / "LICENSE",
-        Path(sys.base_prefix) / f"LICENSE.{sys.version_info.major}{sys.version_info.minor}.txt",
-    )
-    for path in candidates:
-        if path.is_file() and path.stat().st_size <= MAX_LICENSE_BYTES:
-            return str(path.name), path.read_text(encoding="utf-8", errors="replace")
-    raise ValueError("CPython license file was not found")
+    path = ROOT / "licenses" / "PSF-2.0.txt"
+    if not path.is_file() or path.stat().st_size > MAX_LICENSE_BYTES:
+        raise ValueError("reviewed CPython license file is absent or invalid")
+    return path.name, path.read_text(encoding="utf-8")
 
 
 def collect(sbom_path: Path, output: Path) -> dict[str, object]:
