@@ -1,6 +1,6 @@
 # StarCompanion core threat model
 
-**Version:** 1 (Sprint C5)
+**Version:** 2 (C6/G1/G2 GUI release)
 **Review date:** 2026-08-04
 
 ## Security objectives
@@ -27,6 +27,9 @@ strings, usernames, and absolute paths must not enter diagnostics or releases.
 | Per-channel data | Different channels/languages must never mix | Supported-channel allowlist and normalized scopes for caches, overrides, language packs, ownership, backups, and transactions |
 | Archive helper process | May crash, hang, or be cancelled | Parent-owned file artifacts, bounded cancellation/termination, validated result format, parent cleanup |
 | Diagnostics | Intended to be shareable | Aggregate counts/status only; excludes paths, usernames, values, logs, ownership, and game strings |
+| GUI administration | User-selected paths and long-running local work cross the event loop/worker boundary | Background jobs own discovery, archive reading, ownership scanning, settings portability, and diagnostics I/O; model snapshots cross back to Qt; shutdown requests cancellation and waits boundedly |
+| Advanced string editor | Large local string graphs and bulk edits could freeze or accidentally broaden a write | Virtualized projection, debounced in-memory validation, model-level undo/redo, explicit multi-select reset, and the unchanged serialized C3 operation plan as the only apply boundary |
+| Backup browser | A listed file can be replaced or redirected before restore | Target-scoped ordinary-file filtering, preview fingerprints, pre-write revalidation, preservation of the current target, journaled atomic replacement, and final digest verification |
 | Dependencies/release | Third-party code or signing credentials may be compromised | Exact pins and hashes, offline wheelhouse build, vulnerability audit, CycloneDX SBOM, license/notice verification, frozen offline smoke, protected manual signing environment, thumbprint pin, timestamp and signature verification |
 
 StarCompanion does not execute imported content, follow archive paths, invoke a
@@ -40,6 +43,9 @@ data as authoritative game data.
 - A crash or forced termination between staging, backup, and replacement.
 - Accidental selection of the wrong channel, language, backup, or settings file.
 - A user sharing diagnostics without realizing local data could be sensitive.
+- A hostile settings archive, renamed backup, or rapid local file replacement
+  selected through the GUI.
+- A very large source graph or ownership log used to exhaust the GUI event loop.
 
 ## Explicit non-goals
 

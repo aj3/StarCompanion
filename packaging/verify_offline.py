@@ -65,6 +65,11 @@ def verify(
 
     with tempfile.TemporaryDirectory(prefix="starcompanion-offline-") as temporary:
         root = Path(temporary)
+        env["QT_QPA_PLATFORM"] = "offscreen"
+        env["STARCOMPANION_DATA"] = str(root / "gui-data")
+        env["STARCOMPANION_CACHE"] = str(root / "gui-cache")
+        _run([str(gui), "--smoke-test"], env=env)
+
         install = build_fixture(root / "LIVE")
         cache = root / "cache.json"
         stock = root / "stock.ini"
@@ -251,8 +256,17 @@ def verify(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--cli", type=Path, default=Path("dist/starcompanion-cli.exe"))
-    parser.add_argument("--gui", type=Path, default=Path("dist/StarCompanion.exe"))
+    executable_suffix = ".exe" if os.name == "nt" else ""
+    parser.add_argument(
+        "--cli",
+        type=Path,
+        default=Path(f"dist/starcompanion-cli{executable_suffix}"),
+    )
+    parser.add_argument(
+        "--gui",
+        type=Path,
+        default=Path(f"dist/StarCompanion{executable_suffix}"),
+    )
     parser.add_argument(
         "--sbom", type=Path, default=Path("sbom/starcompanion-runtime.cdx.json")
     )

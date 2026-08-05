@@ -92,8 +92,11 @@ class QtOperationJob(QObject):
     @Slot()
     def _thread_finished(self) -> None:
         self._stopped = True
-        self.finished.emit()
+        # Queue the stopped thread before consumers queue deletion of this
+        # owning job from ``finished``.  Reversing that order leaves a narrow
+        # teardown race when one Qt test/window follows another immediately.
         self._thread.deleteLater()
+        self.finished.emit()
 
 
 __all__ = ["Operation", "QtOperationJob"]

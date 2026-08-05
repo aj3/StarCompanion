@@ -2,6 +2,7 @@ import json
 
 import p4kbuilder as B
 
+from starcompanion import __version__
 from starcompanion.diagnostics import build_diagnostics, render_diagnostics, write_diagnostics
 from starcompanion.install import GameInstall
 from starcompanion.portability import LanguagePackStore, PreferencesStore
@@ -37,6 +38,7 @@ def test_diagnostics_redact_paths_values_logs_ownership_and_game_strings(tmp_pat
     assert report["portable_data"]["scopes"][0]["user_overrides"]["entries"] == 1
     assert report["installs"][0]["languages"] == ["english"]
     assert report["network"]["automatic_telemetry"] is False
+    assert report["application"]["version"] == __version__
 
 
 def test_diagnostics_export_is_atomic_and_overwrite_guarded(tmp_path):

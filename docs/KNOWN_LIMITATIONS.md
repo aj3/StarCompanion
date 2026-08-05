@@ -1,4 +1,4 @@
-# Core release known limitations
+# v0.2.0 release known limitations
 
 **Review date:** 2026-08-04
 
@@ -21,5 +21,9 @@
   ambiguous names remain unresolved instead of being guessed.
 - Tests use synthetic P4K, log, settings, and ownership fixtures. Optional
   proprietary real-build checks skip when local fixtures are absent.
-- The frozen release target is Windows. Core tests run on Windows and Ubuntu CI,
-  but desktop integration is not promised for every Linux distribution.
+- Frozen Windows and Ubuntu artifacts are built independently because native
+  PyInstaller executables are not cross-platform. Ubuntu CI verifies its own
+  artifact; desktop integration is not promised for every Linux distribution.
+- The GUI is localized in English. Installed Star Citizen localization
+  languages remain strictly isolated and supported as local data sources, but
+  application-interface translation is deferred.

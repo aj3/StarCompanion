@@ -7,10 +7,12 @@ ticked and apparently doing nothing.
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QCheckBox, QGroupBox, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QGridLayout, QVBoxLayout, QWidget
 
 from ...features import community_rewards_enabled
+from ..components import MetricTile, NoticeBanner, SectionCard, ToggleRow, Tone
 from ..state import AppState
+from ..theme import SPACING
 
 # (profile field, what it is called, what it actually adds, needs reward data)
 TOGGLES: tuple[tuple[str, str, str, bool], ...] = (
@@ -79,11 +81,37 @@ class FieldsTab(QWidget):
         self.state = state
         self._loading = False
         self.boxes: dict[str, QCheckBox] = {}
+        self.rows: dict[str, ToggleRow] = {}
+        self.setAccessibleName("Contract content settings")
+        self.setAccessibleDescription(
+            "Choose which locally derived mission facts are added to contract descriptions."
+        )
 
         layout = QVBoxLayout(self)
+        layout.setSpacing(SPACING.large)
 
-        box = QGroupBox("Add this to contract descriptions")
-        inner = QVBoxLayout(box)
+        summary = QGridLayout()
+        summary.setSpacing(SPACING.medium)
+        self.enabled_metric = MetricTile("Enabled fields")
+        self.coverage_metric = MetricTile("Local reward coverage")
+        summary.addWidget(self.enabled_metric, 0, 0)
+        summary.addWidget(self.coverage_metric, 0, 1)
+        summary.setColumnStretch(0, 1)
+        summary.setColumnStretch(1, 1)
+        layout.addLayout(summary)
+
+        core = SectionCard(
+            "Core mission intelligence",
+            "These facts come from the selected local game build and remain empty when the provider has no evidence.",
+        )
+        extended = SectionCard(
+            "Extended reward details",
+            "Optional community-assisted fields remain isolated behind the explicit capability flag.",
+        )
+        extended.setVisible(community_rewards_enabled())
+        self.core_section = core
+        self.extended_section = extended
+        focus_order: list[QCheckBox] = []
 
         for name, label, hint, needs_rewards in TOGGLES:
             if needs_rewards and not community_rewards_enabled():
@@ -91,23 +119,23 @@ class FieldsTab(QWidget):
                 # cannot do anything reads as a broken feature.
                 continue
 
-            check = QCheckBox(label)
+            row = ToggleRow(label, hint)
+            check = row.checkbox
             check.toggled.connect(lambda checked, n=name: self._set(n, checked))
             self.boxes[name] = check
-            inner.addWidget(check)
+            self.rows[name] = row
+            (extended if needs_rewards else core).add_widget(row)
+            focus_order.append(check)
 
-            caption = QLabel(hint)
-            caption.setWordWrap(True)
-            caption.setEnabled(False)
-            caption.setIndent(24)
-            inner.addWidget(caption)
+        layout.addWidget(core)
+        layout.addWidget(extended)
 
-        layout.addWidget(box)
-
-        self.notice = QLabel()
-        self.notice.setWordWrap(True)
+        self.notice = NoticeBanner(tone=Tone.WARNING)
         layout.addWidget(self.notice)
         layout.addStretch(1)
+
+        for current, following in zip(focus_order, focus_order[1:]):
+            QWidget.setTabOrder(current, following)
 
         state.profileChanged.connect(self.refresh)
         state.contractsChanged.connect(self.refresh)
@@ -131,11 +159,29 @@ class FieldsTab(QWidget):
         has_rewards = bool(
             contracts and any(not c.reward.is_empty for c in contracts.contracts)
         )
-        self.notice.setText(
-            ""
-            if has_rewards
-            else (
-                "No local reward facts matched this build. Check the provider "
-                "status on the Source or Start tab."
+        enabled = sum(check.isChecked() for check in self.boxes.values())
+        self.enabled_metric.set_value(f"{enabled} / {len(self.boxes)}")
+        if contracts is None:
+            self.coverage_metric.set_value("Not loaded", "Read the local game archive first")
+        elif has_rewards:
+            enhanced = sum(1 for contract in contracts.contracts if not contract.reward.is_empty)
+            self.coverage_metric.set_value(
+                f"{enhanced:,} contracts",
+                f"of {len(contracts.contracts):,} loaded",
             )
-        )
+        else:
+            self.coverage_metric.set_value("No matches", "Provider evidence remains visible")
+        if contracts is None:
+            notice = (
+                "Local reward facts have not been loaded. Return to Overview to read "
+                "the selected game build."
+            )
+        elif not has_rewards:
+            notice = (
+                "No local reward facts matched this build. Check provider status "
+                "under Data & provenance or return to Overview."
+            )
+        else:
+            notice = ""
+        self.notice.setText(notice)
+        self.notice.setVisible(not has_rewards)

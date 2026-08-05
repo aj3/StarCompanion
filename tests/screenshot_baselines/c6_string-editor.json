@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "logical_size": [1280, 800],
+  "tolerance": 4,
+  "rects": {
+    "shell": [0, 0, 1280, 800],
+    "sidebar": [0, 0, 244, 800],
+    "header": [244, 0, 1036, 98],
+    "stack": [244, 98, 1036, 672],
+    "status": [244, 770, 1036, 30],
+    "filter_section": [277, 250, 970, 149],
+    "table_section": [277, 405, 609, 288],
+    "detail_section": [890, 405, 357, 288],
+    "table": [294, 501, 575, 175]
+  },
+  "minimum_colour_samples": {
+    "#0b0f14": 500,
+    "#121820": 500,
+    "#3fd0d4": 4
+  }
+}

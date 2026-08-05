@@ -33,6 +33,8 @@ PREFERENCE_KEYS = frozenset(
         "profile",
         "merge_mode",
         "theme",
+        "ui_schema",
+        "last_page",
         "link_live_hotfix",
     }
 )
@@ -124,6 +126,20 @@ def validate_preferences(value: object) -> dict[str, object]:
         raise PortabilityError("merge_mode must be merge or overwrite")
     if result.get("theme") not in (None, "light", "dark"):
         raise PortabilityError("theme must be light or dark")
+    if "ui_schema" in result and (
+        type(result["ui_schema"]) is not int or result["ui_schema"] != 1
+    ):
+        raise PortabilityError("ui_schema must be 1")
+    if "last_page" in result and (
+        not isinstance(result["last_page"], str)
+        or not result["last_page"]
+        or len(result["last_page"]) > 64
+        or any(
+            not (character.isascii() and (character.isalnum() or character in "-_"))
+            for character in result["last_page"]
+        )
+    ):
+        raise PortabilityError("last_page must be a portable interface page key")
     if "link_live_hotfix" in result and type(result["link_live_hotfix"]) is not bool:
         raise PortabilityError("link_live_hotfix must be true or false")
     return result

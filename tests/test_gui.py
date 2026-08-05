@@ -30,6 +30,7 @@ from starcompanion.gui import AppState, MainWindow  # noqa: E402
 from starcompanion.ini import BOM, LocalizationFile  # noqa: E402
 from starcompanion.inject import MergeMode  # noqa: E402
 from starcompanion.model import StringKind  # noqa: E402
+from starcompanion.portability import PreferencesStore  # noqa: E402
 from starcompanion.sources import contracts_ini  # noqa: E402
 
 SAMPLES = Path(__file__).parent / "samples"
@@ -85,6 +86,7 @@ def no_real_game(monkeypatch, tmp_path):
 
     monkeypatch.setattr(installs, "find_default", lambda: None)
     monkeypatch.setenv("STARCOMPANION_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setenv("STARCOMPANION_DATA", str(tmp_path / "data"))
 
 
 @pytest.fixture
@@ -98,7 +100,173 @@ def contracts(tmp_path):
 def window(qapp, contracts):
     w = MainWindow()
     w.state.set_contracts(contracts)
+    # The production editor intentionally coalesces rapid state changes on a
+    # timer.  Build the in-memory projection explicitly for deterministic GUI
+    # tests instead of making every test sleep on the event loop.
+    w.editor.rebuild()
     return w
+
+
+# --- C6 application shell ---------------------------------------------------
+
+
+def test_shell_groups_the_existing_pages_by_workflow(window):
+    labels = [button.property("navigationLabel") for button in window.shell._nav_buttons]
+
+    assert labels == [
+        "Overview",
+        "Contract content",
+        "Presentation",
+        "Blueprints",
+        "Custom wording",
+        "String editor",
+        "Data & provenance",
+        "Backup & recovery",
+        "Settings & help",
+    ]
+    assert window.shell.isAncestorOf(window.start)
+    assert window.shell.isAncestorOf(window.templates)
+
+
+def test_shell_navigation_updates_page_identity(window, qapp):
+    window.shell._nav_buttons[2].click()
+    qapp.processEvents()
+
+    assert window.tabs.currentIndex() == 2
+    assert window.shell.page_title.text() == "Shape the presentation"
+    assert window.shell._nav_buttons[2].isChecked()
+
+
+def test_shell_keeps_local_operating_context_visible(window):
+    assert window.shell.profile_button.text() == "PROFILE / DEFAULT"
+    assert window.shell.game_badge.text() == "GAME / NOT FOUND"
+    assert window.shell.data_badge.text() == "DATA / 1 CONTRACT"
+    assert "NO TELEMETRY" in window.shell.status_text.text()
+    assert "WRITES REQUIRE CONFIRMATION" in window.shell.status_text.text()
+
+
+def test_shell_preserves_the_legacy_tab_metadata_api(window):
+    labels = [window.tabs.tabText(i) for i in range(window.tabs.count())]
+    assert labels == [
+        "Start here",
+        "What to show",
+        "Appearance",
+        "Blueprint ownership",
+        "Advanced: custom wording",
+        "Advanced: strings",
+        "Data & provenance",
+        "Backup and recovery",
+        "Settings and help",
+    ]
+
+
+def test_reusable_state_components_expose_semantic_state(window):
+    from starcompanion.gui.components import EmptyState, NoticeBanner, StatusCard, Tone
+
+    notice = NoticeBanner("A recoverable problem", tone=Tone.WARNING)
+    empty = EmptyState("No results", "Change the filters and try again.")
+    card = StatusCard("Provider")
+    card.set_status("Unavailable", Tone.DANGER)
+
+    assert notice.text() == "A recoverable problem"
+    assert notice.property("tone") == "warning"
+    assert empty.property("component") == "empty-state"
+    assert card.property("tone") == "danger"
+
+
+def test_overview_reports_ready_state_from_existing_core_state(window):
+    assert window.start.hero.title_label.text() == "Connect your Star Citizen install"
+    assert window.start.contract_card.status_label.text() == "1 contracts ready"
+    assert window.start.contracts_empty.isHidden()
+
+
+def test_ui_preferences_migrate_and_preserve_other_portable_settings(qapp, tmp_path):
+    from starcompanion.gui.preferences import UiPreferencesStore
+
+    root = tmp_path / "preferences"
+    PreferencesStore(root).save({"theme": "light", "default_channel": "LIVE"})
+
+    loaded = UiPreferencesStore(root).load()
+    stored = PreferencesStore(root).load()
+
+    assert loaded.warning is None
+    assert loaded.preferences.theme == "light"
+    assert stored["ui_schema"] == 1
+    assert stored["last_page"] == "overview"
+    assert stored["default_channel"] == "LIVE"
+
+
+def test_ui_theme_is_independent_from_output_profile(qapp, tmp_path):
+    from starcompanion.gui.preferences import UiPreferencesStore
+
+    root = tmp_path / "preferences"
+    PreferencesStore(root).save(
+        {"theme": "dark", "ui_schema": 1, "last_page": "overview"}
+    )
+    fresh = MainWindow(ui_preferences_store=UiPreferencesStore(root))
+    light_profile = Profile.model_validate({"appearance": {"theme": "light"}})
+
+    fresh.state.set_profile(light_profile)
+
+    assert fresh.ui_preferences.theme == "dark"
+    assert fresh.state.profile.appearance.theme == "light"
+
+
+def test_theme_toggle_persists_without_mutating_output_profile(qapp, tmp_path):
+    from starcompanion.gui.preferences import UiPreferencesStore
+
+    root = tmp_path / "preferences"
+    fresh = MainWindow(ui_preferences_store=UiPreferencesStore(root))
+    profile_theme = fresh.state.profile.appearance.theme
+
+    fresh.toggle_theme()
+
+    assert PreferencesStore(root).load()["theme"] == "light"
+    assert fresh.state.profile.appearance.theme == profile_theme
+
+
+def test_last_navigation_page_round_trips(qapp, tmp_path):
+    from starcompanion.gui.preferences import UiPreferencesStore
+
+    root = tmp_path / "preferences"
+    first = MainWindow(ui_preferences_store=UiPreferencesStore(root))
+    first.shell.set_current_key("presentation")
+    first.close()
+
+    second = MainWindow(ui_preferences_store=UiPreferencesStore(root))
+
+    assert second.shell.current_key() == "presentation"
+
+
+def test_recovery_page_is_a_stable_portable_navigation_destination(qapp, tmp_path):
+    from starcompanion.gui.preferences import UiPreferencesStore
+
+    root = tmp_path / "preferences"
+    PreferencesStore(root).save(
+        {"theme": "dark", "ui_schema": 1, "last_page": "manual-apply"}
+    )
+
+    fresh = MainWindow(ui_preferences_store=UiPreferencesStore(root))
+
+    assert fresh.shell.current_key() == "manual-apply"
+    assert PreferencesStore(root).load()["last_page"] == "manual-apply"
+
+
+def test_corrupt_ui_preferences_are_reported_and_never_overwritten(qapp, tmp_path):
+    from starcompanion.gui.preferences import UiPreferencesStore
+
+    root = tmp_path / "preferences"
+    root.mkdir()
+    path = root / "preferences.json"
+    original = b'{"theme":"dark", "theme":"light"}'
+    path.write_bytes(original)
+
+    fresh = MainWindow(ui_preferences_store=UiPreferencesStore(root))
+    fresh.toggle_theme()
+
+    assert path.read_bytes() == original
+    assert fresh.start.preference_warning.isVisibleTo(fresh.start)
+    assert "left unchanged" in fresh.start.preference_warning.text()
 
 
 # --- state -------------------------------------------------------------------
@@ -140,7 +308,7 @@ def test_sample_contract_prefers_one_with_rewards(window):
 
 def test_source_summary_reports_what_was_loaded(community_rewards, window):
     text = window.source.summary_text()
-    assert "1 contracts" in text and "2 localization keys" in text
+    assert "1 contract" in text and "2 localization keys" in text
 
 
 def test_source_summary_before_loading(community_rewards, qapp):
@@ -152,6 +320,44 @@ def test_loading_bad_path_does_not_crash(community_rewards, window, tmp_path, mo
     window.source.path_edit.setText(str(tmp_path / "nope.ini"))
     window.source.load_contracts()
     assert window.state.contracts is not None  # previous data intact
+
+
+def test_provenance_page_renders_provider_health_and_aggregate_evidence(window):
+    from starcompanion.model import Evidence, ProviderCapability, ProviderStatus
+
+    contracts = window.state.contracts
+    contracts.contracts[0].evidence.append(
+        Evidence("local-dataforge-missions", "record", "path", "reward.rep", 100)
+    )
+    contracts.capabilities.append(
+        ProviderCapability(
+            provider="local-dataforge-missions",
+            version="2",
+            status=ProviderStatus.DEGRADED,
+            build_version="test-build",
+            facts_seen=12,
+            contracts_enhanced=1,
+            evidence_links=4,
+            diagnostics=("optional target missing",),
+            reward_facts=10,
+            matched_facts=8,
+            unmatched_facts=2,
+        )
+    )
+    window.state.set_contracts(contracts)
+
+    assert window.source.evidence_metric.value.text() == "1"
+    assert len(window.source.provider_cards) == 1
+    provider = window.source.provider_cards[0]
+    assert provider.status_label.text() == "Degraded"
+    assert provider.coverage.value.text() == "8 / 10"
+    assert provider.property("tone") == "warning"
+    assert "1 contracts enhanced" in provider.accessibleDescription()
+
+
+def test_provenance_page_has_truthful_empty_provider_state(window):
+    assert window.source.provider_empty.isVisibleTo(window.source)
+    assert window.source.provider_cards == []
 
 
 # --- fields tab --------------------------------------------------------------
@@ -179,6 +385,14 @@ def test_every_toggle_is_bound(community_rewards, window):
         before = getattr(window.state.profile.fields, name)
         box.setChecked(not before)
         assert getattr(window.state.profile.fields, name) is (not before)
+
+
+def test_contract_content_uses_summary_metrics_and_toggle_rows(window):
+    assert window.fields.enabled_metric.value.text() == "3 / 3"
+    assert all(
+        row.property("component") == "toggle-row"
+        for row in window.fields.rows.values()
+    )
 
 
 # --- formatting tab ----------------------------------------------------------
@@ -264,16 +478,16 @@ def test_community_rewards_can_be_switched_back_on(community_rewards, qapp):
     assert fresh.start.data_step.isVisibleTo(fresh.start)
 
 
-def test_step_numbering_has_no_gap_when_step_two_is_hidden(qapp):
-    from PySide6.QtWidgets import QGroupBox
-
+def test_overview_replaces_wizard_steps_with_status_cards(qapp):
     fresh = MainWindow()
-    titles = [
-        b.title() for b in fresh.start.findChildren(QGroupBox)
-        if b.isVisibleTo(fresh.start)
+    cards = [
+        fresh.start.game_card,
+        fresh.start.contract_card,
+        fresh.start.data_card,
+        fresh.start.look_card,
     ]
-    assert titles[0].startswith("Step 1")
-    assert titles[1].startswith("Step 2"), "must not jump from 1 to 3"
+    assert all(card.property("component") == "status-card" for card in cards)
+    assert fresh.start.hero.property("component") == "dashboard-hero"
 
 
 def test_title_prefix_changes_rendered_titles(window):
@@ -294,6 +508,441 @@ def test_formatting_widgets_refresh_when_profile_is_replaced(window):
     window.state.set_profile(load_builtin("rank-first"))
     assert window.formatting.prefix.currentData() == "org_rank"
     assert window.formatting.max_items.value() == 12
+
+
+def test_presentation_summary_tracks_existing_profile_controls(window):
+    window.formatting.prefix.setCurrentIndex(window.formatting.prefix.findData("org"))
+    window.formatting.max_items.setValue(9)
+
+    assert window.formatting.prefix_metric.value.text() == "Who is offering it"
+    assert window.formatting.length_metric.value.text() == "9"
+
+
+# --- accessibility ----------------------------------------------------------
+
+
+def test_target_page_controls_have_screen_reader_names_and_descriptions(window):
+    controls = [
+        *window.fields.boxes.values(),
+        window.formatting.default_tag,
+        window.formatting.per_field_toggle,
+        *window.formatting.field_tags.values(),
+        window.formatting.prefix,
+        window.formatting.bracket_rep,
+        window.formatting.bracket_bp,
+        window.formatting.max_items,
+        window.source.path_edit,
+        window.source.browse_button,
+        window.source.load_button,
+        window.source.load_cache_button,
+        window.source.save_cache_button,
+        window.templates.show_help,
+        window.templates.org,
+        window.templates.kind,
+        window.templates.reset_button,
+        window.templates.editor,
+        window.templates.preview,
+        window.editor.search,
+        window.editor.state_filter,
+        window.editor.source_filter,
+        window.editor.category_filter,
+        window.editor.provider_filter,
+        window.editor.table,
+        window.editor.stock_view,
+        window.editor.rendered_view,
+        window.editor.merged_editor,
+        window.editor.provenance_view,
+        window.editor.undo_button,
+        window.editor.redo_button,
+        window.editor.reset_button,
+        window.editor.reload_button,
+        window.editor.save_button,
+        window.start.channel_selector,
+        window.start.discover_channels_button,
+        window.blueprints.search,
+        window.blueprints.ownership_filter,
+        window.blueprints.category_filter,
+        window.blueprints.reward_filter,
+        window.blueprints.table,
+        window.blueprints.scan_button,
+        window.blueprints.reload_button,
+        window.blueprints.recover_button,
+        window.support.profile_builtin,
+        window.support.profile_open,
+        window.support.profile_save,
+        window.support.settings_preview,
+        window.support.export_settings_button,
+        window.support.import_settings_button,
+        window.support.apply_settings_button,
+        window.support.recover_settings_button,
+        window.support.diagnostics_view,
+        window.support.build_diagnostics_button,
+        window.support.export_diagnostics_button,
+        window.support.help_search,
+        window.support.help_results,
+        window.support.help_text,
+    ]
+
+    assert all(control.accessibleName() for control in controls)
+    assert all(control.accessibleDescription() for control in controls)
+    assert window.fields.accessibleName() == "Choose contract intelligence"
+    assert window.formatting.accessibleName() == "Shape the presentation"
+    assert window.source.accessibleName() == "Inspect local source evidence"
+    assert window.editor.accessibleName() == "Inspect and edit merged strings"
+
+
+def test_manual_apply_controls_have_screen_reader_names_and_descriptions(
+    expert_tabs, window
+):
+    controls = [
+        window.apply.target_edit,
+        window.apply.target_browse,
+        window.apply.stock_edit,
+        window.apply.stock_browse,
+        window.apply.mode,
+        window.apply.refresh_button,
+        window.apply.plan_view.filter,
+        window.apply.plan_view.tree,
+        window.apply.export_button,
+        window.apply.apply_button,
+        window.apply.backups,
+        window.apply.restore_button,
+        window.apply.resolve_button,
+    ]
+
+    assert all(control.accessibleName() for control in controls)
+    assert all(control.accessibleDescription() for control in controls)
+    assert window.apply.accessibleName() == "Review backups and recovery"
+
+
+def test_qt_accessibility_interfaces_publish_names_and_descriptions(window):
+    from PySide6.QtGui import QAccessible
+
+    representatives = [
+        window.shell._nav_buttons[1],
+        window.fields.boxes["reputation"],
+        window.formatting.default_tag,
+        window.source.path_edit,
+        window.start.hero,
+    ]
+    for widget in representatives:
+        interface = QAccessible.queryAccessibleInterface(widget)
+        assert interface is not None
+        assert interface.text(QAccessible.Text.Name)
+        assert interface.text(QAccessible.Text.Description)
+
+
+def test_alt_number_shortcuts_navigate_without_a_mouse(window, qapp):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    window.show()
+    window.activateWindow()
+    qapp.processEvents()
+    QTest.keyClick(
+        window,
+        Qt.Key.Key_3,
+        Qt.KeyboardModifier.AltModifier,
+    )
+    qapp.processEvents()
+
+    assert window.shell.current_key() == "presentation"
+    assert window.shell.page_title.text() == "Shape the presentation"
+    assert qapp.focusWidget() is window.shell._nav_buttons[2]
+
+
+def test_sidebar_supports_arrow_key_navigation(window, qapp):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    window.show()
+    window.activateWindow()
+    qapp.processEvents()
+    first = window.shell._nav_buttons[0]
+    first.setFocus()
+    qapp.processEvents()
+    QTest.keyClick(first, Qt.Key.Key_Down)
+    qapp.processEvents()
+
+    assert window.shell.current_key() == "content"
+    assert qapp.focusWidget() is window.shell._nav_buttons[1]
+
+    QTest.keyClick(window.shell._nav_buttons[1], Qt.Key.Key_End)
+    assert window.shell.current_key() == "support"
+    QTest.keyClick(window.shell._nav_buttons[-1], Qt.Key.Key_Home)
+    assert window.shell.current_key() == "overview"
+
+
+def test_contract_content_has_deterministic_keyboard_focus_order(window, qapp):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    window.shell.set_current_key("content")
+    window.show()
+    window.activateWindow()
+    qapp.processEvents()
+    controls = list(window.fields.boxes.values())
+    controls[0].setFocus()
+    qapp.processEvents()
+    QTest.keyClick(controls[0], Qt.Key.Key_Tab)
+    qapp.processEvents()
+
+    assert qapp.focusWidget() is controls[1]
+
+
+def test_contract_toggle_is_keyboard_operable(window, qapp):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    window.shell.set_current_key("content")
+    window.show()
+    window.activateWindow()
+    qapp.processEvents()
+    box = window.fields.boxes["reputation"]
+    before = box.isChecked()
+    box.setFocus()
+    QTest.keyClick(box, Qt.Key.Key_Space)
+
+    assert box.isChecked() is not before
+
+
+def test_presentation_has_deterministic_keyboard_focus_order(window, qapp):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    window.shell.set_current_key("presentation")
+    window.show()
+    window.activateWindow()
+    qapp.processEvents()
+    window.formatting.default_tag.setFocus()
+    qapp.processEvents()
+    QTest.keyClick(window.formatting.default_tag, Qt.Key.Key_Tab)
+    qapp.processEvents()
+
+    assert qapp.focusWidget() is window.formatting.per_field_toggle
+
+
+def test_provenance_tools_have_deterministic_keyboard_focus_order(window, qapp):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    window.shell.set_current_key("provenance")
+    window.show()
+    window.activateWindow()
+    qapp.processEvents()
+    window.source.path_edit.setFocus()
+    qapp.processEvents()
+    QTest.keyClick(window.source.path_edit, Qt.Key.Key_Tab)
+    qapp.processEvents()
+
+    assert qapp.focusWidget() is window.source.browse_button
+
+
+def test_advanced_editor_uses_virtualized_source_and_plan_models(window):
+    assert window.editor.model.rowCount() == 2
+    assert window.editor.table.indexWidget(window.editor.proxy.index(0, 0)) is None
+    snapshot = window.editor.model.snapshot
+    assert snapshot is not None
+    assert snapshot.plan.updated
+    record = snapshot.records[0]
+    assert record.stock
+    assert record.rendered
+    assert record.winner.kind.value == "generated"
+    assert window.editor.total_metric.value.text() == "2"
+
+
+def test_advanced_editor_debounces_edit_validation_and_supports_undo(window, qapp):
+    from PySide6.QtTest import QTest
+
+    window.shell.set_current_key("string-editor")
+    window.show()
+    window.activateWindow()
+    qapp.processEvents()
+    window.editor.table.selectRow(0)
+    qapp.processEvents()
+    record = window.editor._selected_records()[0]
+    window.editor.merged_editor.setPlainText("USER {{ literal }}")
+    assert record.key not in window.editor.document.values
+
+    QTest.qWait(300)
+    qapp.processEvents()
+
+    assert window.editor.document.values[record.key] == "USER {{ literal }}"
+    assert window.editor.undo_button.isEnabled()
+    window.editor.undo()
+    assert record.key not in window.editor.document.values
+
+
+def test_advanced_editor_search_is_debounced_and_filterable(window, qapp):
+    from PySide6.QtTest import QTest
+
+    modified = next(
+        record for record in window.editor.model.snapshot.records if record.modified
+    )
+    window.editor.search.setText(modified.key)
+    assert window.editor.proxy.query == ""
+    QTest.qWait(150)
+    qapp.processEvents()
+
+    assert window.editor.proxy.query == modified.key.casefold()
+    assert window.editor.proxy.rowCount() == 1
+    window.editor.state_filter.setCurrentIndex(
+        window.editor.state_filter.findData("modified")
+    )
+    assert window.editor.proxy.rowCount() == 1
+
+
+def test_advanced_editor_multi_reset_is_one_undoable_command(window, qapp, monkeypatch):
+    from PySide6.QtCore import QItemSelectionModel
+
+    keys = tuple(record.key for record in window.editor.model.snapshot.records)
+    window.editor.document.load({key: f"user {number}" for number, key in enumerate(keys)})
+    window.editor.model.rebuild()
+    for row in range(window.editor.proxy.rowCount()):
+        window.editor.table.selectionModel().select(
+            window.editor.proxy.index(row, 0),
+            QItemSelectionModel.SelectionFlag.Select
+            | QItemSelectionModel.SelectionFlag.Rows,
+        )
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+
+    window.editor.reset_selected()
+
+    assert window.editor.document.values == {}
+    assert len(window.editor.document.commands[-1].changes) == 2
+    window.editor.undo()
+    assert set(window.editor.document.values) == set(keys)
+
+
+def test_editor_user_ini_load_and_save_never_run_on_gui_thread(
+    window, qapp, tmp_path, monkeypatch
+):
+    from PySide6.QtCore import QThread
+    from PySide6.QtTest import QTest
+    from starcompanion.user_edits import UserEditStore
+
+    load_threads = []
+    save_threads = []
+    original_load = UserEditStore.load
+    original_save = UserEditStore.save
+
+    def tracked_load(store):
+        load_threads.append(QThread.currentThread())
+        return original_load(store)
+
+    def tracked_save(store, values, **kwargs):
+        save_threads.append(QThread.currentThread())
+        return original_save(store, values, **kwargs)
+
+    monkeypatch.setattr(UserEditStore, "load", tracked_load)
+    monkeypatch.setattr(UserEditStore, "save", tracked_save)
+    target = tmp_path / "LIVE" / "data" / "Localization" / "english" / "global.ini"
+    window.state.set_target(target)
+    for _ in range(300):
+        qapp.processEvents()
+        if not window.editor._jobs and not window.editor.scope_timer.isActive():
+            break
+        QTest.qWait(10)
+    assert window.state.user_overrides_ready
+
+    key = window.editor.model.snapshot.records[0].key
+    window.editor.document.set_value(key, "Saved user value")
+    window.editor.model.rebuild()
+    window.editor._after_model_change()
+    window.editor.save_user_edits()
+    for _ in range(300):
+        qapp.processEvents()
+        if not window.editor._jobs:
+            break
+        QTest.qWait(10)
+
+    assert load_threads and save_threads
+    assert all(thread is not qapp.thread() for thread in (*load_threads, *save_threads))
+    assert window.state.user_overrides == {key: "Saved user value"}
+    assert window.state.effective_values()[key] == "Saved user value"
+
+
+def test_editor_refuses_to_overwrite_external_user_ini_change(
+    window, qapp, tmp_path
+):
+    from PySide6.QtTest import QTest
+    from starcompanion.user_edits import UserEditStore
+
+    target = tmp_path / "LIVE" / "data" / "Localization" / "english" / "global.ini"
+    window.state.set_target(target)
+    for _ in range(300):
+        qapp.processEvents()
+        if not window.editor._jobs and not window.editor.scope_timer.isActive():
+            break
+        QTest.qWait(10)
+    store = UserEditStore("LIVE", "english")
+    store.save({"External_Key": "external"})
+    key = window.editor.model.snapshot.records[0].key
+    window.editor.document.set_value(key, "draft")
+    window.editor.model.rebuild()
+    window.editor._after_model_change()
+
+    window.editor.save_user_edits()
+    for _ in range(300):
+        qapp.processEvents()
+        if not window.editor._jobs:
+            break
+        QTest.qWait(10)
+
+    assert store.load() == {"External_Key": "external"}
+    assert "changed outside this editor" in window.editor.status.text()
+    assert window.editor.document.dirty
+
+
+def test_advanced_editor_has_deterministic_keyboard_focus_order(window, qapp):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    window.shell.set_current_key("string-editor")
+    window.show()
+    window.activateWindow()
+    qapp.processEvents()
+    window.editor.search.setFocus()
+    QTest.keyClick(window.editor.search, Qt.Key.Key_Tab)
+    qapp.processEvents()
+
+    assert qapp.focusWidget() is window.editor.state_filter
+
+
+def test_custom_wording_has_deterministic_keyboard_focus_order(window, qapp):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    window.shell.set_current_key("templates")
+    window.show()
+    window.activateWindow()
+    qapp.processEvents()
+    window.templates.show_help.setFocus()
+    QTest.keyClick(window.templates.show_help, Qt.Key.Key_Tab)
+    qapp.processEvents()
+
+    assert qapp.focusWidget() is window.templates.org
+
+
+def test_manual_apply_has_deterministic_keyboard_focus_order(
+    expert_tabs, window, qapp
+):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    window.shell.set_current_key("manual-apply")
+    window.show()
+    window.activateWindow()
+    qapp.processEvents()
+    window.apply.target_edit.setFocus()
+    QTest.keyClick(window.apply.target_edit, Qt.Key.Key_Tab)
+    qapp.processEvents()
+
+    assert qapp.focusWidget() is window.apply.target_browse
 
 
 # --- templates tab -----------------------------------------------------------
@@ -350,6 +999,25 @@ def test_template_override_is_scoped_to_its_org(window, tmp_path):
     assert values["Beta_y_title"] != "ALPHA ONLY"
 
 
+def test_custom_wording_uses_reusable_summary_and_section_components(window):
+    window.templates.editor.setPlainText("CUSTOM {{ base }}")
+
+    assert window.templates.override_metric.value.text() == "1"
+    assert window.templates.selection_metric.value.text() == "Custom"
+    assert window.templates.preview_metric.value.text().isdigit()
+    assert window.templates.editor_section.property("component") == "section-card"
+    assert window.templates.preview_section.property("component") == "section-card"
+    assert window.templates.status.property("tone") == "success"
+
+
+def test_invalid_custom_wording_is_announced_as_blocked(window):
+    window.templates.editor.setPlainText("{{ undefined_value }}")
+
+    assert window.templates.preview_metric.value.text() == "Invalid"
+    assert window.templates.status.property("tone") == "danger"
+    assert "nothing can be applied" in window.templates.preview_metric.accessibleDescription()
+
+
 # --- apply tab ---------------------------------------------------------------
 
 
@@ -369,6 +1037,134 @@ def test_plan_reports_counts_and_writes_nothing(window, target):
     assert result is not None and result.updated
     assert target.read_bytes() == before
     assert "updated" in window.apply.plan_label.text()
+
+
+def test_manual_preview_is_a_bound_serializable_c3_plan(expert_tabs, window, target):
+    from starcompanion.inject import InjectionPlan
+
+    window.apply.target_edit.setText(str(target))
+    result = window.apply.refresh_plan()
+    restored = InjectionPlan.loads(result.dumps())
+
+    assert result.plan_id and restored.plan_id == result.plan_id
+    assert result.target == str(target.resolve())
+    assert result.target_fingerprint.sha256
+    assert result.desired_sha256
+    assert result.source_precedence == [
+        "stock", "language-overlay", "import", "generated", "user"
+    ]
+    assert any(
+        source["winner"] == "profile:default" and source["winner_kind"] == "generated"
+        for source in result.sources.values()
+    )
+    assert window.apply.plan_view.changed_metric.value.text() != "—"
+    assert window.apply.plan_detail.topLevelItemCount() > 0
+
+
+def test_external_target_change_invalidates_reviewed_manual_apply(
+    expert_tabs, window, target, monkeypatch
+):
+    original = target.read_bytes()
+    window.apply.target_edit.setText(str(target))
+    result = window.apply.refresh_plan()
+    assert result is not None
+    external = original + b"External=preserve me\n"
+    target.write_bytes(external)
+    monkeypatch.setattr(window.apply, "confirm", lambda result: True)
+    failures = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: failures.append(args))
+
+    window.apply.apply_changes()
+
+    assert failures
+    assert target.read_bytes() == external
+    assert not (target.parent / "backups" / ".apply-journal.json").exists()
+
+
+def test_safe_interrupted_manual_write_is_guided_and_resolvable(
+    expert_tabs, window, target, tmp_path, monkeypatch
+):
+    from starcompanion.transactions import TransactionJournal, bytes_sha256, fingerprint
+
+    window.state.backup_dir = tmp_path / "backups"
+    window.apply.target_edit.setText(str(target))
+    journal = TransactionJournal(
+        window.state.backup_dir / ".apply-journal.json",
+        window.state.backup_dir / "last-operation.json",
+    )
+    before = fingerprint(target)
+    journal.begin(
+        operation="apply",
+        plan_id="a" * 64,
+        target=target,
+        before=before,
+        after_sha256=bytes_sha256(b"different intended result"),
+    )
+    window.apply.refresh_recovery()
+
+    assert window.apply.recovery_metric.value.text() == "Not Applied"
+    assert window.apply.resolve_button.isEnabled()
+    assert not window.apply.apply_button.isEnabled()
+
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
+    window.apply.resolve_recovery()
+
+    assert not journal.journal_path.exists()
+    assert window.apply.recovery_metric.value.text() == "Clean"
+
+
+def test_unknown_interrupted_target_state_blocks_automatic_recovery(
+    expert_tabs, window, target, tmp_path
+):
+    from starcompanion.transactions import TransactionJournal, bytes_sha256, fingerprint
+
+    window.state.backup_dir = tmp_path / "backups"
+    window.apply.target_edit.setText(str(target))
+    journal = TransactionJournal(
+        window.state.backup_dir / ".apply-journal.json",
+        window.state.backup_dir / "last-operation.json",
+    )
+    journal.begin(
+        operation="apply",
+        plan_id="b" * 64,
+        target=target,
+        before=fingerprint(target),
+        after_sha256=bytes_sha256(b"intended"),
+    )
+    target.write_bytes(b"unknown external state")
+
+    window.apply.refresh_recovery()
+
+    assert window.apply.recovery_metric.value.text() == "Attention"
+    assert window.apply.recovery_notice.property("tone") == "danger"
+    assert not window.apply.resolve_button.isEnabled()
+    assert not window.apply.restore_button.isEnabled()
+
+
+def test_manual_recovery_lists_only_target_scoped_ordinary_backup_files(
+    expert_tabs, window, target, tmp_path
+):
+    directory = tmp_path / "backups"
+    directory.mkdir()
+    valid = directory / "global.20260804-120000.ini"
+    valid.write_bytes(target.read_bytes())
+    (directory / "other.20260804-120000.ini").write_bytes(target.read_bytes())
+    outside = tmp_path / "outside.ini"
+    outside.write_bytes(target.read_bytes())
+    linked = directory / "global.20260804-130000.ini"
+    try:
+        linked.symlink_to(outside)
+    except OSError:
+        linked = None
+
+    window.state.backup_dir = directory
+    window.apply.target_edit.setText(str(target))
+    window.apply.refresh_recovery()
+
+    assert window.apply.backups.count() == 1
+    assert str(valid.resolve()) in window.apply.backups.item(0).text()
+    if linked is not None:
+        assert str(linked) not in window.apply.backups.item(0).text()
 
 
 def test_plan_without_a_target_explains_rather_than_failing(expert_tabs, window):
@@ -407,7 +1203,8 @@ def test_accepting_the_confirmation_writes_and_backs_up(expert_tabs, window, tar
 
     assert target.read_bytes() != before
     assert LocalizationFile.load(target).get("Other") == "untouched"
-    assert [p.read_bytes() for p in (tmp_path / "backups").iterdir()] == [before]
+    assert [p.read_bytes() for p in (tmp_path / "backups").glob("*.ini")] == [before]
+    assert (tmp_path / "backups" / "last-operation.json").is_file()
 
 
 def test_backup_list_and_restore_round_trip(expert_tabs, window, target, tmp_path, monkeypatch):
@@ -426,6 +1223,8 @@ def test_backup_list_and_restore_round_trip(expert_tabs, window, target, tmp_pat
     window.apply.restore_backup()
 
     assert target.read_bytes() == original
+    assert len(list((tmp_path / "backups").glob("*.ini"))) == 2
+    assert window.apply._journal().last_operation()["operation"] == "rollback"
 
 
 def test_game_install_target_shows_a_warning(expert_tabs, window, tmp_path):
@@ -629,6 +1428,7 @@ def test_update_reads_the_game_when_contracts_are_missing(qapp, fake_game, monke
 def test_guided_update_creates_clean_install_override(window, tmp_path, monkeypatch):
     """The normal install has stock strings in Data.p4k and no loose INI."""
     import p4kbuilder as B
+    from PySide6.QtTest import QTest
     from starcompanion.install import GameInstall
 
     root = tmp_path / "StarCitizen" / "LIVE"
@@ -641,6 +1441,11 @@ def test_guided_update_creates_clean_install_override(window, tmp_path, monkeypa
     install = GameInstall(root=root, channel="LIVE", version="test")
     window.start.install = install
     window.start._adopt_install()
+    for _ in range(300):
+        QApplication.processEvents()
+        if window.state.user_overrides_ready:
+            break
+        QTest.qWait(10)
 
     monkeypatch.setattr(
         QMessageBox,
@@ -888,15 +1693,273 @@ def test_merge_modes_are_described_by_consequence(expert_tabs, window):
     assert any("leave anything else in the file alone" in text for text in shown)
 
 
-def test_advanced_apply_is_hidden_by_default(qapp):
-    """The Start tab covers the whole job; this screen is for rare cases."""
+def test_backup_and_recovery_is_available_by_default(qapp):
+    """G2 makes guarded restore discoverable without enabling expert mode."""
     tabs_shown = [
         MainWindow().tabs.tabText(i) for i in range(MainWindow().tabs.count())
     ]
-    assert "Advanced: apply" not in tabs_shown
+    assert "Backup and recovery" in tabs_shown
 
 
 def test_advanced_apply_can_be_switched_back_on(expert_tabs, qapp):
     fresh = MainWindow()
     tabs_shown = [fresh.tabs.tabText(i) for i in range(fresh.tabs.count())]
-    assert "Advanced: apply" in tabs_shown
+    assert "Backup and recovery" in tabs_shown
+
+
+# --- G2 onboarding, ownership, settings, diagnostics, and help ------------
+
+
+def _blueprint_contracts():
+    from starcompanion.model import BlueprintPool, Contract, ContractSet, Org, Reward
+
+    org = Org("local", "Local Mission Giver")
+    contract = Contract(
+        "Local_Blueprint_Mission",
+        org,
+        "Delivery",
+        reward=Reward(
+            blueprint_pools=[
+                BlueprintPool(
+                    items=["Coda Pistol", "Norfield"],
+                    item_ids={
+                        "Coda Pistol": "11111111-1111-1111-1111-111111111111",
+                        "Norfield": "22222222-2222-2222-2222-222222222222",
+                    },
+                    item_categories={"Coda Pistol": "weapons", "Norfield": "components"},
+                )
+            ]
+        ),
+    )
+    return ContractSet([contract], {org.id: org})
+
+
+def _wait_for_jobs(qapp, owner, *, attempts=400):
+    from PySide6.QtTest import QTest
+
+    for _ in range(attempts):
+        qapp.processEvents()
+        if not owner._jobs:
+            return
+        QTest.qWait(10)
+    pytest.fail("background GUI operation did not finish")
+
+
+def test_g2_discovers_and_switches_installed_channels_off_the_gui_thread(
+    window, qapp, tmp_path, monkeypatch
+):
+    from PySide6.QtCore import QThread
+    from starcompanion.install import GameInstall
+
+    roots = []
+    for channel in ("LIVE", "PTU"):
+        root = tmp_path / "StarCitizen" / channel
+        root.mkdir(parents=True)
+        (root / "Data.p4k").write_bytes(b"fixture")
+        roots.append(GameInstall(root, channel, "test"))
+    threads = []
+
+    def discover(**kwargs):
+        threads.append(QThread.currentThread())
+        kwargs["checkpoint"]()
+        return roots
+
+    monkeypatch.setattr("starcompanion.install.find_installs", discover)
+    window.start.discover_channels()
+    _wait_for_jobs(qapp, window.start)
+
+    assert window.start.channel_selector.count() == 2
+    assert threads and all(thread is not qapp.thread() for thread in threads)
+    window.start.channel_selector.setCurrentIndex(1)
+    assert window.start.install.channel == "PTU"
+    assert window.state.target == roots[1].localization()
+
+
+def test_g2_blueprint_tracker_uses_c4_queries_and_background_log_scan(
+    window, qapp, tmp_path, monkeypatch
+):
+    from starcompanion.blueprints import OwnershipFilter
+    from starcompanion.ownership import OwnershipStore
+
+    root = tmp_path / "StarCitizen" / "LIVE"
+    root.mkdir(parents=True)
+    target = root / "data" / "Localization" / "english" / "global.ini"
+    window.state.set_contracts(_blueprint_contracts())
+    window.state.set_target(target)
+    window.blueprints.load_ownership()
+    _wait_for_jobs(qapp, window.blueprints)
+    assert window.blueprints.model.rowCount() == 2
+
+    (root / "Game.log").write_text(
+        '<2026-03-26T17:15:41.684Z> [Notice] <SHUDEvent_OnNotification> '
+        'Added notification "Received Blueprint: Coda Pistol: " [23] to queue. '
+        '[Missions][Comms]\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+    window.blueprints.scan_logs()
+    _wait_for_jobs(qapp, window.blueprints)
+    # The scan-preview success callback starts the revision-checked save job.
+    _wait_for_jobs(qapp, window.blueprints)
+
+    saved = OwnershipStore("LIVE").load()
+    assert len(saved.records) == 1
+    window.blueprints.ownership_filter.setCurrentIndex(
+        window.blueprints.ownership_filter.findData(OwnershipFilter.OWNED.value)
+    )
+    assert window.blueprints.model.rowCount() == 1
+    assert window.blueprints.model.rows[0].entry.name == "Coda Pistol"
+
+
+def test_g2_support_builds_inspectable_redacted_diagnostics_in_background(window, qapp):
+    from PySide6.QtCore import QThread
+    import starcompanion.gui.tabs.support as support_module
+
+    threads = []
+    original = support_module.build_diagnostics
+
+    def tracked(*args, **kwargs):
+        threads.append(QThread.currentThread())
+        return original(*args, **kwargs)
+
+    support_module.build_diagnostics = tracked
+    try:
+        window.support.build_report()
+        _wait_for_jobs(qapp, window.support)
+    finally:
+        support_module.build_diagnostics = original
+
+    preview = window.support.diagnostics_view.toPlainText()
+    assert threads and all(thread is not qapp.thread() for thread in threads)
+    assert '"absolute_paths": "redacted"' in preview
+    assert '"ownership": "excluded"' in preview
+    assert str(Path.home()) not in preview
+    assert window.support.export_diagnostics_button.isEnabled()
+
+
+def test_g2_settings_export_uses_c5_manifest_archive_in_background(
+    window, qapp, tmp_path, monkeypatch
+):
+    from PySide6.QtWidgets import QFileDialog
+    from starcompanion.portability import plan_settings_import
+    from starcompanion.user_edits import UserEditStore
+
+    UserEditStore("LIVE", "english").save({"User_Key": "private wording"})
+    destination = tmp_path / "portable.zip"
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (str(destination), "ZIP (*.zip)"),
+    )
+    window.support.export_settings()
+    _wait_for_jobs(qapp, window.support)
+
+    assert destination.is_file()
+    plan = plan_settings_import(destination, tmp_path / "restore")
+    assert any(item.archive_path.endswith("user.ini") for item in plan.items)
+    assert "private wording" not in window.support.status.text()
+
+
+def test_g2_settings_import_is_preview_first_then_reloads_verified_preferences(
+    window, qapp, tmp_path, monkeypatch
+):
+    from PySide6.QtCore import QThread
+    from PySide6.QtWidgets import QFileDialog
+    from starcompanion.portability import (
+        PreferencesStore,
+        plan_settings_export,
+        write_settings_archive,
+    )
+
+    source = tmp_path / "source-settings"
+    PreferencesStore(source).save(
+        {"theme": "light", "ui_schema": 1, "last_page": "support"}
+    )
+    archive = tmp_path / "incoming.zip"
+    write_settings_archive(plan_settings_export(source), archive)
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileName",
+        lambda *args, **kwargs: (str(archive), "ZIP (*.zip)"),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+
+    window.support.preview_settings_import()
+    _wait_for_jobs(qapp, window.support)
+    assert "CHANGE" in window.support.settings_preview.toPlainText()
+    assert window.support.apply_settings_button.isEnabled()
+    assert window.ui_preferences.theme == "dark"
+
+    load_threads = []
+    original_load = PreferencesStore.load
+
+    def tracked_load(store):
+        load_threads.append(QThread.currentThread())
+        return original_load(store)
+
+    monkeypatch.setattr(PreferencesStore, "load", tracked_load)
+    window.support.apply_settings()
+    _wait_for_jobs(qapp, window.support)
+
+    assert window.ui_preferences.theme == "light"
+    assert window.support._import_plan is None
+    assert load_threads and all(thread is not qapp.thread() for thread in load_threads)
+
+
+def test_g2_damaged_ownership_requires_explicit_validated_backup_recovery(
+    window, qapp, tmp_path, monkeypatch
+):
+    from starcompanion.ownership import OwnershipState, OwnershipStore
+
+    store = OwnershipStore("LIVE")
+    state = OwnershipState("LIVE")
+    store.save(state)
+    store.save(state)
+    store.path.write_text("{damaged", encoding="utf-8")
+    target = tmp_path / "StarCitizen" / "LIVE" / "data" / "Localization" / "english" / "global.ini"
+    window.state.set_target(target)
+    window.blueprints.load_ownership()
+    _wait_for_jobs(qapp, window.blueprints)
+
+    assert window.blueprints.ownership is None
+    assert window.blueprints.recover_button.isVisibleTo(window.blueprints)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+    window.blueprints.recover_ownership()
+    _wait_for_jobs(qapp, window.blueprints)
+
+    assert window.blueprints.ownership is not None
+    assert not window.blueprints.recover_button.isVisibleTo(window.blueprints)
+
+
+def test_g2_offline_help_searches_bundled_text_without_network(window, qapp):
+    from PySide6.QtTest import QTest
+
+    window.support.pages.setCurrentIndex(3)
+    window.support.help_search.setText("telemetry")
+    QTest.qWait(150)
+    qapp.processEvents()
+
+    assert window.support.help_results.count() >= 1
+    assert "no telemetry" in window.support.help_text.toPlainText().casefold()
+
+
+def test_g2_profile_manager_keeps_output_profile_separate_from_ui_preferences(window):
+    before_theme = window.ui_preferences.theme
+    window.support.profile_builtin.setCurrentIndex(
+        window.support.profile_builtin.findData("minimal")
+    )
+
+    assert window.state.profile.name == "minimal"
+    assert window.ui_preferences.theme == before_theme

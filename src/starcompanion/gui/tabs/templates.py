@@ -10,7 +10,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QGroupBox,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
@@ -24,6 +24,7 @@ from PySide6.QtCore import Qt
 from ...config import OrgTemplates
 from ...model import StringKind
 from ...render import TemplateRenderError
+from ..components import MetricTile, NoticeBanner, SectionCard, Tone
 from ..state import AppState
 
 INTRO = (
@@ -64,52 +65,78 @@ class TemplatesTab(QWidget):
         super().__init__(parent)
         self.state = state
         self._loading = False
+        self.setAccessibleName("Custom wording editor")
+        self.setAccessibleDescription(
+            "Advanced per-mission-giver template editor with a read-only live preview."
+        )
 
         self.org = QComboBox()
+        self.org.setAccessibleName("Mission giver")
+        self.org.setAccessibleDescription("Select which mission giver template to edit.")
         self.org.currentIndexChanged.connect(self._reload_editor)
 
         self.kind = QComboBox()
+        self.kind.setAccessibleName("Contract string kind")
+        self.kind.setAccessibleDescription("Choose title or description wording.")
         self.kind.addItem("Contract title", StringKind.TITLE)
         self.kind.addItem("Contract description", StringKind.DESC)
         self.kind.currentIndexChanged.connect(self._reload_editor)
 
-        reset = QPushButton("Use the normal wording")
-        reset.clicked.connect(self._reset)
+        self.reset_button = QPushButton("Restore generated wording")
+        self.reset_button.setAccessibleName("Restore generated wording")
+        self.reset_button.setAccessibleDescription(
+            "Remove this custom template and restore generated default wording."
+        )
+        self.reset_button.clicked.connect(self._reset)
 
         chooser = QHBoxLayout()
         chooser.addWidget(QLabel("Mission giver"))
         chooser.addWidget(self.org, 1)
-        chooser.addWidget(QLabel("Change the"))
+        chooser.addWidget(QLabel("Text type"))
         chooser.addWidget(self.kind)
-        chooser.addWidget(reset)
+        chooser.addWidget(self.reset_button)
 
         self.editor = QPlainTextEdit()
+        self.editor.setAccessibleName("Custom wording pattern")
+        self.editor.setAccessibleDescription(
+            "Edit the Jinja template for the selected mission giver and string kind."
+        )
         self.editor.setPlaceholderText(PLACEHOLDER)
         self.editor.textChanged.connect(self._on_edited)
 
         self.preview = QPlainTextEdit()
+        self.preview.setAccessibleName("Rendered contract preview")
+        self.preview.setAccessibleDescription(
+            "Read-only preview generated from a real locally loaded contract."
+        )
         self.preview.setReadOnly(True)
         self.preview.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
 
-        self.status = QLabel()
-        self.status.setWordWrap(True)
+        self.status = NoticeBanner(tone=Tone.INFO)
 
-        editor_box = QGroupBox("Your pattern")
-        editor_layout = QVBoxLayout(editor_box)
-        editor_layout.addWidget(self.editor)
+        self.editor_section = SectionCard(
+            "Wording pattern",
+            "Empty uses generated wording. Template syntax is validated live and never written directly.",
+        )
+        self.editor_section.add_widget(self.editor, 1)
 
-        preview_box = QGroupBox("What a real contract will say")
-        preview_layout = QVBoxLayout(preview_box)
-        preview_layout.addWidget(self.preview)
-        preview_layout.addWidget(self.status)
+        self.preview_section = SectionCard(
+            "Rendered contract preview",
+            "A read-only sample using the current profile and locally loaded contract data.",
+        )
+        self.preview_section.add_widget(self.preview, 1)
+        self.preview_section.add_widget(self.status)
 
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        splitter.addWidget(editor_box)
-        splitter.addWidget(preview_box)
-        splitter.setSizes([200, 300])
+        # Start narrow so the page has a small minimum width; resizeEvent
+        # promotes this to the side-by-side desktop layout when space permits.
+        self.splitter = QSplitter(Qt.Orientation.Vertical)
+        self.splitter.addWidget(self.editor_section)
+        self.splitter.addWidget(self.preview_section)
+        self.splitter.setSizes([320, 320])
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.setMinimumHeight(640)
 
-        intro = QLabel(INTRO)
-        intro.setWordWrap(True)
+        intro = NoticeBanner(INTRO, tone=Tone.INFO)
 
         self.explainer = QLabel(EXPLAINER)
         self.explainer.setWordWrap(True)
@@ -117,18 +144,61 @@ class TemplatesTab(QWidget):
         self.explainer.setVisible(False)
 
         self.show_help = QCheckBox("Show me how this works")
+        self.show_help.setAccessibleName("Show custom-wording help")
+        self.show_help.setAccessibleDescription("Reveal template syntax examples.")
         self.show_help.toggled.connect(self.explainer.setVisible)
+
+        self.override_metric = MetricTile("Custom scopes")
+        self.selection_metric = MetricTile("Selected wording")
+        self.preview_metric = MetricTile("Preview length")
+        metrics = QGridLayout()
+        metrics.setSpacing(8)
+        metrics.addWidget(self.override_metric, 0, 0)
+        metrics.addWidget(self.selection_metric, 0, 1)
+        metrics.addWidget(self.preview_metric, 0, 2)
+
+        self.context_section = SectionCard(
+            "Wording context",
+            "Custom wording is scoped to one mission giver and title or description. "
+            "Other contracts continue using the profile's generated wording.",
+        )
+        self.context_section.add_layout(chooser)
+        self.context_section.add_widget(self.show_help)
+        self.context_section.add_widget(self.explainer)
 
         layout = QVBoxLayout(self)
         layout.addWidget(intro)
-        layout.addWidget(self.show_help)
-        layout.addWidget(self.explainer)
-        layout.addLayout(chooser)
-        layout.addWidget(splitter, 1)
+        layout.addLayout(metrics)
+        layout.addWidget(self.context_section)
+        layout.addWidget(self.splitter, 1)
+
+        focus_order = [
+            self.show_help,
+            self.org,
+            self.kind,
+            self.reset_button,
+            self.editor,
+            self.preview,
+        ]
+        for current, following in zip(focus_order, focus_order[1:]):
+            QWidget.setTabOrder(current, following)
 
         state.contractsChanged.connect(self.refresh_orgs)
         state.profileChanged.connect(self.update_preview)
         self.refresh_orgs()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        # Use the shell width, not this page's current size hint: the wide
+        # splitter itself can otherwise keep a narrow viewport artificially wide.
+        wide = self.window().width() >= 1180
+        orientation = (
+            Qt.Orientation.Horizontal if wide else Qt.Orientation.Vertical
+        )
+        if self.splitter.orientation() != orientation:
+            self.splitter.setOrientation(orientation)
+            self.splitter.setMinimumHeight(300 if wide else 640)
+            self.splitter.setSizes([480, 520] if wide else [320, 320])
+        super().resizeEvent(event)
 
     # --- org list ------------------------------------------------------------
 
@@ -204,15 +274,37 @@ class TemplatesTab(QWidget):
     # --- preview -------------------------------------------------------------
 
     def update_preview(self) -> None:
+        custom_count = sum(
+            int(entry.title is not None) + int(entry.desc is not None)
+            for entry in self.state.profile.templates.values()
+        )
+        self.override_metric.set_value(
+            f"{custom_count:,}",
+            "mission-giver/title scopes",
+        )
+        selected_templates = self.state.profile.templates.get(self.org_id or "")
+        selected_source = (
+            getattr(selected_templates, self.string_kind.value, None)
+            if selected_templates
+            else None
+        )
+        self.selection_metric.set_value(
+            "Custom" if selected_source else "Generated",
+            self.kind.currentText().lower(),
+        )
         contract = self.state.sample_contract(self.org_id)
         if contract is None:
             self.preview.setPlainText("")
-            self.status.setText("Read your contracts on the Start tab to see a preview here.")
+            self.preview_metric.set_value("—", "contract data not loaded")
+            self.status.set_tone(Tone.INFO)
+            self.status.setText("Read local contracts on Overview to activate this preview.")
             return
 
         key = contract.key(self.string_kind)
         if key is None:
             self.preview.setPlainText("")
+            self.preview_metric.set_value("—", "no matching localization key")
+            self.status.set_tone(Tone.WARNING)
             self.status.setText(
                 f"{contract.id} has no {self.string_kind.value} string to preview."
             )
@@ -223,8 +315,13 @@ class TemplatesTab(QWidget):
         except TemplateRenderError as exc:
             # Expected while typing; show it rather than interrupting.
             self.preview.setPlainText("")
+            self.preview_metric.set_value("Invalid", "nothing can be applied")
+            self.status.set_tone(Tone.DANGER)
             self.status.setText(f"That pattern is not valid yet: {exc.cause}")
             return
 
         self.preview.setPlainText(value)
-        self.status.setText(f"{key}  ({len(value)} characters)")
+        self.preview_metric.set_value(f"{len(value):,}", "characters")
+        self.status.set_tone(Tone.SUCCESS)
+        source = "custom pattern" if selected_source else "generated profile wording"
+        self.status.setText(f"Preview ready from {source}: {key}")

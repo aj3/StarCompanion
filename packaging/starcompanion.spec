@@ -1,4 +1,4 @@
-# PyInstaller spec: one-file Windows build of the GUI.
+# PyInstaller spec: one-file Windows and Ubuntu builds of the GUI.
 #
 #   pip install pyinstaller
 #   pyinstaller packaging/starcompanion.spec
@@ -40,6 +40,7 @@ a = Analysis(
         "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets",
         "PySide6.Qt3DCore", "PySide6.QtCharts", "PySide6.QtDataVisualization",
         "PySide6.QtMultimedia", "PySide6.QtPdf", "PySide6.QtBluetooth",
+        "PySide6.QtNetwork",
         "tkinter", "matplotlib", "numpy",
     ],
     noarchive=False,
