@@ -120,6 +120,9 @@ jobs:
   build-windows:
     needs: [test, supply-chain]
     runs-on: windows-latest
+    outputs:
+      artifact-id: ${{ steps.upload-windows.outputs.artifact-id }}
+      signing-version: ${{ steps.version.outputs.signing-version }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -139,38 +142,69 @@ jobs:
       - name: Prove release dependencies install without an index
         run: |
           python -m venv build\offline-build
-          build\offline-build\Scripts\pip.exe install --no-index --find-links build\wheelhouse --require-hashes -r requirements\build.txt
+          .\build\offline-build\Scripts\pip.exe install --no-index --find-links build\wheelhouse --require-hashes -r requirements\build.txt
 
       - name: Verify Apache package metadata and bundled notices
         run: |
-          build\offline-build\Scripts\pip.exe wheel --no-deps --no-build-isolation --wheel-dir build\package-check .
-          build\offline-build\Scripts\python.exe packaging\verify_wheel_license.py build\package-check
+          .\build\offline-build\Scripts\pip.exe wheel --no-deps --no-build-isolation --wheel-dir build\package-check .
+          .\build\offline-build\Scripts\python.exe packaging\verify_wheel_license.py build\package-check
+
+      - name: Generate constrained Windows metadata
+        id: version
+        shell: pwsh
+        run: |
+          $version = & .\build\offline-build\Scripts\python.exe packaging\write_version_info.py --print-signing-version
+          "signing-version=$version" >> $env:GITHUB_OUTPUT
 
       - name: Build one-file executable
-        run: build\offline-build\Scripts\pyinstaller.exe packaging\starcompanion.spec
+        run: .\build\offline-build\Scripts\pyinstaller.exe packaging\starcompanion.spec
+
+      - name: Verify constrained Windows metadata
+        shell: pwsh
+        run: |
+          $expectedVersion = "${{ steps.version.outputs.signing-version }}"
+          $expected = @{
+            "StarCompanion.exe" = "StarCompanion.exe"
+            "starcompanion-cli.exe" = "starcompanion-cli.exe"
+          }
+          foreach ($name in $expected.Keys) {
+            $info = (Get-Item -LiteralPath "dist\$name").VersionInfo
+            if ($info.ProductName -ne "StarCompanion" -or
+                $info.ProductVersion -ne $expectedVersion -or
+                $info.FileVersion -ne $expectedVersion -or
+                $info.CompanyName -ne "StarCompanion contributors" -or
+                $info.OriginalFilename -ne $expected[$name]) {
+              throw "Unexpected Windows version metadata for $name"
+            }
+          }
 
       # Run the built CLI itself, not the source: this proves the frozen
       # bundle can find its templates and profiles.
       - name: Smoke test the built CLI
         run: |
-          dist\starcompanion-cli.exe profiles
-          dist\starcompanion-cli.exe --help
+          .\dist\starcompanion-cli.exe profiles
+          .\dist\starcompanion-cli.exe --help
           python packaging\smoke_fixture.py build\smoke-install\LIVE
-          dist\starcompanion-cli.exe import --install build\smoke-install\LIVE --out build\smoke-cache.json
+          .\dist\starcompanion-cli.exe import --install build\smoke-install\LIVE --out build\smoke-cache.json
 
       - name: Verify packaged workflow with network access denied
-        run: python packaging\verify_offline.py --manifest dist\release-manifest.json
+        run: |
+          .\build\offline-build\Scripts\python.exe packaging\collect_licenses.py
+          python packaging\verify_offline.py --manifest dist\release-manifest.json
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        id: upload-windows
         with:
           name: StarCompanion-windows-unsigned
           path: |
             dist/StarCompanion.exe
             dist/starcompanion-cli.exe
             dist/release-manifest.json
+            dist/THIRD_PARTY_LICENSES.txt
             sbom/starcompanion-runtime.cdx.json
             LICENSE
             NOTICE
+            THIRD_PARTY_NOTICES.md
           if-no-files-found: error
 
   build-ubuntu:
@@ -220,7 +254,9 @@ jobs:
           dist/starcompanion-cli import --install build/smoke-install/LIVE --out build/smoke-cache.json
 
       - name: Verify packaged GUI and core workflow with network access denied
-        run: python packaging/verify_offline.py --manifest dist/release-manifest.json
+        run: |
+          build/offline-build/bin/python packaging/collect_licenses.py
+          python packaging/verify_offline.py --manifest dist/release-manifest.json
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -229,55 +265,68 @@ jobs:
             dist/StarCompanion
             dist/starcompanion-cli
             dist/release-manifest.json
+            dist/THIRD_PARTY_LICENSES.txt
             sbom/starcompanion-runtime.cdx.json
             LICENSE
             NOTICE
+            THIRD_PARTY_NOTICES.md
           if-no-files-found: error
 
-  signed-release:
+  signpath-release:
     if: github.event_name == 'workflow_dispatch' && inputs.sign_release
     needs: build-windows
     runs-on: windows-latest
     environment: release-signing
+    permissions:
+      actions: read
+      contents: read
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+      - name: Submit protected SignPath signing request
+        uses: signpath/github-action-submit-signing-request@b9d91eadd323de506c0c81cf0c7fe7438f3360fd # v2
         with:
-          python-version: "3.12"
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ needs.build-windows.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+          parameters: |
+            version: "${{ needs.build-windows.outputs.signing-version }}"
 
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: StarCompanion-windows-unsigned
-          path: .
-
-      - name: Sign and timestamp Windows release executables
+      - name: Independently verify publisher, timestamp, and signed bytes
         shell: pwsh
-        env:
-          STARCOMPANION_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
-          STARCOMPANION_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
-          STARCOMPANION_SIGNING_CERT_THUMBPRINT: ${{ vars.WINDOWS_CODESIGN_CERT_THUMBPRINT }}
-          STARCOMPANION_TIMESTAMP_URL: ${{ vars.WINDOWS_CODESIGN_TIMESTAMP_URL }}
-        run: ./packaging/sign_windows.ps1
+        run: ./packaging/report_signpath.ps1
 
       - name: Smoke and bind the signed artifacts to the release manifest
         run: >-
           python packaging\verify_offline.py
-          --authenticode-report dist\authenticode-report.json
-          --manifest dist\release-manifest.json
+          --gui signed\dist\StarCompanion.exe
+          --cli signed\dist\starcompanion-cli.exe
+          --sbom signed\sbom\starcompanion-runtime.cdx.json
+          --license signed\LICENSE
+          --notice signed\NOTICE
+          --third-party-licenses signed\dist\THIRD_PARTY_LICENSES.txt
+          --authenticode-report signed\dist\authenticode-report.json
+          --manifest signed\dist\release-manifest.json
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: StarCompanion-windows-signed
           path: |
-            dist/StarCompanion.exe
-            dist/starcompanion-cli.exe
-            dist/release-manifest.json
-            dist/authenticode-report.json
-            sbom/starcompanion-runtime.cdx.json
-            LICENSE
-            NOTICE
+            signed/dist/StarCompanion.exe
+            signed/dist/starcompanion-cli.exe
+            signed/dist/release-manifest.json
+            signed/dist/authenticode-report.json
+            signed/dist/THIRD_PARTY_LICENSES.txt
+            signed/sbom/starcompanion-runtime.cdx.json
+            signed/LICENSE
+            signed/NOTICE
+            signed/THIRD_PARTY_NOTICES.md
           if-no-files-found: error

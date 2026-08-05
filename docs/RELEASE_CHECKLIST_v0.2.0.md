@@ -29,13 +29,12 @@
 ## Publication hold
 
 - [ ] Record the exact merge commit and confirm tag `v0.2.0` will point to it.
-- [ ] Decide whether to publish verified unsigned Windows artifacts or run the
-  protected Authenticode job after a certificate becomes available.
+- [x] Verified unsigned publication was approved on 2026-08-05.
 - [ ] Inspect downloaded CI artifacts on clean Windows and Ubuntu systems.
 - [ ] Obtain explicit publication approval.
 - [ ] Only after approval: create/push the annotated tag, create the GitHub
   release from `RELEASE_NOTES_v0.2.0.md`, attach the reviewed artifact sets, and
   verify the public hashes.
 
-Do not create a GitHub release, push the release tag, or dispatch signing while
-the publication hold remains in effect.
+Do not dispatch SignPath signing until the Foundation application is approved
+and the protected project, policy, and environment values are configured.

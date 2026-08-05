@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Sign only the two project-owned Windows executables. -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file-set
+      product-name="StarCompanion"
+      product-version="${version}"
+      file-version="${version}"
+      company-name="StarCompanion contributors"
+      copyright="Copyright 2026 StarCompanion contributors"
+      original-filename="${file.name}">
+      <include path="dist/StarCompanion.exe" />
+      <include path="dist/starcompanion-cli.exe" />
+      <for-each>
+        <authenticode-sign
+          description="StarCompanion"
+          description-url="https://github.com/aj3/StarCompanion" />
+      </for-each>
+    </pe-file-set>
+    <file path="dist/release-manifest.json" />
+    <file path="dist/THIRD_PARTY_LICENSES.txt" />
+    <file path="sbom/starcompanion-runtime.cdx.json" />
+    <file path="LICENSE" />
+    <file path="NOTICE" />
+    <file path="THIRD_PARTY_NOTICES.md" />
+  </zip-file>
+</artifact-configuration>

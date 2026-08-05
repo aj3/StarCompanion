@@ -53,14 +53,16 @@ data download.
 The release candidate produces these unsigned sets:
 
 - `StarCompanion-windows-unsigned`: `StarCompanion.exe`,
-  `starcompanion-cli.exe`, platform manifest, SBOM, LICENSE, and NOTICE.
+  `starcompanion-cli.exe`, platform manifest, SBOM, project notices, and
+  collected dependency license material.
 - `StarCompanion-ubuntu-unsigned`: `StarCompanion`, `starcompanion-cli`,
-  platform manifest, SBOM, LICENSE, and NOTICE.
+  platform manifest, SBOM, project notices, and collected dependency license
+  material.
 
-Windows artifacts may later be Authenticode-signed only through the protected,
-manually approved signing workflow. Ubuntu artifacts and ordinary CI artifacts
-remain unsigned. Hashes in `release-manifest.json` establish integrity, not
-publisher identity.
+Future Windows artifacts may be Authenticode-signed only through the protected,
+manually approved SignPath workflow after Foundation acceptance. Ubuntu
+artifacts and ordinary CI artifacts remain unsigned. Hashes in
+`release-manifest.json` establish integrity, not publisher identity.
 
 ### Verify a downloaded file
 

@@ -1,3 +1,5 @@
+"""Workflow pages shown by the desktop shell."""
+
 from .apply import ApplyTab
 from .blueprints import BlueprintTrackerTab
 from .editor import AdvancedStringEditorTab

@@ -8,6 +8,8 @@ import json
 import tomllib
 from pathlib import Path
 
+from runtime_licenses import RUNTIME_LICENSES, cyclonedx_license
+
 
 EXCLUDED_TOOLING = {
     "pytest",
@@ -42,6 +44,12 @@ def verify(sbom_path: Path, project_path: Path) -> dict[str, object]:
         component = components.get(name)
         if component is None or component.get("version") != version:
             raise ValueError(f"SBOM is missing locked runtime component {name}=={version}")
+
+    if set(components) != set(RUNTIME_LICENSES):
+        raise ValueError("SBOM runtime components do not match the reviewed license set")
+    for name, expression in RUNTIME_LICENSES.items():
+        if components[name].get("licenses") != cyclonedx_license(expression):
+            raise ValueError(f"SBOM license does not match reviewed metadata: {name}")
 
     root_ref = root.get("bom-ref")
     root_graph = next(

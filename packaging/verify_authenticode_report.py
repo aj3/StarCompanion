@@ -7,10 +7,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from urllib.parse import urlparse
-
-
-SCHEMA = "starcompanion.authenticode.v1"
+SCHEMA = "starcompanion.authenticode.v2"
 ARTIFACT_NAMES = ("StarCompanion.exe", "starcompanion-cli.exe")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _THUMBPRINT = re.compile(r"[0-9A-F]{40}")
@@ -43,27 +40,17 @@ def verify(report_path: Path, artifacts: dict[str, Path]) -> dict[str, object]:
     if not isinstance(document, dict) or set(document) != {
         "schema",
         "status",
-        "timestamp_url",
+        "provider",
         "certificate",
+        "timestamp_authorities",
         "artifacts",
     }:
         raise ValueError("unexpected Authenticode report shape")
     if document["schema"] != SCHEMA or document["status"] != "valid":
         raise ValueError("the Authenticode report does not declare a valid signature")
 
-    timestamp_url = document["timestamp_url"]
-    if not isinstance(timestamp_url, str):
-        raise ValueError("invalid timestamp URL")
-    parsed_url = urlparse(timestamp_url)
-    if (
-        parsed_url.scheme not in {"http", "https"}
-        or not parsed_url.netloc
-        or parsed_url.username is not None
-        or parsed_url.password is not None
-        or parsed_url.query
-        or parsed_url.fragment
-    ):
-        raise ValueError("invalid timestamp URL")
+    if document["provider"] != "SignPath.io":
+        raise ValueError("unexpected signing provider")
 
     certificate = document["certificate"]
     if not isinstance(certificate, dict) or set(certificate) != {
@@ -72,7 +59,10 @@ def verify(report_path: Path, artifacts: dict[str, Path]) -> dict[str, object]:
         "not_after_utc",
     }:
         raise ValueError("unexpected certificate report shape")
-    if not isinstance(certificate["subject"], str) or not certificate["subject"].strip():
+    if (
+        not isinstance(certificate["subject"], str)
+        or "SignPath Foundation" not in certificate["subject"]
+    ):
         raise ValueError("missing signing-certificate subject")
     thumbprint = certificate["thumbprint"]
     if not isinstance(thumbprint, str) or not _THUMBPRINT.fullmatch(thumbprint):
@@ -82,6 +72,28 @@ def verify(report_path: Path, artifacts: dict[str, Path]) -> dict[str, object]:
         r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", not_after
     ):
         raise ValueError("invalid signing-certificate expiry")
+
+    timestamps = document["timestamp_authorities"]
+    if not isinstance(timestamps, dict) or set(timestamps) != set(ARTIFACT_NAMES):
+        raise ValueError("unexpected timestamp-authority set")
+    for name in ARTIFACT_NAMES:
+        timestamp = timestamps[name]
+        if not isinstance(timestamp, dict) or set(timestamp) != {
+            "subject",
+            "thumbprint",
+            "not_after_utc",
+        }:
+            raise ValueError(f"unexpected timestamp report shape: {name}")
+        if not isinstance(timestamp["subject"], str) or not timestamp["subject"].strip():
+            raise ValueError(f"missing timestamp authority: {name}")
+        if not isinstance(timestamp["thumbprint"], str) or not _THUMBPRINT.fullmatch(
+            timestamp["thumbprint"]
+        ):
+            raise ValueError(f"invalid timestamp thumbprint: {name}")
+        if not isinstance(timestamp["not_after_utc"], str) or not re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", timestamp["not_after_utc"]
+        ):
+            raise ValueError(f"invalid timestamp expiry: {name}")
 
     reported_artifacts = document["artifacts"]
     if not isinstance(reported_artifacts, dict) or set(reported_artifacts) != set(
@@ -103,10 +115,11 @@ def verify(report_path: Path, artifacts: dict[str, Path]) -> dict[str, object]:
 
     return {
         "status": "valid",
+        "provider": document["provider"],
         "certificate_subject": certificate["subject"],
         "certificate_thumbprint": thumbprint,
         "certificate_not_after_utc": not_after,
-        "timestamp_url": timestamp_url,
+        "timestamp_authorities": timestamps,
         "artifacts": verified_hashes,
     }
 
