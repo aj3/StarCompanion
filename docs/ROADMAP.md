@@ -37,9 +37,8 @@ that phase's **Resume prompt**.
 | | 9b. Mission XML layer | ✅ Done — reader shipped, premise disproved |
 | 4 · Ship | 10. Packaging & release | ✅ Done — 292 tests |
 
-The catch-up program has completed C0–C6 and G1–G2. Post-G2 **Sprint G3 —
-Structured Presentation Rules** is implementation-complete with its release
-gate pending: typed profile wording,
+The catch-up program has completed C0–C6 and G1–G3. Post-G2 **Sprint G3 —
+Structured Presentation Rules** is complete: typed profile wording,
 automatic v1→v2 migration, safe labels/order/numeric formatting, explicit
 advanced-template opt-in, all nine GUI label controls, high-DPI GUI regression
 coverage, and explicit background LIVE/HOTFIX ownership-log review. See

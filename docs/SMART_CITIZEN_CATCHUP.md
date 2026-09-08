@@ -856,7 +856,7 @@ screenshot matrix and the screen-reader/control audit.
 
 ### Sprint G3 — Structured presentation rules
 
-**Status: implementation complete; release gate pending.** Output profiles now
+**Status: complete.** Output profiles now
 default to typed structured wording rather than template execution. The
 validated model controls complete reward-
 section ordering, nine plain-text labels, reputation separators, and thousands
@@ -881,8 +881,8 @@ wording viewport has 100%, 150%, and 200% screenshot regression gates.
 
 The final integration pass exposes every one of the nine schema-v2 labels in
 the GUI and includes the production LIVE/HOTFIX log workflow described under
-C4. G3 is not closed until the complete core, GUI, screenshot, security,
-adversarial-log, packaging, and CI gates pass on the same commit.
+C4. The complete core, GUI, screenshot, security, adversarial-log, packaging,
+and Windows/Ubuntu CI gates passed together on the G3 implementation commit.
 
 ### Planned G4–G7 parity closure
 
