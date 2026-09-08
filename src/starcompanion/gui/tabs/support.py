@@ -48,8 +48,9 @@ HELP_ARTICLES = (
     ),
     (
         "Channels and languages",
-        "LIVE, PTU, EPTU, TECH-PREVIEW, and HOTFIX are isolated. Localization, user wording, "
-        "ownership, caches, and operation plans stay scoped to the selected channel and language.",
+        "Localization, user wording, caches, and operation plans stay scoped to the selected "
+        "channel and language. Blueprint ownership reviews LIVE and HOTFIX together by default; "
+        "the visible option can separate them, while PTU, EPTU, and TECH-PREVIEW always remain isolated.",
     ),
     (
         "Blueprint ownership",
@@ -79,6 +80,12 @@ HELP_ARTICLES = (
         "Stock localization is followed by generated profile output and then explicit user wording. "
         "The string editor shows every contribution and blocks invalid operation plans without "
         "inventing localization text.",
+    ),
+    (
+        "Structured presentation",
+        "Presentation profiles use validated labels, complete reward-section ordering, and number "
+        "formatting by default. Version 1 profiles migrate automatically. Sandboxed per-mission-giver "
+        "templates remain stored but affect output only after Advanced custom templates is explicitly enabled.",
     ),
 )
 
@@ -317,7 +324,8 @@ class SupportTab(QWidget):
         self.profile_summary.setText(
             f"Active profile: {profile.name}\n"
             f"Merge mode: {profile.injection.mode}\n"
-            "Custom templates and field formatting remain inside this output profile only."
+            f"Wording mode: {profile.wording.mode}\n"
+            "Structured rules, dormant templates, and field formatting remain inside this output profile only."
         )
         index = self.profile_builtin.findData(profile.name)
         self.profile_builtin.blockSignals(True)

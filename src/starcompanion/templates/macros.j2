@@ -35,10 +35,10 @@
 {{ em(pool.label, "pools") }}
 {% endif %}
 {% if pool.chance is not none %}
-{{ em("Award chance: " ~ "{:.1%}".format(pool.chance), "pools") }}
+{{ em(opts.labels.chance ~ ": " ~ "{:.1%}".format(pool.chance), "pools") }}
 {% endif %}
 {% if pool.example_locations and opts.show_regional_variants %}
-{{ em("[Regional Variants] example locations: " ~ pool.example_locations | join(", "), "regional") }}
+{{ em(opts.labels.regional ~ ": " ~ pool.example_locations | join(", "), "regional") }}
 {% endif %}
 {% set ranks = pool.gates | selectattr("kind", "equalto", GateKind.RANK)
                           | map(attribute="label") | list %}
@@ -48,7 +48,7 @@
 {#- an inline expression, not {% if %}: trim_blocks would eat the line break
     after a block tag and run every bullet together -#}
 {% for item in pool.items %}
-- {{ item }}{{ " [Owned]" if opts.show_owned and pool.is_owned(item) else "" }}
+- {{ item }}{{ " [" ~ opts.labels.owned ~ "]" if opts.show_owned and pool.is_owned(item) else "" }}
 {% endfor %}
 {% if pool.caveat and opts.show_caveats %}
 
@@ -57,34 +57,34 @@
 {% endmacro %}
 
 {% macro reward_block(reward, pools, opts, em, GateKind) %}
-{% if opts.show_reputation and reward.reputation %}
-{{ em("Reputation Awarded" ~ (" (by difficulty):" if reward.reputation_varies else ":"), "reputation") }} {{ reward.reputation_display }}
-{% endif %}
-{% if opts.show_scrip and reward.scrip %}
-{{ em("MG Scrip:", "scrip") }} awarded (amount varies)
-{% endif %}
-{% if opts.show_item_rewards and reward.item_rewards %}
-{{ em("Item Rewards:", "items") }} {{ reward.item_rewards | join(", ") }}
-{% endif %}
-{% if opts.show_scenario_points %}
+{% for section in opts.section_order %}
+{% if section == "reputation" and opts.show_reputation and reward.reputation %}
+{{ em(opts.labels.reputation ~ (" (by difficulty):" if reward.reputation_varies else ":"), "reputation") }} {{ opts.format_reputation(reward.reputation) }}
+{% elif section == "scrip" and opts.show_scrip and reward.scrip %}
+{{ em(opts.labels.scrip ~ ":", "scrip") }} awarded (amount varies)
+{% elif section == "items" and opts.show_item_rewards and reward.item_rewards %}
+{{ em(opts.labels.items ~ ":", "items") }} {{ reward.item_rewards | join(", ") }}
+{% elif section == "scenario" and opts.show_scenario_points %}
 {% for points in reward.scenario_points %}
-{{ em("Scenario Progress Points " ~ "{:,}".format(points.amount) ~ (" (Split)" if points.split else ""), "scenario") }}
+{{ em(opts.labels.scenario ~ " " ~ opts.format_number(points.amount) ~ (" (Split)" if points.split else ""), "scenario") }}
 {% endfor %}
-{% endif %}
+{% elif section == "blueprints" %}
 {#- Labelled pools are genuinely separate draws and get the plural heading;
     regional variants are one pool shown per region, so they share a heading. -#}
 {% set labelled = pools | selectattr("label") | list %}
 {% if labelled %}
 
-{{ em("Multiple Blueprint Pools", "pools") }}
+{{ em(opts.labels.multiple_blueprints, "pools") }}
 {% for pool in pools %}
 {{ pool_block(pool, opts, em, GateKind) | trim }}
 {% endfor %}
 {% elif pools %}
 
-{{ em("Potential Blueprints" ~ gate_suffix(pools[0], GateKind), "pools") }}
+{{ em(opts.labels.blueprints ~ gate_suffix(pools[0], GateKind), "pools") }}
 {% for pool in pools %}
 {{ pool_block(pool, opts, em, GateKind) | trim }}
 {% endfor %}
 {% endif %}
+{% endif %}
+{% endfor %}
 {% endmacro %}

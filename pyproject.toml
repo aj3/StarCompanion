@@ -1,6 +1,6 @@
 [project]
 name = "starcompanion"
-version = "0.2.0"
+version = "0.3.0"
 description = "Datamine Star Citizen contract data and build a customizable global.ini localization override"
 readme = "README.md"
 authors = [{ name = "aj3" }]

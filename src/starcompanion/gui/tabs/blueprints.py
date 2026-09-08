@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QTimer, Qt
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QGridLayout,
     QHBoxLayout,
@@ -29,12 +30,14 @@ from ...blueprints import (
     reward_sources,
 )
 from ...ownership import (
+    OwnershipError,
     OwnershipRecoveryAvailable,
     OwnershipState,
     OwnershipStore,
     ScanCancelled,
     ScanResult,
-    discover_log_files,
+    discover_logs,
+    ownership_scope,
     scan_logs,
 )
 from ..components import EmptyState, MetricTile, NoticeBanner, SectionCard, Tone
@@ -45,7 +48,17 @@ from ..state import AppState
 @dataclass(frozen=True)
 class OwnershipSnapshot:
     channel: str
+    link_live_hotfix: bool
     state: OwnershipState
+    continuity_scopes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class OwnershipScanSnapshot:
+    channel: str
+    link_live_hotfix: bool
+    result: ScanResult
+    continuity_scopes: tuple[str, ...] = ()
 
 
 class BlueprintTableModel(QAbstractTableModel):
@@ -101,12 +114,24 @@ class BlueprintTableModel(QAbstractTableModel):
 class BlueprintTrackerTab(QWidget):
     """Channel-isolated ownership search and incremental log-scan UI."""
 
-    def __init__(self, state: AppState, parent: QWidget | None = None):
+    linkLiveHotfixChanged = Signal(bool)
+
+    def __init__(
+        self,
+        state: AppState,
+        parent: QWidget | None = None,
+        *,
+        link_live_hotfix: bool = True,
+    ):
         super().__init__(parent)
         self.state = state
         self.catalog: BlueprintCatalog | None = None
         self.ownership: OwnershipState | None = None
         self.channel: str | None = None
+        self.scope_name: str | None = None
+        self.link_live_hotfix = bool(link_live_hotfix)
+        self._continuity_scopes: tuple[str, ...] = ()
+        self._recovery_target: tuple[str, bool] | None = None
         self._jobs: set[QtOperationJob] = set()
         self._shutting_down = False
 
@@ -194,6 +219,21 @@ class BlueprintTrackerTab(QWidget):
             "then asks before saving ownership state."
         )
         self.scan_button.clicked.connect(self.scan_logs)
+        self.link_live_hotfix_toggle = QCheckBox(
+            "Review LIVE and HOTFIX logs together"
+        )
+        self.link_live_hotfix_toggle.setChecked(self.link_live_hotfix)
+        self.link_live_hotfix_toggle.setAccessibleName(
+            "Use shared LIVE and HOTFIX blueprint ownership"
+        )
+        self.link_live_hotfix_toggle.setAccessibleDescription(
+            "Explicitly combines only LIVE and HOTFIX acquisition logs in one shared ownership scope."
+        )
+        self.link_live_hotfix_toggle.setToolTip(
+            "When enabled, a scan reviews current and rotated logs from both sibling production channels. "
+            "PTU, EPTU, and TECH-PREVIEW always remain isolated."
+        )
+        self.link_live_hotfix_toggle.toggled.connect(self.set_link_live_hotfix)
         self.reload_button = QPushButton("Reload ownership")
         self.reload_button.setAccessibleName("Reload channel ownership")
         self.reload_button.setAccessibleDescription(
@@ -212,6 +252,7 @@ class BlueprintTrackerTab(QWidget):
         actions.addWidget(self.reload_button)
         actions.addWidget(self.recover_button)
         actions.addStretch(1)
+        actions.addWidget(self.link_live_hotfix_toggle)
 
         self.empty = EmptyState(
             "No blueprint catalog yet",
@@ -239,6 +280,7 @@ class BlueprintTrackerTab(QWidget):
         QWidget.setTabOrder(self.reward_filter, self.table)
         QWidget.setTabOrder(self.table, self.scan_button)
         QWidget.setTabOrder(self.scan_button, self.reload_button)
+        QWidget.setTabOrder(self.reload_button, self.link_live_hotfix_toggle)
 
         state.contractsChanged.connect(self.rebuild_catalog)
         state.pathsChanged.connect(self.scope_changed)
@@ -251,9 +293,32 @@ class BlueprintTrackerTab(QWidget):
             return None
         try:
             root = target.parents[3]
-            return root.name.upper(), root
-        except IndexError:
+            channel = ownership_scope(root.name)
+            return channel, root
+        except (IndexError, OwnershipError):
             return None
+
+    def _link_active(self, channel: str | None = None) -> bool:
+        selected = channel or self.channel
+        return bool(
+            self.link_live_hotfix and selected in {"LIVE", "HOTFIX"}
+        )
+
+    def set_link_live_hotfix(self, enabled: bool, *, persist: bool = True) -> None:
+        """Switch scopes without carrying state or a late worker result across."""
+
+        enabled = bool(enabled)
+        changed = enabled != self.link_live_hotfix
+        self.link_live_hotfix = enabled
+        self.link_live_hotfix_toggle.blockSignals(True)
+        self.link_live_hotfix_toggle.setChecked(enabled)
+        self.link_live_hotfix_toggle.blockSignals(False)
+        if changed:
+            self.scope_changed(force=True)
+            if self.channel and self.isVisible() and not self._jobs:
+                self.scope_timer.start(0)
+            if persist:
+                self.linkLiveHotfixChanged.emit(enabled)
 
     def rebuild_catalog(self) -> None:
         if self._shutting_down:
@@ -277,20 +342,29 @@ class BlueprintTrackerTab(QWidget):
             combo.setCurrentIndex(index if index >= 0 else 0)
             combo.blockSignals(False)
 
-    def scope_changed(self, *_args) -> None:
+    def scope_changed(self, *_args, force: bool = False) -> None:
         if self._shutting_down:
             return
         scope = self._scope()
         channel = scope[0] if scope else None
-        if channel == self.channel and self.ownership is not None:
+        linked = self._link_active(channel)
+        scope_name = ownership_scope(channel, link_live_hotfix=linked) if channel else None
+        self.link_live_hotfix_toggle.setEnabled(
+            channel in {"LIVE", "HOTFIX"} and not self._jobs
+        )
+        if not force and scope_name == self.scope_name and self.ownership is not None:
             return
         self.channel = channel
+        self.scope_name = scope_name
         self.ownership = None
+        self._continuity_scopes = ()
+        self._recovery_target = None
         self.model.set_rows(())
         if channel:
             self.status.set_tone(Tone.INFO)
+            label = "shared LIVE-HOTFIX" if linked else channel
             self.status.setText(
-                f"{channel} selected. Open this page or choose Reload ownership to read local state."
+                f"{channel} selected with {label} ownership. Open this page or choose Reload ownership to read local state."
             )
         self.refresh_query()
 
@@ -308,29 +382,56 @@ class BlueprintTrackerTab(QWidget):
         if self._shutting_down or not self.channel or self._jobs:
             return
         channel = self.channel
+        linked = self._link_active(channel)
+        label = "LIVE-HOTFIX" if linked else channel
         self.status.set_tone(Tone.INFO)
-        self.status.setText(f"Loading {channel} ownership in the background…")
+        self.status.setText(f"Loading {label} ownership in the background…")
         self._start_job(
-            lambda token, _reporter: self._load_snapshot(token, channel),
+            lambda token, _reporter: self._load_snapshot(token, channel, linked),
             self._ownership_loaded,
         )
 
     @staticmethod
-    def _load_snapshot(token, channel: str) -> OwnershipSnapshot:
+    def _load_snapshot(
+        token,
+        channel: str,
+        link_live_hotfix: bool,
+    ) -> OwnershipSnapshot:
         token.checkpoint()
-        state = OwnershipStore(channel).load()
+        loaded = OwnershipStore(
+            channel,
+            link_live_hotfix=link_live_hotfix,
+        ).load_details()
         token.checkpoint()
-        return OwnershipSnapshot(channel, state)
+        return OwnershipSnapshot(
+            channel,
+            link_live_hotfix,
+            loaded.state,
+            loaded.continuity_scopes,
+        )
 
     def _ownership_loaded(self, snapshot: OwnershipSnapshot) -> None:
-        if snapshot.channel != self.channel:
+        if (
+            snapshot.channel != self.channel
+            or snapshot.link_live_hotfix != self._link_active()
+        ):
             return
         self.ownership = snapshot.state
+        self._continuity_scopes = snapshot.continuity_scopes
+        self._recovery_target = None
         self.recover_button.setVisible(False)
-        self.status.set_tone(Tone.SUCCESS)
-        self.status.setText(
-            f"Loaded {len(snapshot.state.records):,} owned blueprint records for {snapshot.channel}."
-        )
+        if snapshot.continuity_scopes:
+            self.status.set_tone(Tone.WARNING)
+            self.status.setText(
+                f"Loaded {len(snapshot.state.records):,} owned blueprint records, including "
+                f"existing {' and '.join(snapshot.continuity_scopes)} evidence. Nothing was "
+                "moved or deleted; a confirmed scan will consolidate a shared copy."
+            )
+        else:
+            self.status.set_tone(Tone.SUCCESS)
+            self.status.setText(
+                f"Loaded {len(snapshot.state.records):,} owned blueprint records for {snapshot.state.scope}."
+            )
         self.refresh_query()
 
     def refresh_query(self) -> None:
@@ -340,7 +441,9 @@ class BlueprintTrackerTab(QWidget):
             self.results_section.setVisible(False)
             self._update_metrics()
             return
-        ownership = self.ownership or OwnershipState(self.channel or "LIVE")
+        ownership = self.ownership or OwnershipState(
+            self.scope_name or self.channel or "LIVE"
+        )
         rows = query_blueprints(
             self.catalog,
             ownership,
@@ -369,26 +472,42 @@ class BlueprintTrackerTab(QWidget):
         ready = bool(self.catalog and self.ownership is not None and self.channel and not self._jobs)
         self.scan_button.setEnabled(ready)
         self.reload_button.setEnabled(bool(self.channel and not self._jobs))
+        self.link_live_hotfix_toggle.setEnabled(
+            self.channel in {"LIVE", "HOTFIX"} and not self._jobs
+        )
 
     def scan_logs(self) -> None:
         scope = self._scope()
         if not scope or not self.catalog or self.ownership is None or self._jobs:
             return
         channel, root = scope
+        linked = self._link_active(channel)
         catalog = self.catalog
         baseline = self.ownership
+        continuity_scopes = self._continuity_scopes
         self.status.set_tone(Tone.INFO)
-        self.status.setText(f"Scanning {channel} local logs in the background…")
+        label = "LIVE and HOTFIX" if linked else channel
+        self.status.setText(f"Scanning {label} local logs in the background…")
 
         def operation(token, reporter):
-            paths = discover_log_files(root)
+            discovery = discover_logs(
+                root,
+                link_live_hotfix=linked,
+                cancel=lambda: token.is_cancelled,
+            )
             try:
-                return scan_logs(
-                    paths,
-                    catalog,
-                    baseline,
-                    cancel=lambda: token.is_cancelled,
-                    progress=lambda current, total, name: reporter((current, total, name)),
+                return OwnershipScanSnapshot(
+                    channel,
+                    linked,
+                    scan_logs(
+                        discovery.paths,
+                        catalog,
+                        baseline,
+                        cancel=lambda: token.is_cancelled,
+                        progress=lambda current, total, name: reporter((current, total, name)),
+                        initial_diagnostics=discovery.diagnostics,
+                    ),
+                    continuity_scopes,
                 )
             except ScanCancelled:
                 token.checkpoint()
@@ -402,63 +521,162 @@ class BlueprintTrackerTab(QWidget):
             f"Scanning local logs {current:,}/{total:,}" + (f": {name}" if name else "…")
         )
 
-    def _scan_preview(self, result: ScanResult) -> None:
-        if result.acquisitions_added == 0 and result.unresolved_added == 0:
-            self.status.set_tone(Tone.SUCCESS)
+    def _scan_preview(self, snapshot: OwnershipScanSnapshot) -> None:
+        if (
+            snapshot.channel != self.channel
+            or snapshot.link_live_hotfix != self._link_active()
+        ):
+            self.status.set_tone(Tone.INFO)
             self.status.setText(
-                f"Scan complete: {result.files_seen:,} files, {result.bytes_read:,} bytes, no new acquisitions."
+                "Scan preview discarded because the selected ownership scope changed."
             )
             return
+        result = snapshot.result
+        diagnostic_text = self._diagnostic_summary(result.diagnostics)
+        needs_write = bool(snapshot.continuity_scopes) or result.state != self.ownership
+        if not needs_write:
+            self.status.set_tone(
+                Tone.WARNING if result.diagnostics else Tone.SUCCESS
+            )
+            self.status.setText(
+                f"Scan complete: {result.files_seen:,} files, {result.bytes_read:,} bytes, "
+                f"no new acquisitions.{diagnostic_text}"
+            )
+            return
+        continuity_text = ""
+        if snapshot.continuity_scopes:
+            continuity_text = (
+                "\nExisting separate ownership: "
+                + " and ".join(snapshot.continuity_scopes)
+                + " (copied into the shared scope; source stores remain unchanged)\n"
+            )
         if QMessageBox.question(
             self,
             "Save scanned blueprint evidence?",
             f"Channel: {self.channel}\nFiles seen: {result.files_seen:,}\n"
             f"Bytes read: {result.bytes_read:,}\nOwned acquisitions: +{result.acquisitions_added:,}\n"
-            f"Unresolved names: +{result.unresolved_added:,}\n\n"
-            "Only acquisition evidence and scan cursors are stored locally.",
+            f"Unresolved names: +{result.unresolved_added:,}\n"
+            f"Resolved earlier names: {result.unresolved_reconciled:,}\n\n"
+            f"Warnings: {len(result.diagnostics):,}{diagnostic_text}"
+            f"{continuity_text}\n"
+            "Only acquisition evidence and scan cursors are stored locally. Saving scan progress "
+            "prevents unchanged logs from being read again.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
         ) != QMessageBox.StandardButton.Yes:
             self.status.set_tone(Tone.INFO)
             self.status.setText("Scan preview discarded. Ownership and scan cursors were unchanged.")
             return
-        channel = self.channel
+        channel = snapshot.channel
+        linked = snapshot.link_live_hotfix
         candidate = result.state
         self._start_job(
-            lambda token, _reporter: self._save_state(token, channel, candidate),
-            self._ownership_loaded,
+            lambda token, _reporter: self._save_state(
+                token,
+                channel,
+                linked,
+                candidate,
+            ),
+            lambda loaded: self._ownership_saved_after_scan(
+                loaded, result.diagnostics
+            ),
         )
 
     @staticmethod
-    def _save_state(token, channel: str, state: OwnershipState) -> OwnershipSnapshot:
+    def _diagnostic_summary(diagnostics) -> str:
+        if not diagnostics:
+            return ""
+        samples = "; ".join(
+            f"{item.source_name}: {item.code}" for item in diagnostics[:3]
+        )
+        extra = len(diagnostics) - min(3, len(diagnostics))
+        if extra:
+            samples += f"; +{extra:,} more"
+        return f" ({samples})."
+
+    def _ownership_saved_after_scan(self, snapshot, diagnostics) -> None:
+        self._ownership_loaded(snapshot)
+        if diagnostics:
+            self.status.set_tone(Tone.WARNING)
+            self.status.setText(
+                "Ownership and safe scan progress were saved with warnings"
+                + self._diagnostic_summary(diagnostics)
+            )
+
+    @staticmethod
+    def _save_state(
+        token,
+        channel: str,
+        link_live_hotfix: bool,
+        state: OwnershipState,
+    ) -> OwnershipSnapshot:
         token.checkpoint()
-        OwnershipStore(channel).save(state)
+        OwnershipStore(
+            channel,
+            link_live_hotfix=link_live_hotfix,
+        ).save(state)
         token.checkpoint()
-        return OwnershipSnapshot(channel, state)
+        return OwnershipSnapshot(channel, link_live_hotfix, state)
 
     def recover_ownership(self) -> None:
         if not self.channel or self._jobs:
             return
+        recovery_label = (
+            ownership_scope(
+                self._recovery_target[0],
+                link_live_hotfix=self._recovery_target[1],
+            )
+            if self._recovery_target
+            else self.scope_name or self.channel
+        )
         if QMessageBox.question(
             self,
             "Recover ownership backup?",
-            f"Replace the damaged {self.channel} ownership store with its validated last-known-good backup?",
+            f"Replace the damaged {recovery_label} ownership store with its validated last-known-good backup?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
         ) != QMessageBox.StandardButton.Yes:
             return
         channel = self.channel
+        linked = self._link_active(channel)
+        recovery_channel, recovery_linked = self._recovery_target or (
+            channel,
+            linked,
+        )
         self._start_job(
-            lambda token, _reporter: self._recover(token, channel),
+            lambda token, _reporter: self._recover(
+                token,
+                channel,
+                linked,
+                recovery_channel,
+                recovery_linked,
+            ),
             self._ownership_loaded,
         )
 
     @staticmethod
-    def _recover(token, channel: str) -> OwnershipSnapshot:
+    def _recover(
+        token,
+        channel: str,
+        link_live_hotfix: bool,
+        recovery_channel: str,
+        recovery_link_live_hotfix: bool,
+    ) -> OwnershipSnapshot:
         token.checkpoint()
-        state = OwnershipStore(channel).recover()
+        OwnershipStore(
+            recovery_channel,
+            link_live_hotfix=recovery_link_live_hotfix,
+        ).recover()
         token.checkpoint()
-        return OwnershipSnapshot(channel, state)
+        loaded = OwnershipStore(
+            channel, link_live_hotfix=link_live_hotfix
+        ).load_details()
+        return OwnershipSnapshot(
+            channel,
+            link_live_hotfix,
+            loaded.state,
+            loaded.continuity_scopes,
+        )
 
     def _start_job(self, operation, success, *, progress=None) -> None:
         if self._shutting_down:
@@ -476,6 +694,11 @@ class BlueprintTrackerTab(QWidget):
     def _job_failed(self, exc: Exception) -> None:
         self.status.set_tone(Tone.DANGER)
         self.status.setText(f"Ownership operation stopped safely: {exc}")
+        self._recovery_target = (
+            (exc.channel, exc.link_live_hotfix)
+            if isinstance(exc, OwnershipRecoveryAvailable) and exc.channel
+            else None
+        )
         self.recover_button.setVisible(isinstance(exc, OwnershipRecoveryAvailable))
 
     def _job_finished(self, job: QtOperationJob) -> None:
@@ -495,4 +718,9 @@ class BlueprintTrackerTab(QWidget):
         self._jobs.clear()
 
 
-__all__ = ["BlueprintTableModel", "BlueprintTrackerTab", "OwnershipSnapshot"]
+__all__ = [
+    "BlueprintTableModel",
+    "BlueprintTrackerTab",
+    "OwnershipScanSnapshot",
+    "OwnershipSnapshot",
+]

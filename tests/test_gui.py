@@ -205,7 +205,21 @@ def test_ui_preferences_migrate_and_preserve_other_portable_settings(qapp, tmp_p
     assert loaded.preferences.theme == "light"
     assert stored["ui_schema"] == 1
     assert stored["last_page"] == "overview"
+    assert stored["link_live_hotfix"] is True
     assert stored["default_channel"] == "LIVE"
+
+
+def test_live_hotfix_scope_choice_is_a_portable_ui_preference(qapp, tmp_path):
+    from starcompanion.gui.preferences import UiPreferencesStore
+
+    root = tmp_path / "preferences"
+    fresh = MainWindow(ui_preferences_store=UiPreferencesStore(root))
+
+    assert fresh.ui_preferences.link_live_hotfix is True
+    fresh.blueprints.link_live_hotfix_toggle.setChecked(False)
+
+    assert fresh.ui_preferences.link_live_hotfix is False
+    assert PreferencesStore(root).load()["link_live_hotfix"] is False
 
 
 def test_ui_theme_is_independent_from_output_profile(qapp, tmp_path):
@@ -530,6 +544,57 @@ def test_presentation_summary_tracks_existing_profile_controls(window):
     assert window.formatting.length_metric.value.text() == "9"
 
 
+def test_structured_wording_controls_update_profile_and_rendering(window):
+    label = window.formatting.wording_labels["reputation"]
+    label.setText("Standing earned")
+    label.editingFinished.emit()
+    separator = window.formatting.reputation_separator
+    separator.setCurrentIndex(separator.findData("/"))
+
+    assert window.state.profile.wording.labels.reputation == "Standing earned"
+    assert window.state.profile.wording.reputation_separator == "/"
+    assert "Standing earned" in window.state.render().values["Org_x_desc"]
+
+
+def test_every_structured_wording_label_is_editable_in_presentation(window):
+    assert set(window.formatting.wording_labels) == {
+        "reputation",
+        "scrip",
+        "items",
+        "scenario",
+        "blueprints",
+        "multiple_blueprints",
+        "chance",
+        "regional",
+        "owned",
+    }
+
+
+def test_invalid_structured_label_is_rejected_and_restored(window):
+    label = window.formatting.wording_labels["reputation"]
+    original = label.text()
+    label.setText("bad<tag>")
+    label.editingFinished.emit()
+
+    assert label.text() == original
+    assert window.formatting.wording_status.property("tone") == "danger"
+    assert window.state.profile.wording.labels.reputation == original
+
+
+def test_structured_wording_order_uses_complete_validated_presets(window):
+    combo = window.formatting.wording_order
+    combo.setCurrentIndex(combo.findText("Blueprints first"))
+
+    assert window.state.profile.wording.section_order[0] == "blueprints"
+    assert set(window.state.profile.wording.section_order) == {
+        "reputation",
+        "scrip",
+        "items",
+        "scenario",
+        "blueprints",
+    }
+
+
 # --- accessibility ----------------------------------------------------------
 
 
@@ -542,6 +607,10 @@ def test_target_page_controls_have_screen_reader_names_and_descriptions(window):
         window.formatting.prefix,
         window.formatting.bracket_rep,
         window.formatting.bracket_bp,
+        window.formatting.wording_order,
+        window.formatting.reputation_separator,
+        window.formatting.thousands_separator,
+        *window.formatting.wording_labels.values(),
         window.formatting.max_items,
         window.source.path_edit,
         window.source.browse_button,
@@ -549,6 +618,7 @@ def test_target_page_controls_have_screen_reader_names_and_descriptions(window):
         window.source.load_cache_button,
         window.source.save_cache_button,
         window.templates.show_help,
+        window.templates.enable_advanced,
         window.templates.org,
         window.templates.kind,
         window.templates.reset_button,
@@ -579,6 +649,7 @@ def test_target_page_controls_have_screen_reader_names_and_descriptions(window):
         window.blueprints.scan_button,
         window.blueprints.reload_button,
         window.blueprints.recover_button,
+        window.blueprints.link_live_hotfix_toggle,
         window.support.profile_builtin,
         window.support.profile_open,
         window.support.profile_save,
@@ -964,14 +1035,37 @@ def test_preview_shows_the_rendered_value(window):
     assert "Do a thing" in window.templates.preview.toPlainText()
 
 
+def _enable_advanced_templates(window):
+    window.templates.enable_advanced.setChecked(True)
+    assert window.state.profile.wording.mode == "advanced"
+
+
+def test_custom_templates_are_explicitly_disabled_by_default(window):
+    assert window.state.profile.wording.mode == "structured"
+    assert not window.templates.enable_advanced.isChecked()
+    assert not window.templates.editor.isEnabled()
+
+
 def test_editing_a_template_updates_the_preview_and_profile(window):
+    _enable_advanced_templates(window)
     window.templates.editor.setPlainText("CUSTOM {{ base }}")
 
     assert window.templates.preview.toPlainText().startswith("CUSTOM")
     assert window.state.profile.templates["org"].title == "CUSTOM {{ base }}"
 
 
+def test_disabling_advanced_templates_preserves_but_deactivates_them(window):
+    _enable_advanced_templates(window)
+    window.templates.editor.setPlainText("CUSTOM {{ base }}")
+    window.templates.enable_advanced.setChecked(False)
+
+    assert window.state.profile.templates["org"].title == "CUSTOM {{ base }}"
+    assert window.templates.selection_metric.value.text() == "Stored (inactive)"
+    assert not window.templates.preview.toPlainText().startswith("CUSTOM")
+
+
 def test_broken_template_reports_inline_and_does_not_raise(window):
+    _enable_advanced_templates(window)
     window.templates.editor.setPlainText("{{ nope_undefined }}")
 
     assert "not valid yet" in window.templates.status.text()
@@ -979,6 +1073,7 @@ def test_broken_template_reports_inline_and_does_not_raise(window):
 
 
 def test_recovering_from_a_broken_template(window):
+    _enable_advanced_templates(window)
     window.templates.editor.setPlainText("{{ nope_undefined }}")
     window.templates.editor.setPlainText("FIXED {{ base }}")
 
@@ -987,6 +1082,7 @@ def test_recovering_from_a_broken_template(window):
 
 
 def test_use_builtin_clears_the_override(window):
+    _enable_advanced_templates(window)
     window.templates.editor.setPlainText("CUSTOM")
     assert "org" in window.state.profile.templates
 
@@ -995,6 +1091,7 @@ def test_use_builtin_clears_the_override(window):
 
 
 def test_template_override_is_scoped_to_its_org(window, tmp_path):
+    _enable_advanced_templates(window)
     two = tmp_path / "two.ini"
     two.write_bytes(
         (BOM + "Alpha_x_title=A <EM4>[1 Rep]</EM4>\nBeta_y_title=B <EM4>[2 Rep]</EM4>\n").encode()
@@ -1010,6 +1107,7 @@ def test_template_override_is_scoped_to_its_org(window, tmp_path):
 
 
 def test_custom_wording_uses_reusable_summary_and_section_components(window):
+    _enable_advanced_templates(window)
     window.templates.editor.setPlainText("CUSTOM {{ base }}")
 
     assert window.templates.override_metric.value.text() == "1"
@@ -1021,6 +1119,7 @@ def test_custom_wording_uses_reusable_summary_and_section_components(window):
 
 
 def test_invalid_custom_wording_is_announced_as_blocked(window):
+    _enable_advanced_templates(window)
     window.templates.editor.setPlainText("{{ undefined_value }}")
 
     assert window.templates.preview_metric.value.text() == "Invalid"
@@ -1818,13 +1917,174 @@ def test_g2_blueprint_tracker_uses_c4_queries_and_background_log_scan(
     # The scan-preview success callback starts the revision-checked save job.
     _wait_for_jobs(qapp, window.blueprints)
 
-    saved = OwnershipStore("LIVE").load()
+    saved = OwnershipStore("LIVE", link_live_hotfix=True).load()
     assert len(saved.records) == 1
     window.blueprints.ownership_filter.setCurrentIndex(
         window.blueprints.ownership_filter.findData(OwnershipFilter.OWNED.value)
     )
     assert window.blueprints.model.rowCount() == 1
     assert window.blueprints.model.rows[0].entry.name == "Coda Pistol"
+
+
+def test_g2_blueprint_tracker_can_review_live_and_hotfix_in_one_explicit_scope(
+    window, qapp, tmp_path, monkeypatch
+):
+    from starcompanion.ownership import OwnershipStore
+
+    game = tmp_path / "StarCitizen"
+    live = game / "LIVE"
+    hotfix = game / "HOTFIX"
+    live.mkdir(parents=True)
+    hotfix.mkdir(parents=True)
+    target = live / "data" / "Localization" / "english" / "global.ini"
+    window.state.set_contracts(_blueprint_contracts())
+    window.state.set_target(target)
+    window.blueprints.link_live_hotfix_toggle.setChecked(True)
+    window.blueprints.load_ownership()
+    _wait_for_jobs(qapp, window.blueprints)
+
+    (live / "Game.log").write_text(
+        '<2026-03-26T17:15:41.684Z> [Notice] <SHUDEvent_OnNotification> '
+        'Added notification "Received Blueprint: Coda Pistol: " [23] to queue.\n',
+        encoding="utf-8",
+    )
+    (hotfix / "Game.log").write_text(
+        '<2026-03-27T17:15:41.684Z> [Notice] <SHUDEvent_OnNotification> '
+        'Added notification "Received Blueprint: Norfield: " [23] to queue.\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+
+    window.blueprints.scan_logs()
+    _wait_for_jobs(qapp, window.blueprints)
+    _wait_for_jobs(qapp, window.blueprints)
+
+    saved = OwnershipStore("LIVE", link_live_hotfix=True).load()
+    assert saved.scope == "LIVE-HOTFIX"
+    assert len(saved.records) == 2
+    assert len(saved.cursors) == 2
+    assert window.blueprints.ownership is not None
+    assert window.blueprints.ownership.scope == "LIVE-HOTFIX"
+
+
+def test_g2_blueprint_scan_persists_cursor_only_progress_after_confirmation(
+    window, qapp, tmp_path, monkeypatch
+):
+    from starcompanion.ownership import OwnershipStore
+
+    root = tmp_path / "StarCitizen" / "LIVE"
+    root.mkdir(parents=True)
+    target = root / "data" / "Localization" / "english" / "global.ini"
+    window.state.set_contracts(_blueprint_contracts())
+    window.state.set_target(target)
+    window.blueprints.load_ownership()
+    _wait_for_jobs(qapp, window.blueprints)
+    (root / "Game.log").write_text("ordinary log line\n", encoding="utf-8")
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+
+    window.blueprints.scan_logs()
+    _wait_for_jobs(qapp, window.blueprints)
+    _wait_for_jobs(qapp, window.blueprints)
+
+    saved = OwnershipStore("LIVE", link_live_hotfix=True).load()
+    assert len(saved.cursors) == 1
+    assert not saved.records
+
+
+def test_g2_blueprint_scan_discards_a_result_from_the_previous_scope(
+    window, tmp_path, monkeypatch
+):
+    from starcompanion.gui.tabs.blueprints import OwnershipScanSnapshot
+    from starcompanion.ownership import OwnershipState, ScanResult
+
+    root = tmp_path / "StarCitizen" / "LIVE"
+    root.mkdir(parents=True)
+    window.state.set_target(
+        root / "data" / "Localization" / "english" / "global.ini"
+    )
+    window.blueprints.set_link_live_hotfix(True)
+    stale = OwnershipScanSnapshot(
+        "LIVE",
+        False,
+        ScanResult(
+            OwnershipState("LIVE"),
+            1,
+            1,
+            10,
+            0,
+            0,
+            0,
+            0,
+            (),
+            (),
+        ),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: pytest.fail("stale preview asked for confirmation"),
+    )
+
+    window.blueprints._scan_preview(stale)
+
+    assert "scope changed" in window.blueprints.status.text()
+    assert not window.blueprints._jobs
+
+
+def test_g2_blueprint_scan_surfaces_safe_discovery_warnings(
+    window, qapp, tmp_path, monkeypatch
+):
+    from starcompanion.gui.tabs import blueprints as blueprint_tab
+    from starcompanion.ownership import LogDiscovery, ScanDiagnostic
+
+    root = tmp_path / "StarCitizen" / "LIVE"
+    root.mkdir(parents=True)
+    window.state.set_contracts(_blueprint_contracts())
+    window.state.set_target(
+        root / "data" / "Localization" / "english" / "global.ini"
+    )
+    window.blueprints.load_ownership()
+    _wait_for_jobs(qapp, window.blueprints)
+    monkeypatch.setattr(
+        blueprint_tab,
+        "discover_logs",
+        lambda *args, **kwargs: LogDiscovery(
+            (),
+            (
+                ScanDiagnostic(
+                    "LIVE - logbackups",
+                    "unreadable-directory",
+                    "permission denied",
+                ),
+            ),
+        ),
+    )
+
+    window.blueprints.scan_logs()
+    _wait_for_jobs(qapp, window.blueprints)
+
+    assert window.blueprints.status.property("tone") == "warning"
+    assert "LIVE - logbackups" in window.blueprints.status.text()
+    assert "unreadable-directory" in window.blueprints.status.text()
+
+
+def test_g2_blueprint_tracker_ignores_a_non_channel_manual_target(window, tmp_path):
+    target = tmp_path / "scratch" / "data" / "Localization" / "english" / "global.ini"
+
+    window.state.set_target(target)
+
+    assert window.blueprints.channel is None
+    assert window.blueprints.scope_name is None
+    assert not window.blueprints.scan_button.isEnabled()
+    assert not window.blueprints.link_live_hotfix_toggle.isEnabled()
 
 
 def test_g2_support_builds_inspectable_redacted_diagnostics_in_background(window, qapp):

@@ -1,4 +1,4 @@
-# v0.2.0 release known limitations
+# StarCompanion known limitations
 
 **Review date:** 2026-08-05
 
@@ -28,3 +28,7 @@
 - The GUI is localized in English. Installed Star Citizen localization
   languages remain strictly isolated and supported as local data sources, but
   application-interface translation is deferred.
+- Structured wording labels are intentionally limited to 48 trimmed plain-text
+  characters. Markup, escapes, controls, and bidirectional overrides are
+  rejected; use the explicitly enabled sandboxed template editor only when the
+  validated label/order controls cannot express the desired result.

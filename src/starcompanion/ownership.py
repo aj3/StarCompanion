@@ -14,15 +14,16 @@ import io
 import json
 import os
 import re
+import stat as stat_module
 import tempfile
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable
 
-from .blueprints import BlueprintCatalog, normalize_blueprint_name
+from .blueprints import BlueprintCatalog, CatalogEntry, normalize_blueprint_name
 from .install import normalize_channel
 from .user_edits import data_dir
 
@@ -32,6 +33,7 @@ MAX_IMPORT_ENTRIES = 100_000
 MAX_NAME_LENGTH = 512
 MAX_STATE_BYTES = 64 * 1024 * 1024
 MAX_ACQUISITIONS = 500_000
+MAX_DISCOVERED_LOG_FILES = 10_000
 CHUNK_SIZE = 256 * 1024
 MAX_LOG_LINE_BYTES = 1024 * 1024
 MAX_JSON_DEPTH = 64
@@ -58,7 +60,16 @@ class OwnershipConflictError(OwnershipError):
 
 
 class OwnershipRecoveryAvailable(OwnershipError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        channel: str | None = None,
+        link_live_hotfix: bool = False,
+    ):
+        super().__init__(message)
+        self.channel = channel
+        self.link_live_hotfix = link_live_hotfix
 
 
 def _check_json_depth(text: str, *, label: str) -> None:
@@ -104,7 +115,11 @@ def ownership_scope(channel: str, *, link_live_hotfix: bool = False) -> str:
         normalized = normalize_channel(channel)
     except ValueError as exc:
         raise OwnershipError(str(exc)) from exc
-    if link_live_hotfix and normalized in {"LIVE", "HOTFIX"}:
+    if link_live_hotfix:
+        if normalized not in {"LIVE", "HOTFIX"}:
+            raise OwnershipError(
+                "only LIVE and HOTFIX can use the shared ownership scope"
+            )
         return "LIVE-HOTFIX"
     return normalized
 
@@ -166,33 +181,54 @@ class OwnershipState:
     cursors: dict[str, FileCursor] = field(default_factory=dict)
     unresolved: list[UnresolvedAcquisition] = field(default_factory=list)
     revision: int = 0
+    _acquisition_ids: set[str] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    _acquisition_count: int | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+
+    def _index_acquisitions(self) -> tuple[set[str], int]:
+        if self._acquisition_ids is None or self._acquisition_count is None:
+            ids = {
+                item.acquisition_id
+                for record in self.records.values()
+                for item in record.acquisitions
+            }
+            ids.update(item.acquisition.acquisition_id for item in self.unresolved)
+            self._acquisition_ids = ids
+            self._acquisition_count = sum(
+                len(record.acquisitions) for record in self.records.values()
+            ) + len(self.unresolved)
+        return self._acquisition_ids, self._acquisition_count
+
+    def _invalidate_acquisition_index(self) -> None:
+        self._acquisition_ids = None
+        self._acquisition_count = None
 
     def add(self, blueprint_id: str, name: str, acquisition: Acquisition) -> bool:
-        count = sum(len(record.acquisitions) for record in self.records.values()) + len(self.unresolved)
+        acquisition_ids, count = self._index_acquisitions()
+        if acquisition.acquisition_id in acquisition_ids:
+            return False
         if count >= MAX_ACQUISITIONS:
             raise OwnershipError("ownership acquisition limit exceeded")
+        if blueprint_id not in self.records and len(self.records) >= MAX_IMPORT_ENTRIES:
+            raise OwnershipError("ownership record limit exceeded")
         record = self.records.setdefault(blueprint_id, OwnershipRecord(blueprint_id, name))
-        if any(item.acquisition_id == acquisition.acquisition_id for item in record.acquisitions):
-            return False
         record.acquisitions.append(acquisition)
-        record.acquisitions.sort(key=lambda item: (item.acquired_at or "", item.acquisition_id))
+        acquisition_ids.add(acquisition.acquisition_id)
+        self._acquisition_count = count + 1
         return True
 
     def add_unresolved(self, item: UnresolvedAcquisition) -> bool:
-        if any(
-            current.acquisition.acquisition_id == item.acquisition.acquisition_id
-            for current in self.unresolved
-        ):
+        acquisition_ids, count = self._index_acquisitions()
+        if item.acquisition.acquisition_id in acquisition_ids:
             return False
-        if sum(len(record.acquisitions) for record in self.records.values()) + len(self.unresolved) >= MAX_ACQUISITIONS:
+        if count >= MAX_ACQUISITIONS:
             raise OwnershipError("ownership acquisition limit exceeded")
         self.unresolved.append(item)
-        self.unresolved.sort(
-            key=lambda current: (
-                current.acquisition.acquired_at or "",
-                current.acquisition.acquisition_id,
-            )
-        )
+        acquisition_ids.add(item.acquisition.acquisition_id)
+        self._acquisition_count = count + 1
         return True
 
 
@@ -337,7 +373,16 @@ def _to_dict(state: OwnershipState) -> dict[str, object]:
             {
                 "blueprint_id": record.blueprint_id,
                 "name": record.name,
-                "acquisitions": [item.__dict__ for item in record.acquisitions],
+                "acquisitions": [
+                    item.__dict__
+                    for item in sorted(
+                        record.acquisitions,
+                        key=lambda evidence: (
+                            evidence.acquired_at or "",
+                            evidence.acquisition_id,
+                        ),
+                    )
+                ],
             }
             for record in sorted(state.records.values(), key=lambda item: item.blueprint_id)
         ],
@@ -348,7 +393,13 @@ def _to_dict(state: OwnershipState) -> dict[str, object]:
                 "reason": item.reason,
                 "acquisition": item.acquisition.__dict__,
             }
-            for item in state.unresolved
+            for item in sorted(
+                state.unresolved,
+                key=lambda unresolved: (
+                    unresolved.acquisition.acquired_at or "",
+                    unresolved.acquisition.acquisition_id,
+                ),
+            )
         ],
     }
 
@@ -543,6 +594,163 @@ def _from_dict(data: object, expected_scope: str) -> OwnershipState:
 
 
 @dataclass(frozen=True)
+class OwnershipLoad:
+    """Read-only state plus separate scopes that still need consolidation."""
+
+    state: OwnershipState
+    continuity_scopes: tuple[str, ...] = ()
+
+
+def _safe_source_name(value: str) -> bool:
+    return bool(re.match(r"^(?:LIVE|HOTFIX) - ", value))
+
+
+def _prefer_acquisition(current: Acquisition, incoming: Acquisition) -> Acquisition:
+    if current == incoming:
+        return current
+    if replace(current, source_name=incoming.source_name) != incoming:
+        raise OwnershipError("conflicting acquisition identity across ownership scopes")
+    if _safe_source_name(incoming.source_name) and not _safe_source_name(
+        current.source_name
+    ):
+        return incoming
+    return current
+
+
+def _merge_ownership_states(
+    current: OwnershipState,
+    incoming: OwnershipState,
+    *,
+    target_scope: str,
+) -> OwnershipState:
+    """Union validated stores without mutating either source or skipping evidence."""
+
+    result = OwnershipState(target_scope, revision=current.revision)
+    record_names: dict[str, str] = {}
+    evidence: dict[
+        str,
+        tuple[str, str, Acquisition, UnresolvedAcquisition | None],
+    ] = {}
+
+    for source in (current, incoming):
+        for blueprint_id, record in source.records.items():
+            if (
+                blueprint_id not in record_names
+                and len(record_names) >= MAX_IMPORT_ENTRIES
+            ):
+                raise OwnershipError("combined ownership record limit exceeded")
+            record_names.setdefault(blueprint_id, record.name)
+            for acquisition in record.acquisitions:
+                previous = evidence.get(acquisition.acquisition_id)
+                if previous is None:
+                    if len(evidence) >= MAX_ACQUISITIONS:
+                        raise OwnershipError("ownership acquisition limit exceeded")
+                    evidence[acquisition.acquisition_id] = (
+                        "record",
+                        blueprint_id,
+                        acquisition,
+                        None,
+                    )
+                elif previous[0] == "record":
+                    if previous[1] != blueprint_id:
+                        raise OwnershipError(
+                            "conflicting acquisition identity across ownership scopes"
+                        )
+                    evidence[acquisition.acquisition_id] = (
+                        "record",
+                        blueprint_id,
+                        _prefer_acquisition(previous[2], acquisition),
+                        None,
+                    )
+                else:
+                    preferred = _prefer_acquisition(previous[2], acquisition)
+                    evidence[acquisition.acquisition_id] = (
+                        "record",
+                        blueprint_id,
+                        preferred,
+                        None,
+                    )
+        for unresolved in source.unresolved:
+            acquisition = unresolved.acquisition
+            previous = evidence.get(acquisition.acquisition_id)
+            if previous is None:
+                if len(evidence) >= MAX_ACQUISITIONS:
+                    raise OwnershipError("ownership acquisition limit exceeded")
+                evidence[acquisition.acquisition_id] = (
+                    "unresolved",
+                    normalize_blueprint_name(unresolved.name),
+                    acquisition,
+                    unresolved,
+                )
+            elif previous[0] == "unresolved":
+                if previous[1] != normalize_blueprint_name(unresolved.name):
+                    raise OwnershipError(
+                        "conflicting acquisition identity across ownership scopes"
+                    )
+                preferred = _prefer_acquisition(previous[2], acquisition)
+                selected = previous[3] if preferred is previous[2] else unresolved
+                evidence[acquisition.acquisition_id] = (
+                    "unresolved",
+                    previous[1],
+                    preferred,
+                    replace(selected, acquisition=preferred),
+                )
+
+    if len(evidence) > MAX_ACQUISITIONS:
+        raise OwnershipError("ownership acquisition limit exceeded")
+    for blueprint_id, name in record_names.items():
+        result.records[blueprint_id] = OwnershipRecord(blueprint_id, name)
+    for kind, identity, acquisition, unresolved in evidence.values():
+        if kind == "record":
+            result.records.setdefault(
+                identity, OwnershipRecord(identity, record_names[identity])
+            ).acquisitions.append(acquisition)
+        elif unresolved is not None:
+            result.unresolved.append(replace(unresolved, acquisition=acquisition))
+
+    incompatible_cursors: set[str] = set()
+    for source in (current, incoming):
+        for identity, cursor in source.cursors.items():
+            if identity in incompatible_cursors:
+                continue
+            previous = result.cursors.get(identity)
+            if previous is None:
+                result.cursors[identity] = copy.deepcopy(cursor)
+                continue
+            same_prefix = (
+                previous.prefix_length == cursor.prefix_length
+                and previous.prefix_sha256 == cursor.prefix_sha256
+            )
+            if not same_prefix:
+                result.cursors.pop(identity, None)
+                incompatible_cursors.add(identity)
+                continue
+            selected = max((previous, cursor), key=lambda item: (item.offset, item.size))
+            safe_label = next(
+                (
+                    item.source_name
+                    for item in (previous, cursor)
+                    if _safe_source_name(item.source_name)
+                ),
+                selected.source_name,
+            )
+            selected = replace(selected, source_name=safe_label)
+            result.cursors[identity] = copy.deepcopy(selected)
+
+    for record in result.records.values():
+        record.acquisitions.sort(
+            key=lambda item: (item.acquired_at or "", item.acquisition_id)
+        )
+    result.unresolved.sort(
+        key=lambda item: (
+            item.acquisition.acquired_at or "",
+            item.acquisition.acquisition_id,
+        )
+    )
+    return result
+
+
+@dataclass(frozen=True)
 class OwnershipStore:
     channel: str
     root: Path | None = None
@@ -564,37 +772,79 @@ class OwnershipStore:
     def lock_path(self) -> Path:
         return self.path.with_suffix(self.path.suffix + ".lock")
 
-    def _load_path(self, path: Path) -> OwnershipState:
-        if path.stat().st_size > MAX_STATE_BYTES:
-            raise OwnershipError("ownership state exceeds its size limit")
+    @staticmethod
+    def _is_store_file(path: Path, label: str) -> bool:
         try:
+            metadata = os.stat(path, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        except OSError as exc:
+            raise OwnershipError(
+                f"{label} could not be inspected: {_safe_os_error(exc)}"
+            ) from exc
+        if _linked_or_reparse(metadata) or not stat_module.S_ISREG(metadata.st_mode):
+            raise OwnershipError(f"{label} is not a regular local file")
+        return True
+
+    def _load_path(self, path: Path) -> OwnershipState:
+        try:
+            if path.stat().st_size > MAX_STATE_BYTES:
+                raise OwnershipError("ownership state exceeds its size limit")
             text = path.read_text(encoding="utf-8")
             _check_json_depth(text, label="ownership state is invalid")
             data = json.loads(text, object_pairs_hook=_strict_object)
+        except OSError as exc:
+            raise OwnershipError(
+                f"ownership state could not be read: {_safe_os_error(exc)}"
+            ) from exc
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise OwnershipError(f"ownership state is invalid JSON: {exc}") from exc
         return _from_dict(data, self.scope)
 
-    def load(self) -> OwnershipState:
-        if not self.path.is_file():
+    def _load_primary(self) -> OwnershipState:
+        if not self._is_store_file(self.path, "ownership state"):
             return OwnershipState(self.scope)
         try:
             return self._load_path(self.path)
         except OwnershipError as primary_error:
-            if self.backup_path.is_file():
+            if self._is_store_file(self.backup_path, "ownership backup"):
                 try:
                     self._load_path(self.backup_path)
-                except (OSError, OwnershipError):
+                except OwnershipError:
                     pass
                 else:
                     raise OwnershipRecoveryAvailable(
                         "ownership state is damaged; a validated last-known-good "
-                        "backup is available through `blueprints recover`"
+                        "backup is available through `blueprints recover`",
+                        channel=self.channel,
+                        link_live_hotfix=self.link_live_hotfix,
                     ) from primary_error
             raise
 
+    def load_details(self) -> OwnershipLoad:
+        primary = self._load_primary()
+        if not self.link_live_hotfix:
+            return OwnershipLoad(primary)
+
+        merged = primary
+        continuity_scopes: list[str] = []
+        for channel in ("LIVE", "HOTFIX"):
+            source = OwnershipStore(channel, root=self.root)._load_primary()
+            candidate = _merge_ownership_states(
+                merged,
+                source,
+                target_scope=self.scope,
+            )
+            if candidate != merged:
+                continuity_scopes.append(channel)
+            merged = candidate
+        return OwnershipLoad(merged, tuple(continuity_scopes))
+
+    def load(self) -> OwnershipState:
+        return self.load_details().state
+
     def load_backup(self) -> OwnershipState:
-        if not self.backup_path.is_file():
+        if not self._is_store_file(self.backup_path, "ownership backup"):
             raise OwnershipError("no ownership backup is available")
         return self._load_path(self.backup_path)
 
@@ -602,7 +852,12 @@ class OwnershipStore:
         if state.scope != self.scope:
             raise OwnershipError("refusing to save a different channel scope")
         with _store_lock(self.lock_path):
-            current = self._load_path(self.path) if self.path.is_file() else OwnershipState(self.scope)
+            primary_exists = self._is_store_file(self.path, "ownership state")
+            current = (
+                self._load_path(self.path)
+                if primary_exists
+                else OwnershipState(self.scope)
+            )
             if state.revision != current.revision:
                 raise OwnershipConflictError(
                     f"ownership state changed concurrently (expected revision "
@@ -614,8 +869,14 @@ class OwnershipStore:
             payload = (json.dumps(_to_dict(validated), ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
             if len(payload) > MAX_STATE_BYTES:
                 raise OwnershipError("ownership state exceeds its size limit")
-            if self.path.is_file():
-                _atomic_bytes(self.backup_path, self.path.read_bytes())
+            if primary_exists:
+                try:
+                    previous = self.path.read_bytes()
+                except OSError as exc:
+                    raise OwnershipError(
+                        f"ownership state could not be backed up: {_safe_os_error(exc)}"
+                    ) from exc
+                _atomic_bytes(self.backup_path, previous)
             _atomic_bytes(self.path, payload)
             state.revision = candidate.revision
 
@@ -648,18 +909,33 @@ def _stream_prefix(stream, length: int) -> str:
         stream.seek(position)
 
 
-def discover_log_files(channel_root: Path) -> tuple[Path, ...]:
-    root = Path(channel_root)
-    candidates = list((root / "logbackups").glob("*.log")) if (root / "logbackups").is_dir() else []
-    if (root / "Game.log").is_file():
-        candidates.append(root / "Game.log")
-    readable: list[tuple[int, str, Path]] = []
-    for path in candidates:
-        try:
-            readable.append((path.stat().st_mtime_ns, str(path), path))
-        except OSError:
-            continue
-    return tuple(item[2] for item in sorted(readable))
+def _log_source_name(path: Path) -> str:
+    """Return useful channel provenance without retaining an absolute path."""
+
+    basename = "".join(
+        character if character.isprintable() else "?" for character in path.name
+    ) or "log"
+    parent = path.parent.parent if path.parent.name.casefold() == "logbackups" else path.parent
+    try:
+        channel = normalize_channel(parent.name)
+    except ValueError:
+        return basename[:255]
+    prefix = f"{channel} - "
+    return prefix + basename[: 255 - len(prefix)]
+
+
+def _safe_os_error(exc: OSError) -> str:
+    """Describe a read failure without copying its absolute filename."""
+
+    detail = exc.strerror or type(exc).__name__
+    identifiers = []
+    if exc.errno is not None:
+        identifiers.append(f"errno {exc.errno}")
+    winerror = getattr(exc, "winerror", None)
+    if winerror is not None:
+        identifiers.append(f"winerror {winerror}")
+    suffix = f" ({', '.join(identifiers)})" if identifiers else ""
+    return f"{detail}{suffix}"
 
 
 @dataclass(frozen=True)
@@ -667,6 +943,166 @@ class ScanDiagnostic:
     source_name: str
     code: str
     message: str
+
+
+@dataclass(frozen=True)
+class LogDiscovery:
+    paths: tuple[Path, ...]
+    diagnostics: tuple[ScanDiagnostic, ...] = ()
+
+
+def _discovery_label(channel_root: Path, name: str) -> str:
+    try:
+        channel = normalize_channel(channel_root.name)
+    except ValueError:
+        return Path(name).name[:255] or "logs"
+    prefix = f"{channel} - "
+    return prefix + Path(name).name[: 255 - len(prefix)]
+
+
+def _discovery_checkpoint(cancel: Callable[[], bool] | None) -> None:
+    if cancel and cancel():
+        raise ScanCancelled("blueprint log discovery cancelled")
+
+
+def _linked_or_reparse(metadata: os.stat_result) -> bool:
+    attributes = getattr(metadata, "st_file_attributes", 0)
+    reparse_flag = getattr(stat_module, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    return stat_module.S_ISLNK(metadata.st_mode) or bool(attributes & reparse_flag)
+
+
+def discover_logs(
+    channel_root: Path,
+    *,
+    link_live_hotfix: bool = False,
+    cancel: Callable[[], bool] | None = None,
+) -> LogDiscovery:
+    """Find current and rotated logs for one reviewed ownership scope.
+
+    A linked production scan expands a selected LIVE or HOTFIX directory to
+    both sibling channels. Other channels stay isolated, and arbitrary paths
+    cannot be used to smuggle an unrelated directory into the shared scope.
+    Enumeration is capped, cancellable, and rejects links or non-regular logs.
+    """
+
+    root = Path(channel_root)
+    roots = [root]
+    if link_live_hotfix:
+        try:
+            channel = normalize_channel(root.name)
+        except ValueError as exc:
+            raise OwnershipError(
+                "linked log discovery requires a LIVE or HOTFIX channel directory"
+            ) from exc
+        if channel not in {"LIVE", "HOTFIX"}:
+            raise OwnershipError(
+                "only LIVE and HOTFIX logs can use the shared ownership scope"
+            )
+        peer = root.parent / ("HOTFIX" if channel == "LIVE" else "LIVE")
+        roots.append(peer)
+
+    candidates: list[tuple[int, str, Path]] = []
+    diagnostics: list[ScanDiagnostic] = []
+    seen: set[Path] = set()
+
+    def add_candidate(path: Path, source_name: str) -> None:
+        _discovery_checkpoint(cancel)
+        try:
+            metadata = os.stat(path, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            diagnostics.append(
+                ScanDiagnostic(source_name, "unreadable", _safe_os_error(exc))
+            )
+            return
+        if _linked_or_reparse(metadata) or not stat_module.S_ISREG(
+            metadata.st_mode
+        ):
+            diagnostics.append(
+                ScanDiagnostic(
+                    source_name,
+                    "unsafe-entry",
+                    "ignored a linked or non-regular log entry",
+                )
+            )
+            return
+        if path in seen:
+            return
+        if len(candidates) >= MAX_DISCOVERED_LOG_FILES:
+            raise OwnershipError(
+                f"log discovery exceeded the {MAX_DISCOVERED_LOG_FILES:,}-file safety limit"
+            )
+        seen.add(path)
+        candidates.append((metadata.st_mtime_ns, str(path), path))
+
+    for selected_root in roots:
+        _discovery_checkpoint(cancel)
+        backups = selected_root / "logbackups"
+        backup_label = _discovery_label(selected_root, "logbackups")
+        try:
+            backup_metadata = os.stat(backups, follow_symlinks=False)
+        except FileNotFoundError:
+            backup_metadata = None
+        except OSError as exc:
+            backup_metadata = None
+            diagnostics.append(
+                ScanDiagnostic(
+                    backup_label, "unreadable-directory", _safe_os_error(exc)
+                )
+            )
+        if backup_metadata is not None:
+            if _linked_or_reparse(backup_metadata) or not stat_module.S_ISDIR(
+                backup_metadata.st_mode
+            ):
+                diagnostics.append(
+                    ScanDiagnostic(
+                        backup_label,
+                        "unsafe-entry",
+                        "ignored a linked or non-directory log backup location",
+                    )
+                )
+            else:
+                try:
+                    with os.scandir(backups) as entries:
+                        for entry in entries:
+                            _discovery_checkpoint(cancel)
+                            if not entry.name.casefold().endswith(".log"):
+                                continue
+                            add_candidate(
+                                Path(entry.path),
+                                _discovery_label(selected_root, entry.name),
+                            )
+                except ScanCancelled:
+                    raise
+                except OSError as exc:
+                    diagnostics.append(
+                        ScanDiagnostic(
+                            backup_label,
+                            "unreadable-directory",
+                            _safe_os_error(exc),
+                        )
+                    )
+        current = selected_root / "Game.log"
+        add_candidate(current, _discovery_label(selected_root, current.name))
+    return LogDiscovery(
+        tuple(item[2] for item in sorted(candidates)), tuple(diagnostics)
+    )
+
+
+def discover_log_files(
+    channel_root: Path,
+    *,
+    link_live_hotfix: bool = False,
+    cancel: Callable[[], bool] | None = None,
+) -> tuple[Path, ...]:
+    """Backward-compatible path-only view of :func:`discover_logs`."""
+
+    return discover_logs(
+        channel_root,
+        link_live_hotfix=link_live_hotfix,
+        cancel=cancel,
+    ).paths
 
 
 @dataclass(frozen=True)
@@ -700,22 +1136,100 @@ def _parse_event(line: bytes) -> tuple[str, str] | None:
     return timestamp.isoformat().replace("+00:00", "Z"), name
 
 
-def _reconcile_unresolved(state: OwnershipState, catalog: BlueprintCatalog) -> int:
+def _reconcile_unresolved(
+    state: OwnershipState,
+    aliases: dict[str, tuple[str, ...]],
+    by_id: dict[str, CatalogEntry],
+    *,
+    cancel: Callable[[], bool] | None = None,
+) -> int:
     remaining: list[UnresolvedAcquisition] = []
     reconciled = 0
     pending = state.unresolved
     state.unresolved = []
-    for item in pending:
-        candidates = catalog.resolve_name_candidates(item.name)
+    state._invalidate_acquisition_index()
+    for index, item in enumerate(pending):
+        if index % 256 == 0 and cancel and cancel():
+            raise ScanCancelled("blueprint log scan cancelled")
+        candidates = aliases.get(normalize_blueprint_name(item.name), ())
         if len(candidates) == 1:
             blueprint_id = candidates[0]
-            if state.add(blueprint_id, catalog.by_id[blueprint_id].name, item.acquisition):
+            if state.add(blueprint_id, by_id[blueprint_id].name, item.acquisition):
                 reconciled += 1
         else:
             reason = "ambiguous" if candidates else "no-match"
             remaining.append(UnresolvedAcquisition(item.name, reason, item.acquisition))
     state.unresolved = remaining
+    state._invalidate_acquisition_index()
     return reconciled
+
+
+def _relabel_log_evidence(
+    state: OwnershipState, source_labels: dict[str, str]
+) -> None:
+    """Upgrade basename-only G2 evidence after its source file is observed."""
+
+    for record in state.records.values():
+        record.acquisitions = [
+            replace(
+                item,
+                source_name=source_labels.get(item.source_fingerprint, item.source_name),
+            )
+            if item.source == "log"
+            else item
+            for item in record.acquisitions
+        ]
+    state.unresolved = [
+        replace(
+            item,
+            acquisition=replace(
+                item.acquisition,
+                source_name=source_labels.get(
+                    item.acquisition.source_fingerprint,
+                    item.acquisition.source_name,
+                ),
+            ),
+        )
+        if item.acquisition.source == "log"
+        else item
+        for item in state.unresolved
+    ]
+    for identity, source_name in source_labels.items():
+        cursor = state.cursors.get(identity)
+        if cursor is not None and cursor.source_name != source_name:
+            state.cursors[identity] = replace(cursor, source_name=source_name)
+    state._invalidate_acquisition_index()
+
+
+def _copy_state_for_scan(
+    state: OwnershipState,
+    cancel: Callable[[], bool] | None,
+) -> OwnershipState:
+    """Clone mutable containers with bounded cancellation checkpoints."""
+
+    result = OwnershipState(state.scope, revision=state.revision)
+    copied = 0
+    for blueprint_id, record in state.records.items():
+        acquisitions = []
+        for acquisition in record.acquisitions:
+            copied += 1
+            if copied % 256 == 0 and cancel and cancel():
+                raise ScanCancelled("blueprint log scan cancelled")
+            acquisitions.append(acquisition)
+        result.records[blueprint_id] = OwnershipRecord(
+            record.blueprint_id,
+            record.name,
+            acquisitions,
+        )
+    for index, (identity, cursor) in enumerate(state.cursors.items()):
+        if index % 256 == 0 and cancel and cancel():
+            raise ScanCancelled("blueprint log scan cancelled")
+        result.cursors[identity] = copy.copy(cursor)
+    for index, item in enumerate(state.unresolved):
+        if index % 256 == 0 and cancel and cancel():
+            raise ScanCancelled("blueprint log scan cancelled")
+        result.unresolved.append(item)
+    return result
 
 
 def scan_logs(
@@ -726,6 +1240,7 @@ def scan_logs(
     full_rescan: bool = False,
     cancel: Callable[[], bool] | None = None,
     progress: Callable[[int, int, str], None] | None = None,
+    initial_diagnostics: Iterable[ScanDiagnostic] = (),
 ) -> ScanResult:
     """Incrementally scan explicit files, returning a preview state.
 
@@ -733,21 +1248,31 @@ def scan_logs(
     preview cannot advance watermarks.
     """
 
-    result = copy.deepcopy(state)
-    reconciled = _reconcile_unresolved(result, catalog)
+    result = _copy_state_for_scan(state, cancel)
+    aliases = catalog.aliases
+    by_id = catalog.by_id
+    reconciled = _reconcile_unresolved(
+        result,
+        aliases,
+        by_id,
+        cancel=cancel,
+    )
     selected = tuple(dict.fromkeys(Path(path) for path in paths))
-    diagnostics: list[ScanDiagnostic] = []
+    diagnostics: list[ScanDiagnostic] = list(initial_diagnostics)
     unmatched: set[str] = set()
-    files_read = bytes_read = events_seen = added = unresolved_added = 0
+    source_labels: dict[str, str] = {}
+    files_read = bytes_read = lines_seen = events_seen = added = unresolved_added = 0
     for index, path in enumerate(selected):
+        source_name = _log_source_name(path)
         if cancel and cancel():
             raise ScanCancelled("blueprint log scan cancelled")
         if progress:
-            progress(index, len(selected), path.name)
+            progress(index, len(selected), source_name)
         try:
             with path.open("rb") as stream:
                 stat = os.fstat(stream.fileno())
                 identity = _file_identity(path, stat)
+                source_labels[identity] = source_name
                 previous = result.cursors.get(identity)
                 start = 0 if full_rescan or previous is None else previous.offset
                 code = None
@@ -765,7 +1290,7 @@ def scan_logs(
                         start = 0
                         diagnostics.append(
                             ScanDiagnostic(
-                                path.name,
+                                source_name,
                                 code,
                                 "file identity content changed; restarted at byte zero",
                             )
@@ -796,20 +1321,22 @@ def scan_logs(
                         chunk = chunk[newline + 1 :]
                         discarding_oversized = False
                     buffer += chunk
+                    consumed = 0
                     while True:
-                        newline = buffer.find(b"\n")
+                        newline = buffer.find(b"\n", consumed)
                         if newline < 0:
                             break
-                        raw = buffer[:newline].rstrip(b"\r")
-                        line_start = buffer_offset
+                        raw = buffer[consumed:newline].rstrip(b"\r")
+                        line_start = buffer_offset + consumed
                         consumed = newline + 1
-                        buffer = buffer[consumed:]
-                        buffer_offset += consumed
-                        committed = buffer_offset
+                        committed = buffer_offset + consumed
+                        lines_seen += 1
+                        if lines_seen % 1024 == 0 and cancel and cancel():
+                            raise ScanCancelled("blueprint log scan cancelled")
                         if len(raw) > MAX_LOG_LINE_BYTES:
                             diagnostics.append(
                                 ScanDiagnostic(
-                                    path.name,
+                                    source_name,
                                     "oversized-line",
                                     f"discarded a log line exceeding {MAX_LOG_LINE_BYTES:,} bytes",
                                 )
@@ -819,6 +1346,8 @@ def scan_logs(
                         if event is None:
                             continue
                         events_seen += 1
+                        if events_seen % 256 == 0 and cancel and cancel():
+                            raise ScanCancelled("blueprint log scan cancelled")
                         acquired_at, name = event
                         line_hash = hashlib.sha256(raw).hexdigest()
                         acquisition_id = hashlib.sha256(
@@ -828,12 +1357,12 @@ def scan_logs(
                             acquisition_id=acquisition_id,
                             source="log",
                             acquired_at=acquired_at,
-                            source_name=path.name,
+                            source_name=source_name,
                             source_fingerprint=identity,
                             byte_offset=line_start,
                             line_sha256=line_hash,
                         )
-                        candidates = catalog.resolve_name_candidates(name)
+                        candidates = aliases.get(normalize_blueprint_name(name), ())
                         if len(candidates) != 1:
                             unmatched.add(name)
                             if result.add_unresolved(
@@ -846,12 +1375,15 @@ def scan_logs(
                                 unresolved_added += 1
                             continue
                         blueprint_id = candidates[0]
-                        if result.add(blueprint_id, catalog.by_id[blueprint_id].name, acquisition):
+                        if result.add(blueprint_id, by_id[blueprint_id].name, acquisition):
                             added += 1
+                    if consumed:
+                        buffer = buffer[consumed:]
+                        buffer_offset += consumed
                     if len(buffer) > MAX_LOG_LINE_BYTES:
                         diagnostics.append(
                             ScanDiagnostic(
-                                path.name,
+                                source_name,
                                 "oversized-line",
                                 f"discarded a log line exceeding {MAX_LOG_LINE_BYTES:,} bytes",
                             )
@@ -865,7 +1397,7 @@ def scan_logs(
                 if final_size < stat.st_size:
                     diagnostics.append(
                         ScanDiagnostic(
-                            path.name,
+                            source_name,
                             "truncated-during-scan",
                             "file shrank during scanning; watermark was not advanced",
                         )
@@ -873,7 +1405,7 @@ def scan_logs(
                 else:
                     result.cursors[identity] = FileCursor(
                         identity=identity,
-                        source_name=path.name,
+                        source_name=source_name,
                         offset=committed,
                         size=stat.st_size,
                         prefix_length=prefix_length,
@@ -882,7 +1414,20 @@ def scan_logs(
         except ScanCancelled:
             raise
         except OSError as exc:
-            diagnostics.append(ScanDiagnostic(path.name, "unreadable", str(exc)))
+            diagnostics.append(
+                ScanDiagnostic(source_name, "unreadable", _safe_os_error(exc))
+            )
+    _relabel_log_evidence(result, source_labels)
+    for record in result.records.values():
+        record.acquisitions.sort(
+            key=lambda item: (item.acquired_at or "", item.acquisition_id)
+        )
+    result.unresolved.sort(
+        key=lambda item: (
+            item.acquisition.acquired_at or "",
+            item.acquisition.acquisition_id,
+        )
+    )
     if progress:
         progress(len(selected), len(selected), "")
     return ScanResult(
@@ -963,6 +1508,7 @@ def apply_resolution(plan: ResolutionPlan, state: OwnershipState) -> OwnershipSt
     ]
     if len(result.unresolved) == len(state.unresolved):
         raise OwnershipError("unresolved acquisition changed after preview")
+    result._invalidate_acquisition_index()
     result.add(plan.blueprint_id, plan.blueprint_name, plan.unresolved.acquisition)
     return result
 

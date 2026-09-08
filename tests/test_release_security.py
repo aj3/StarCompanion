@@ -140,7 +140,7 @@ def test_sbom_finalizer_records_and_verifier_requires_project_license(
     sbom.write_bytes((ROOT / "sbom" / "starcompanion-runtime.cdx.json").read_bytes())
 
     FINALIZE_SBOM(sbom, project)
-    assert VERIFY_SBOM(sbom, project)["component"] == "starcompanion==0.2.0"
+    assert VERIFY_SBOM(sbom, project)["component"] == "starcompanion==0.3.0"
 
     changed = json.loads(sbom.read_text(encoding="utf-8"))
     changed["metadata"]["component"].pop("licenses")
@@ -257,12 +257,12 @@ def test_windows_metadata_is_generated_from_project_version(tmp_path: Path) -> N
 
     version = writer(ROOT, tmp_path)
 
-    assert version == "0.2.0.0"
+    assert version == "0.3.0.0"
     gui = (tmp_path / "StarCompanion.exe.version-info.txt").read_text(
         encoding="utf-8"
     )
     assert "StringStruct('ProductName', 'StarCompanion')" in gui
-    assert "StringStruct('ProductVersion', '0.2.0.0')" in gui
+    assert "StringStruct('ProductVersion', '0.3.0.0')" in gui
     assert "StringStruct('OriginalFilename', 'StarCompanion.exe')" in gui
     assert "Copyright 2026 aj3 and StarCompanion contributors" in gui
 
@@ -277,6 +277,8 @@ def test_release_workflow_builds_and_offline_smokes_both_platforms() -> None:
     assert "build-ubuntu:" in workflow
     assert "StarCompanion-windows-unsigned" in workflow
     assert "StarCompanion-ubuntu-unsigned" in workflow
+    assert workflow.count("packaging\\build_release.py") == 1
+    assert workflow.count("packaging/build_release.py") == 1
     assert "pytest -q --ignore=tests/test_gui.py" in workflow
     assert "pytest -vv -s tests/test_gui.py" in workflow
     assert "pytest -q tests/test_gui_screenshots.py" in workflow
@@ -289,9 +291,30 @@ def test_release_workflow_builds_and_offline_smokes_both_platforms() -> None:
     packaged_smoke = (root / "packaging" / "verify_offline.py").read_text(
         encoding="utf-8"
     )
+    frozen_spec = (root / "packaging" / "starcompanion.spec").read_text(
+        encoding="utf-8"
+    )
     assert '"--smoke-test"' in gui_entry
+    assert "window.close()" in gui_entry
+    assert "return 0" in gui_entry
     assert '_run([str(gui), "--smoke-test"]' in packaged_smoke
     assert 'env["STARCOMPANION_ENFORCE_OFFLINE"] = "1"' in packaged_smoke
+    assert frozen_spec.count("verified_python_binaries(") == 3
+    assert 'startswith("api-ms-win-")' in frozen_spec
+    assert 'startswith("ext-ms-win-")' in frozen_spec
+    assert '== "ucrtbase.dll"' in frozen_spec
+    assert "Path(sys.prefix).resolve()" in frozen_spec
+    assert "Path(sys.base_prefix).resolve()" in frozen_spec
+    assert "outside the selected Python runtime" in frozen_spec
+
+    release_builder = (root / "packaging" / "build_release.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'environment["PATH"] = os.pathsep.join(paths)' in release_builder
+    assert '"System32"' in release_builder
+    assert "Path(sys.base_prefix).resolve()" in release_builder
+    assert 'Path(sys.base_prefix).resolve() / "DLLs"' in release_builder
+    assert '"--clean"' in release_builder
 
 
 def test_dependency_free_ownership_smoke_fixture_matches_cache_schema(

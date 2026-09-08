@@ -4,22 +4,27 @@ import multiprocessing
 import os
 import tracemalloc
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from starcompanion.blueprints import build_catalog
+from starcompanion.blueprints import BlueprintCatalog, build_catalog
 from starcompanion.model import BlueprintPool, Contract, ContractSet, Org, Reward
 from starcompanion.ownership import (
+    Acquisition,
     OwnershipError,
     OwnershipConflictError,
     OwnershipRecoveryAvailable,
     OwnershipState,
     OwnershipStore,
     ScanCancelled,
+    ScanDiagnostic,
+    UnresolvedAcquisition,
     apply_import,
     apply_resolution,
     discover_log_files,
+    discover_logs,
     export_csv,
     export_json,
     ownership_path,
@@ -108,6 +113,8 @@ def test_channel_scopes_are_isolated_and_live_hotfix_link_is_explicit(tmp_path):
     assert ownership_scope("LIVE") == "LIVE"
     assert ownership_scope("HOTFIX", link_live_hotfix=True) == "LIVE-HOTFIX"
     assert ownership_path("PTU", root=tmp_path) != ownership_path("LIVE", root=tmp_path)
+    with pytest.raises(OwnershipError, match="only LIVE and HOTFIX"):
+        ownership_scope("PTU", link_live_hotfix=True)
     with pytest.raises(OwnershipError):
         ownership_path("../LIVE", root=tmp_path)
 
@@ -119,6 +126,24 @@ def test_store_round_trip_is_atomic_and_rejects_cross_scope(tmp_path):
     assert store.load() == state
     with pytest.raises(OwnershipError):
         store.save(OwnershipState("PTU"))
+
+
+def test_store_inspection_error_redacts_its_absolute_path(monkeypatch, tmp_path):
+    store = OwnershipStore("LIVE", root=tmp_path / "private-player-data")
+    target = store.path
+    real_stat = os.stat
+
+    def denied(path, *args, **kwargs):
+        if Path(path) == target:
+            raise PermissionError(13, "permission denied", str(path))
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr("starcompanion.ownership.os.stat", denied)
+    with pytest.raises(OwnershipError) as captured:
+        store.load()
+
+    assert str(tmp_path) not in str(captured.value)
+    assert "private-player-data" not in str(captured.value)
 
 
 def test_concurrent_stale_writers_are_serialized_and_one_is_rejected(tmp_path):
@@ -397,6 +422,75 @@ def test_cancellation_is_checked_between_bounded_chunks(tmp_path):
     assert checks == 3
 
 
+def test_cancellation_is_checked_inside_a_chunk_with_many_tiny_lines(tmp_path):
+    log = tmp_path / "Game.log"
+    log.write_bytes(b"x\n" * 200_000)
+    checks = 0
+
+    def cancelled():
+        nonlocal checks
+        checks += 1
+        return checks >= 3
+
+    with pytest.raises(ScanCancelled):
+        scan_logs([log], catalog(), OwnershipState("LIVE"), cancel=cancelled)
+    assert checks == 3
+
+
+def test_unresolved_reconciliation_is_cancellable_before_full_traversal():
+    state = OwnershipState("LIVE")
+    for index in range(1_000):
+        digest = f"{index:064x}"
+        state.add_unresolved(
+            UnresolvedAcquisition(
+                f"Unknown {index}",
+                "no-match",
+                Acquisition(digest, "import", None, "seed.json", "f" * 64),
+            )
+        )
+    checks = 0
+
+    def cancel():
+        nonlocal checks
+        checks += 1
+        return checks >= 2
+
+    with pytest.raises(ScanCancelled):
+        scan_logs((), catalog(), state, cancel=cancel)
+    assert len(state.unresolved) == 1_000
+
+
+def test_scan_snapshots_catalog_indexes_once(monkeypatch, tmp_path):
+    blueprint_catalog = catalog()
+    alias_getter = BlueprintCatalog.aliases.fget
+    by_id_getter = BlueprintCatalog.by_id.fget
+    calls = {"aliases": 0, "by_id": 0}
+
+    def aliases(instance):
+        calls["aliases"] += 1
+        return alias_getter(instance)
+
+    def by_id(instance):
+        calls["by_id"] += 1
+        return by_id_getter(instance)
+
+    monkeypatch.setattr(BlueprintCatalog, "aliases", property(aliases))
+    monkeypatch.setattr(BlueprintCatalog, "by_id", property(by_id))
+    log = write(
+        tmp_path / "Game.log",
+        "\n".join(
+            event("Coda Pistol", f"2026-03-26T17:15:41.{index:06}Z")
+            for index in range(500)
+        )
+        + "\n",
+    )
+
+    result = scan_logs([log], blueprint_catalog, OwnershipState("LIVE"))
+
+    assert result.acquisitions_added == 500
+    assert calls == {"aliases": 1, "by_id": 1}
+
+
 def test_oversized_line_is_memory_bounded_and_next_line_still_scans(tmp_path):
     log = write(tmp_path / "Game.log", "x" * (1024 * 1024 + 1) + "\n" + event() + "\n")
     result = scan_logs([log], catalog(), OwnershipState("LIVE"))
@@ -429,6 +523,170 @@ def test_discovery_covers_live_and_rotated_logs(tmp_path):
     write(tmp_path / "logbackups" / "old.log", "")
     write(tmp_path / "Game.log", "")
     assert {path.name for path in discover_log_files(tmp_path)} == {"old.log", "Game.log"}
+
+
+def test_linked_discovery_reviews_live_and_hotfix_without_test_channels(tmp_path):
+    game = tmp_path / "StarCitizen"
+    live = game / "LIVE"
+    hotfix = game / "HOTFIX"
+    ptu = game / "PTU"
+    for root in (live, hotfix, ptu):
+        (root / "logbackups").mkdir(parents=True)
+    write(live / "Game.log", "")
+    write(live / "logbackups" / "live-old.log", "")
+    write(hotfix / "Game.log", "")
+    write(hotfix / "logbackups" / "hotfix-old.log", "")
+    write(ptu / "Game.log", "")
+
+    discovered = discover_log_files(live, link_live_hotfix=True)
+
+    assert set(discovered) == {
+        live / "Game.log",
+        live / "logbackups" / "live-old.log",
+        hotfix / "Game.log",
+        hotfix / "logbackups" / "hotfix-old.log",
+    }
+    reverse = discover_log_files(hotfix, link_live_hotfix=True)
+    assert set(reverse) == set(discovered)
+    assert ptu / "Game.log" not in discovered
+
+
+def test_linked_store_unions_existing_scopes_without_mutating_sources(tmp_path):
+    live_store = OwnershipStore("LIVE", root=tmp_path)
+    hotfix_store = OwnershipStore("HOTFIX", root=tmp_path)
+    live = OwnershipState("LIVE")
+    hotfix = OwnershipState("HOTFIX")
+    live.add(
+        f"cig:{UUID_A}",
+        "Coda Pistol",
+        Acquisition("a" * 64, "import", None, "live.json", "1" * 64),
+    )
+    hotfix.add(
+        f"cig:{UUID_B}",
+        "Norfield",
+        Acquisition("b" * 64, "import", None, "hotfix.json", "2" * 64),
+    )
+    live_store.save(live)
+    hotfix_store.save(hotfix)
+    live_bytes = live_store.path.read_bytes()
+    hotfix_bytes = hotfix_store.path.read_bytes()
+
+    linked = OwnershipStore("LIVE", root=tmp_path, link_live_hotfix=True)
+    loaded = linked.load_details()
+
+    assert loaded.continuity_scopes == ("LIVE", "HOTFIX")
+    assert set(loaded.state.records) == {f"cig:{UUID_A}", f"cig:{UUID_B}"}
+    assert not linked.path.exists()
+    linked.save(loaded.state)
+    assert live_store.path.read_bytes() == live_bytes
+    assert hotfix_store.path.read_bytes() == hotfix_bytes
+    assert linked.load_details().continuity_scopes == ()
+
+
+def test_discovery_reports_directory_errors_without_exposing_paths(
+    monkeypatch, tmp_path
+):
+    backups = tmp_path / "LIVE" / "logbackups"
+    backups.mkdir(parents=True)
+    real_scandir = os.scandir
+
+    def denied(path):
+        if Path(path) == backups:
+            raise PermissionError(13, "permission denied", str(path))
+        return real_scandir(path)
+
+    monkeypatch.setattr("starcompanion.ownership.os.scandir", denied)
+    result = discover_logs(tmp_path / "LIVE")
+
+    assert not result.paths
+    assert result.diagnostics[0].source_name == "LIVE - logbackups"
+    assert result.diagnostics[0].code == "unreadable-directory"
+    assert str(tmp_path) not in result.diagnostics[0].message
+
+
+def test_discovery_rejects_nonregular_logs_and_is_cancellable(tmp_path):
+    backups = tmp_path / "LIVE" / "logbackups"
+    backups.mkdir(parents=True)
+    (backups / "not-a-file.log").mkdir()
+    for index in range(50):
+        write(backups / f"{index:03}.log", "")
+    checks = 0
+
+    def cancel():
+        nonlocal checks
+        checks += 1
+        return checks >= 12
+
+    with pytest.raises(ScanCancelled, match="discovery cancelled"):
+        discover_logs(tmp_path / "LIVE", cancel=cancel)
+    completed = discover_logs(tmp_path / "LIVE")
+    assert len(completed.paths) == 50
+    assert any(item.code == "unsafe-entry" for item in completed.diagnostics)
+
+
+def test_discovery_file_limit_fails_closed(monkeypatch, tmp_path):
+    backups = tmp_path / "LIVE" / "logbackups"
+    backups.mkdir(parents=True)
+    for index in range(4):
+        write(backups / f"{index}.log", "")
+    monkeypatch.setattr("starcompanion.ownership.MAX_DISCOVERED_LOG_FILES", 3)
+
+    with pytest.raises(OwnershipError, match="3-file safety limit"):
+        discover_logs(tmp_path / "LIVE")
+
+
+def test_discovery_diagnostics_flow_into_scan_result(tmp_path):
+    warning = ScanDiagnostic("LIVE - logbackups", "unreadable-directory", "denied")
+    result = scan_logs(
+        (),
+        catalog(),
+        OwnershipState("LIVE"),
+        initial_diagnostics=(warning,),
+    )
+    assert result.diagnostics == (warning,)
+
+
+def test_linked_rescan_upgrades_old_basename_only_provenance(tmp_path):
+    live = tmp_path / "StarCitizen" / "LIVE"
+    live.mkdir(parents=True)
+    log = write(live / "Game.log", event() + "\n")
+    first = scan_logs([log], catalog(), OwnershipState("LIVE-HOTFIX"))
+    record = first.state.records[f"cig:{UUID_A}"]
+    record.acquisitions[0] = replace(record.acquisitions[0], source_name="Game.log")
+    cursor = next(iter(first.state.cursors.values()))
+    first.state.cursors[cursor.identity] = replace(cursor, source_name="Game.log")
+
+    second = scan_logs(
+        discover_log_files(live, link_live_hotfix=True),
+        catalog(),
+        first.state,
+    )
+
+    assert second.bytes_read == 0
+    assert record.acquisitions[0].source_name == "Game.log"
+    migrated = second.state.records[f"cig:{UUID_A}"].acquisitions[0]
+    assert migrated.source_name == "LIVE - Game.log"
+    assert next(iter(second.state.cursors.values())).source_name == "LIVE - Game.log"
+
+
+@pytest.mark.parametrize("channel", ("PTU", "EPTU", "TECH-PREVIEW"))
+def test_linked_discovery_rejects_nonproduction_channels(tmp_path, channel):
+    root = tmp_path / channel
+    root.mkdir()
+    with pytest.raises(OwnershipError, match="only LIVE and HOTFIX"):
+        discover_log_files(root, link_live_hotfix=True)
+
+
+def test_unreadable_log_diagnostic_redacts_the_absolute_path(tmp_path):
+    missing = tmp_path / "private-user-folder" / "Game.log"
+
+    result = scan_logs([missing], catalog(), OwnershipState("LIVE"))
+
+    assert len(result.diagnostics) == 1
+    diagnostic = result.diagnostics[0]
+    assert diagnostic.source_name == "Game.log"
+    assert str(tmp_path) not in diagnostic.message
+    assert "private-user-folder" not in diagnostic.message
 
 
 def test_import_preview_scmdb_json_apply_and_round_trip_exports(tmp_path):

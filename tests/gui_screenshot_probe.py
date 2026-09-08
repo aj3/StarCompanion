@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QPoint
 from PySide6.QtGui import QImage
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QScrollArea, QWidget
 
 from starcompanion import install
 from starcompanion.gui.app import MainWindow
@@ -27,6 +27,7 @@ def _rect(widget: QWidget, window: QWidget) -> list[int]:
 def main() -> int:
     output = Path(sys.argv[1])
     page = sys.argv[2] if len(sys.argv) > 2 else "overview"
+    page_key = "presentation" if page == "presentation-wording" else page
     logical_size = (1040, 680) if len(sys.argv) > 3 and sys.argv[3] == "minimum" else (1280, 800)
     if page == "manual-apply":
         os.environ["STARCOMPANION_EXPERT"] = "1"
@@ -75,7 +76,7 @@ def main() -> int:
         window.state.backup_dir = output.parent / "backups"
         window.apply.target_edit.setText(str(target))
         window.apply.refresh_plan()
-    if not window.shell.set_current_key(page):
+    if not window.shell.set_current_key(page_key):
         raise ValueError(f"unknown screenshot page {page!r}")
     # Native menu metrics vary by platform. The shell contains equivalent
     # profile/theme controls, so the image baseline deliberately targets the
@@ -84,6 +85,15 @@ def main() -> int:
     window.resize(*logical_size)
     window.show()
     app.processEvents()
+
+    if page == "presentation-wording":
+        parent = window.formatting.parentWidget()
+        while parent is not None and not isinstance(parent, QScrollArea):
+            parent = parent.parentWidget()
+        if parent is None:
+            raise RuntimeError("presentation scroll viewport was not found")
+        parent.ensureWidgetVisible(window.formatting.wording_section, 0, 0)
+        app.processEvents()
 
     pixmap = window.grab()
     if not pixmap.save(str(output)):
@@ -127,6 +137,12 @@ def main() -> int:
                 "style_metric": window.formatting.style_metric,
                 "style_section": window.formatting.style_section,
                 "title_section": window.formatting.title_section,
+            }
+        )
+    elif page == "presentation-wording":
+        rect_widgets.update(
+            {
+                "wording_section": window.formatting.wording_section,
                 "length_section": window.formatting.length_box,
             }
         )

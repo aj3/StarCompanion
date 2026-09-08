@@ -4,11 +4,17 @@
 **Cadence assumption:** two-week sprints, one small team
 **Delivery order:** core functionality first; professional GUI second
 
-This program closes the useful feature gap with Smart Citizen v2.3.0 without
+This program closes the useful feature gap with Smart Citizen v2.3.1 without
 turning StarCompanion into a clone. Smart Citizen is a behavior and game-data
 reference. StarCompanion retains its own models, tests, offline-first design,
 pure-Python P4K/DataForge readers, and explicit confirmation before modifying a
 game file.
+
+**Baseline refresh — 2026-09-08:** the current comparison is Smart Citizen
+v2.3.1 at `b103f9e` and MrKraken/StarStrings at `b83d58b` (4.10 data). The
+auditable outcome-by-outcome inventory and remaining work are maintained in
+[FEATURE_PARITY.md](FEATURE_PARITY.md); this historical plan is not itself a
+claim that every provider or interface feature is complete.
 
 The work does **not** fit safely into a single sprint. It is organized as six
 core sprints followed by three GUI sprints. Every sprint is independently
@@ -561,7 +567,9 @@ and provider evidence; older/community name-only pools are visibly marked with
 a SHA-256 name fallback rather than being mislabeled as CIG identities.
 
 `ownership.py` persists a versioned store under an isolated channel scope.
-LIVE/HOTFIX sharing is opt-in; the test channels cannot enter that scope.
+New GUI preferences review LIVE/HOTFIX together by default; the visible option
+can separate them, the CLI selects the shared scope explicitly, and test
+channels cannot enter that scope.
 Selected `Game.log` and `logbackups/*.log` files are streamed in bounded chunks
 using per-file identities, prefix fingerprints, and committed byte offsets.
 Unchanged scans read zero bytes, partial final lines remain uncommitted, and
@@ -581,14 +589,26 @@ filters for exact search, owned/unowned, reward source, category, and
 acquisition source. Import parsing is UTF-8, schema, size, count, and field
 limited; ambiguous/unmatched names are reported and never guessed.
 
+The G3 integration pass completed the user-facing production-channel workflow.
+The persisted **Review LIVE and HOTFIX logs together** option defaults on for
+new GUI preferences and expands either
+selected production root to both sibling `Game.log` and `logbackups/*.log`
+sets, while the CLI performs the same discovery with `--link-live-hotfix`.
+Automatic `--install` discovery rejects a channel/scope mismatch. Background
+results are bound to the channel and link choice, so switching scope cannot
+save a stale result. Cursor-only scans are now offered for confirmation instead
+of being silently discarded, and evidence/error text retains channel-level
+provenance without absolute paths.
+
 ### Scope
 
 - Create a stable blueprint catalog from C1/C2 extraction.
 - Add an ownership store separate from generated localization caches.
 - Scan selected local game logs incrementally with per-file identity and
   watermarks; support forced full rescan.
-- Treat LIVE and HOTFIX as optionally linked for ownership scanning while
-  keeping PTU/EPTU/TECH-PREVIEW isolated.
+- Review LIVE and HOTFIX together by default in the GUI, allow an explicit
+  separated view, require the CLI shared-scope flag, and keep
+  PTU/EPTU/TECH-PREVIEW isolated.
 - Deduplicate acquisitions and retain minimal evidence needed for explanation.
 - Import/export CSV and SCMDB-shaped JSON without contacting SCMDB.
 - Implement backend queries for search, owned/unowned, reward source, category,
@@ -834,6 +854,58 @@ screenshot matrix and the screen-reader/control audit.
   concise privacy screen confirming zero telemetry/network behavior.
 - Package smoke tests, accessibility pass, usability test, and release notes.
 
+### Sprint G3 — Structured presentation rules
+
+**Status: complete.** Output profiles now
+default to typed structured wording rather than template execution. The
+validated model controls complete reward-
+section ordering, nine plain-text labels, reputation separators, and thousands
+formatting; field visibility, emphasis, title prefixes, and pool limits remain
+in their existing typed models. Labels reject markup, escapes, control
+characters, Unicode direction overrides, surrounding whitespace, and lengths
+above 48 characters. Section order must contain every known reward section
+exactly once, so rearranging information cannot silently omit it.
+
+Profile schema v2 migrates v1 documents in memory. A v1 profile without custom
+templates enters structured mode; one with templates retains them and enters
+advanced mode so existing output is preserved. New profiles keep template
+source dormant unless the user explicitly enables advanced custom templates.
+Jinja remains immutable-sandboxed, live-previewed, and subject to the same
+final value validator.
+
+Presentation exposes reviewed order presets, safe labels, and numeric controls
+without filesystem or extraction work. Custom Wording clearly reports active
+versus stored-inactive templates and disables editing until advanced mode is
+enabled. Both states join keyboard/screen-reader coverage, and the structured
+wording viewport has 100%, 150%, and 200% screenshot regression gates.
+
+The final integration pass exposes every one of the nine schema-v2 labels in
+the GUI and includes the production LIVE/HOTFIX log workflow described under
+C4. The complete core, GUI, screenshot, security, adversarial-log, packaging,
+and Windows/Ubuntu CI gates passed together on the G3 implementation commit.
+
+### Planned G4–G7 parity closure
+
+- **G4** completes ownership/editor operations, per-key INI reconciliation
+  (`keep`, `import`, `append`, `prepend`, or `custom`), capped localization
+  backup retention, separate rotating `user.ini` snapshots, and a safe
+  shareable Loc-Pack equivalent containing only user-authored deltas, a
+  profile, and instructions to rebuild from the recipient's own `Data.p4k`.
+- **G5** extracts independently evidenced mission type/difficulty,
+  friendly/hostile spawn, ace-pilot, turret, and engagement facts alongside
+  the planned entity providers. Shared-description ambiguity suppresses an
+  uncertain value instead of copying it between missions.
+- **G6** adds independent toggles and presentation for those mission facts plus
+  the Tag Builder and legacy wording pack. Every legacy transform is opt-in,
+  previewed, exact-key, build-bounded, authored-provenance-bearing, and
+  fail-closed on drift; it never supplies an unresolved CIG localization key.
+- **G7** adds visible game-language selection and safe `USER.cfg` activation,
+  portable/beside-executable data mode, configurable data-directory migration,
+  OneDrive warnings, filtered-row clipboard export, unsaved-close protection,
+  an active-localization indicator, category toggles, and above/below stat-block
+  placement. `USER.cfg` changes preserve unrelated settings and encoding and
+  use preview, backup, confirmation, atomic replacement, and recovery.
+
 ## Recommended improvements beyond parity
 
 Smart Citizen is useful evidence about what players value, but matching all of
@@ -859,6 +931,8 @@ The application should reopen to a dashboard and make “Review changes” the
 primary action whenever inputs or the game build change.
 
 ### 2. Replace template-first customization with structured formatting rules
+
+**Implemented by Sprint G3.** The text below records the design requirement.
 
 Jinja remains valuable as an expert escape hatch, but it is too powerful and
 too hard to validate as the primary customization model. Introduce typed rules

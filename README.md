@@ -81,8 +81,10 @@ takes a backup, and there is an **Undo my last change** button beside it.
 It also warns if your `USER.cfg` is missing `g_language`, since without that
 setting the game ignores the override entirely and nothing appears to happen.
 
-*Presentation* changes how the added text looks. *Custom wording* and the
-virtualized *String editor* handle explicit advanced edits. *Blueprints* joins
+*Presentation* changes style, generated labels, information order, and number
+formatting through validated controls. *Custom wording* is an explicit advanced
+mode for sandboxed templates, while the virtualized *String editor* handles
+individual reviewed values. *Blueprints* joins
 the local C4 catalog to channel-scoped ownership and incrementally scans local
 game logs only after you request it.
 
@@ -174,23 +176,33 @@ starcompanion blueprints scan --cache cache.json --channel LIVE \
 starcompanion blueprints scan --cache cache.json --channel LIVE \
   --install "Z:\\RSI\\StarCitizen\\LIVE" --confirm
 
-# Search/filter the catalog and joined player state.
+# Explicitly review both production channels from either sibling folder.
+starcompanion blueprints scan --cache cache.json --channel LIVE \
+  --install "Z:\\RSI\\StarCitizen\\LIVE" --link-live-hotfix --confirm
+
+# Search/filter the shared production ownership state (repeat the scope flag).
 starcompanion blueprints list --cache cache.json --channel LIVE \
-  --ownership unowned --category weapons --reward-source Foxwell
+  --link-live-hotfix --ownership unowned --category weapons --reward-source Foxwell
 
 # Portable user-owned data. Imports preview by default; exports also require
 # confirmation. JSON is SCMDB-shaped but is produced and consumed offline.
 starcompanion blueprints import --cache cache.json --channel LIVE \
-  --file scmdb-tracking.json
+  --link-live-hotfix --file scmdb-tracking.json
 starcompanion blueprints import --cache cache.json --channel LIVE \
-  --file scmdb-tracking.json --confirm
+  --link-live-hotfix --file scmdb-tracking.json --confirm
 starcompanion blueprints export --cache cache.json --channel LIVE \
-  --out owned-items.json --confirm
+  --link-live-hotfix --out owned-items.json --confirm
 ```
 
-`--full` forces a complete re-scan. LIVE and HOTFIX remain separate unless
-`--link-live-hotfix` explicitly selects their shared ownership scope;
-PTU/EPTU/TECH-PREVIEW are never folded into that scope. CSV and JSON imports
+`--full` forces a complete re-scan. New GUI preferences review LIVE and HOTFIX
+together by default; the visible **Review LIVE and HOTFIX logs together** option
+can separate them. CLI commands select that shared ownership scope only with
+`--link-live-hotfix`, and the flag must be repeated for every scan, list,
+import, export, unresolved, resolve, recover, or diagnostics command that should
+use it. A linked
+scan started from either production folder reviews `Game.log` and every
+`logbackups/*.log` file under both sibling folders. The choice persists as a UI
+preference; PTU/EPTU/TECH-PREVIEW are never discovered into that scope. CSV and JSON imports
 are size/count/schema limited, exact-name matched, and report unmatched names
 instead of guessing. Ambiguous/no-match log acquisitions remain as minimal
 unresolved evidence and are reconciled automatically when a later catalog has
@@ -207,6 +219,12 @@ is corrupt, ordinary commands stop and direct the user to preview
 `blueprints recover`; the backup is restored only after repeating that command
 with `--confirm`. Duplicate JSON keys, unknown state fields, excessive nesting,
 invalid hashes/timestamps/offsets, and hostile CSV/JSON shapes are rejected.
+
+When the shared GUI scope first encounters older separate LIVE or HOTFIX
+ownership, it displays their read-only union immediately. Nothing is moved or
+deleted; the next confirmed scan can consolidate a shared copy. Log discovery
+is cancellable and capped, rejects linked/non-regular entries, and surfaces
+redacted read warnings rather than claiming a clean scan.
 
 ### Channels, languages, and portable settings
 
@@ -257,7 +275,9 @@ protected manual release operation documented in
 | `minimal` | Rep and a blueprint flag in titles only; CIG's prose untouched |
 | `rank-first` | Giver and rank lead every title; rep emphasised above gate notes |
 
-Profiles are versioned JSON — save, share, and reload them.
+Profiles are versioned JSON — save, share, and reload them. Version 1 profiles
+migrate safely to version 2: ordinary profiles use structured wording, while a
+profile containing custom templates retains them in explicit advanced mode.
 
 ## Installing the result
 
@@ -288,7 +308,8 @@ Data.p4k ──► p4k reader ──► stock global.ini ──► contract disc
                                                                       ├─► domain model
 optional: contracts.ini / SCMDB export ──► reward values ─────────────┘        │
                                                                                ▼
-                        profile ──► Jinja templates ──► renderer
+              profile ──► structured wording rules ──► renderer
+                        ╰─► sandboxed templates (advanced opt-in)
                                                                                │
  stock → language overlay → imports → generated → user.ini ──► validator
                                                                 │
@@ -303,9 +324,10 @@ joins reputation, blueprint pools, and direct item rewards. The first read and
 DataForge pass takes about a minute on the tested LIVE build, then it is cached
 per game build so a patch re-reads automatically.
 
-Every rendered value passes the validator before it can be written; anything
-that would break in game is skipped rather than emitted, even if your own
-template produced it.
+Every label and section order is validated before rendering, and every rendered
+value passes the output validator before it can be written. Anything that would
+break in game is skipped rather than emitted, even if an advanced template
+produced it.
 
 ## Community reward data (switched off)
 
@@ -332,7 +354,15 @@ explicit opt-ins nobody meets by accident.
   weapon, commodity, and journal providers remain future C2 work. Unsupported
   DataForge builds degrade independently and report diagnostics instead of
   blocking stock contract rendering.
-- English only. Other languages are a path change plus translated templates.
+- The application interface and generated enhancement templates are English
+  only. Installed game languages are discovered and isolated correctly, and
+  user-selected local language packs can be imported without a network source.
+  A visible GUI language selector and the preview/backup/confirmation workflow
+  that safely updates `USER.cfg` remain assigned to G7.
+
+The reviewed Smart Citizen v2.3.1 and current legacy StarStrings outcomes,
+including every known remaining gap and its assigned phase, are tracked in
+[docs/FEATURE_PARITY.md](docs/FEATURE_PARITY.md).
 
 ## Persistent personal overrides
 
@@ -468,7 +498,7 @@ No Python needed on the target machine:
 
 ```bash
 pip install pyinstaller
-pyinstaller packaging/starcompanion.spec
+python packaging/build_release.py
 ```
 
 Produces two executables in `dist/`, with templates and profiles bundled inside.
@@ -482,6 +512,9 @@ Windows adds the `.exe` suffix; Ubuntu binaries have no suffix:
 Release CI builds both Windows and Ubuntu from hash-verified wheelhouses, runs
 the frozen GUI and the complete packaged core workflow with Python networking
 and DNS denied, and publishes per-platform integrity manifests as CI artifacts.
+The Windows build also isolates DLL discovery from unrelated host `PATH`
+entries, excludes operating-system API-set shims, and fails if any remaining
+binary came from outside the selected Python runtime.
 See [the v0.2.0 release notes](docs/RELEASE_NOTES_v0.2.0.md) and
 [release checklist](docs/RELEASE_CHECKLIST_v0.2.0.md).
 

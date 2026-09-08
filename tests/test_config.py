@@ -81,13 +81,41 @@ def test_newer_schema_version_is_rejected_with_guidance():
         Profile.loads('{"schema_version": 99}')
 
 
-def test_older_schema_version_is_rejected_with_guidance():
+def test_unsupported_older_schema_version_is_rejected_with_guidance():
     with pytest.raises(UnsupportedProfileVersion, match="newer profile"):
         Profile.loads('{"schema_version": 0}')
 
 
+def test_v1_profile_migrates_to_structured_mode():
+    profile = Profile.loads('{"schema_version": 1, "name": "legacy"}')
+
+    assert profile.schema_version == SCHEMA_VERSION
+    assert profile.wording.mode == "structured"
+
+
+def test_v1_profile_with_templates_preserves_them_in_advanced_mode():
+    profile = Profile.loads(
+        '{"schema_version": 1, "templates": {"foxwell": {"title": "CUSTOM"}}}'
+    )
+
+    assert profile.wording.mode == "advanced"
+    assert profile.templates["foxwell"].title == "CUSTOM"
+
+
 def test_missing_schema_version_assumes_current():
     assert Profile.loads('{"name": "x"}').schema_version == SCHEMA_VERSION
+
+
+def test_duplicate_profile_keys_are_rejected():
+    with pytest.raises(ValueError, match="duplicate profile key 'mode'"):
+        Profile.loads(
+            '{"wording": {"mode": "structured", "mode": "advanced"}}'
+        )
+
+
+def test_profile_json_must_be_an_object():
+    with pytest.raises(ValueError, match="must contain one object"):
+        Profile.loads("[]")
 
 
 # --- validation --------------------------------------------------------------
@@ -127,6 +155,27 @@ def test_unknown_key_is_rejected_rather_than_silently_ignored():
 def test_max_pool_items_must_be_positive():
     with pytest.raises(ValidationError):
         Profile.model_validate({"formatting": {"max_pool_items": 0}})
+
+
+@pytest.mark.parametrize(
+    "label",
+    ["", " padded", "ends:", "bad<tag>", r"bad\nline", "line\u2028break", "safe\u202eevil"],
+)
+def test_unsafe_structured_wording_label_is_rejected(label):
+    with pytest.raises(ValidationError, match="wording labels"):
+        Profile.model_validate({"wording": {"labels": {"reputation": label}}})
+
+
+@pytest.mark.parametrize(
+    "order",
+    [
+        ["reputation", "scrip", "items", "scenario"],
+        ["reputation", "scrip", "items", "scenario", "scenario"],
+    ],
+)
+def test_incomplete_or_duplicate_section_order_is_rejected(order):
+    with pytest.raises(ValidationError, match="every reward section exactly once"):
+        Profile.model_validate({"wording": {"section_order": order}})
 
 
 def test_unknown_org_is_reported_against_real_data():
@@ -185,6 +234,19 @@ def test_inline_org_template_is_used():
 def test_inline_template_applies_only_to_its_org():
     profile = Profile.model_validate({"templates": {"covalex": {"title": "CUSTOM"}}})
     assert profile.build_renderer().render_key(make_contract(), "t") != "CUSTOM"
+
+
+def test_structured_mode_keeps_stored_templates_inactive():
+    profile = Profile.model_validate(
+        {
+            "wording": {"mode": "structured"},
+            "templates": {"foxwell": {"title": "CUSTOM"}},
+        }
+    )
+
+    assert profile.build_renderer().render_key(make_contract(), "t") != "CUSTOM"
+    profile.wording.mode = "advanced"
+    assert profile.build_renderer().render_key(make_contract(), "t") == "CUSTOM"
 
 
 def test_injection_mode_maps_to_merge_mode():

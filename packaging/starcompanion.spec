@@ -1,7 +1,7 @@
 # PyInstaller spec: one-file Windows and Ubuntu builds of the GUI.
 #
 #   pip install pyinstaller
-#   pyinstaller packaging/starcompanion.spec
+#   python packaging/build_release.py
 #
 # Templates and profiles are package data loaded at runtime by path, so they
 # must be collected explicitly -- PyInstaller only follows imports.
@@ -10,6 +10,35 @@ import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files
+
+
+def verified_python_binaries(entries):
+    """Reject DLLs collected from unrelated host applications on Windows."""
+    if sys.platform != "win32":
+        return entries
+    filtered = [
+        entry
+        for entry in entries
+        if not (
+            Path(entry[0]).name.casefold() == "ucrtbase.dll"
+            or Path(entry[0]).name.casefold().startswith("api-ms-win-")
+            or Path(entry[0]).name.casefold().startswith("ext-ms-win-")
+        )
+    ]
+    allowed_roots = (Path(sys.prefix).resolve(), Path(sys.base_prefix).resolve())
+    foreign = []
+    for entry in filtered:
+        source = Path(entry[1]).resolve()
+        if not any(source == root or root in source.parents for root in allowed_roots):
+            foreign.append(source)
+    if foreign:
+        details = "\n".join(f"  {path.name}: {path}" for path in foreign)
+        raise SystemExit(
+            "Refusing to package binaries from outside the selected Python runtime:\n"
+            + details
+        )
+    return filtered
+
 
 SRC = Path(SPECPATH).parent / "src"
 VERSION_INFO = Path(SPECPATH).parent / "build" / "version-info"
@@ -57,6 +86,7 @@ a = Analysis(
     ],
     noarchive=False,
 )
+a.binaries = verified_python_binaries(a.binaries)
 
 pyz = PYZ(a.pure)
 
@@ -107,6 +137,7 @@ cli_analysis = Analysis(
     ],
     noarchive=False,
 )
+cli_analysis.binaries = verified_python_binaries(cli_analysis.binaries)
 
 cli_pyz = PYZ(cli_analysis.pure)
 

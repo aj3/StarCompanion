@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "default",
   "description": "Everything shown, formatted close to MrKraken's StarStrings.",
   "fields": {
@@ -20,6 +20,13 @@
       "bracket_bp": true,
       "prefix": "none"
     }
+  },
+  "wording": {
+    "mode": "structured",
+    "section_order": ["reputation", "scrip", "items", "scenario", "blueprints"],
+    "labels": {},
+    "reputation_separator": " / ",
+    "thousands_separator": true
   },
   "templates": {},
   "injection": {
