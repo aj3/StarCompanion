@@ -48,8 +48,9 @@ HELP_ARTICLES = (
     ),
     (
         "Channels and languages",
-        "LIVE, PTU, EPTU, TECH-PREVIEW, and HOTFIX are isolated. Localization, user wording, "
-        "ownership, caches, and operation plans stay scoped to the selected channel and language.",
+        "Localization, user wording, caches, and operation plans stay scoped to the selected "
+        "channel and language. Blueprint ownership reviews LIVE and HOTFIX together by default; "
+        "the visible option can separate them, while PTU, EPTU, and TECH-PREVIEW always remain isolated.",
     ),
     (
         "Blueprint ownership",

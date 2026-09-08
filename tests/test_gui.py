@@ -205,7 +205,21 @@ def test_ui_preferences_migrate_and_preserve_other_portable_settings(qapp, tmp_p
     assert loaded.preferences.theme == "light"
     assert stored["ui_schema"] == 1
     assert stored["last_page"] == "overview"
+    assert stored["link_live_hotfix"] is True
     assert stored["default_channel"] == "LIVE"
+
+
+def test_live_hotfix_scope_choice_is_a_portable_ui_preference(qapp, tmp_path):
+    from starcompanion.gui.preferences import UiPreferencesStore
+
+    root = tmp_path / "preferences"
+    fresh = MainWindow(ui_preferences_store=UiPreferencesStore(root))
+
+    assert fresh.ui_preferences.link_live_hotfix is True
+    fresh.blueprints.link_live_hotfix_toggle.setChecked(False)
+
+    assert fresh.ui_preferences.link_live_hotfix is False
+    assert PreferencesStore(root).load()["link_live_hotfix"] is False
 
 
 def test_ui_theme_is_independent_from_output_profile(qapp, tmp_path):
@@ -542,6 +556,20 @@ def test_structured_wording_controls_update_profile_and_rendering(window):
     assert "Standing earned" in window.state.render().values["Org_x_desc"]
 
 
+def test_every_structured_wording_label_is_editable_in_presentation(window):
+    assert set(window.formatting.wording_labels) == {
+        "reputation",
+        "scrip",
+        "items",
+        "scenario",
+        "blueprints",
+        "multiple_blueprints",
+        "chance",
+        "regional",
+        "owned",
+    }
+
+
 def test_invalid_structured_label_is_rejected_and_restored(window):
     label = window.formatting.wording_labels["reputation"]
     original = label.text()
@@ -621,6 +649,7 @@ def test_target_page_controls_have_screen_reader_names_and_descriptions(window):
         window.blueprints.scan_button,
         window.blueprints.reload_button,
         window.blueprints.recover_button,
+        window.blueprints.link_live_hotfix_toggle,
         window.support.profile_builtin,
         window.support.profile_open,
         window.support.profile_save,
@@ -1888,13 +1917,174 @@ def test_g2_blueprint_tracker_uses_c4_queries_and_background_log_scan(
     # The scan-preview success callback starts the revision-checked save job.
     _wait_for_jobs(qapp, window.blueprints)
 
-    saved = OwnershipStore("LIVE").load()
+    saved = OwnershipStore("LIVE", link_live_hotfix=True).load()
     assert len(saved.records) == 1
     window.blueprints.ownership_filter.setCurrentIndex(
         window.blueprints.ownership_filter.findData(OwnershipFilter.OWNED.value)
     )
     assert window.blueprints.model.rowCount() == 1
     assert window.blueprints.model.rows[0].entry.name == "Coda Pistol"
+
+
+def test_g2_blueprint_tracker_can_review_live_and_hotfix_in_one_explicit_scope(
+    window, qapp, tmp_path, monkeypatch
+):
+    from starcompanion.ownership import OwnershipStore
+
+    game = tmp_path / "StarCitizen"
+    live = game / "LIVE"
+    hotfix = game / "HOTFIX"
+    live.mkdir(parents=True)
+    hotfix.mkdir(parents=True)
+    target = live / "data" / "Localization" / "english" / "global.ini"
+    window.state.set_contracts(_blueprint_contracts())
+    window.state.set_target(target)
+    window.blueprints.link_live_hotfix_toggle.setChecked(True)
+    window.blueprints.load_ownership()
+    _wait_for_jobs(qapp, window.blueprints)
+
+    (live / "Game.log").write_text(
+        '<2026-03-26T17:15:41.684Z> [Notice] <SHUDEvent_OnNotification> '
+        'Added notification "Received Blueprint: Coda Pistol: " [23] to queue.\n',
+        encoding="utf-8",
+    )
+    (hotfix / "Game.log").write_text(
+        '<2026-03-27T17:15:41.684Z> [Notice] <SHUDEvent_OnNotification> '
+        'Added notification "Received Blueprint: Norfield: " [23] to queue.\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+
+    window.blueprints.scan_logs()
+    _wait_for_jobs(qapp, window.blueprints)
+    _wait_for_jobs(qapp, window.blueprints)
+
+    saved = OwnershipStore("LIVE", link_live_hotfix=True).load()
+    assert saved.scope == "LIVE-HOTFIX"
+    assert len(saved.records) == 2
+    assert len(saved.cursors) == 2
+    assert window.blueprints.ownership is not None
+    assert window.blueprints.ownership.scope == "LIVE-HOTFIX"
+
+
+def test_g2_blueprint_scan_persists_cursor_only_progress_after_confirmation(
+    window, qapp, tmp_path, monkeypatch
+):
+    from starcompanion.ownership import OwnershipStore
+
+    root = tmp_path / "StarCitizen" / "LIVE"
+    root.mkdir(parents=True)
+    target = root / "data" / "Localization" / "english" / "global.ini"
+    window.state.set_contracts(_blueprint_contracts())
+    window.state.set_target(target)
+    window.blueprints.load_ownership()
+    _wait_for_jobs(qapp, window.blueprints)
+    (root / "Game.log").write_text("ordinary log line\n", encoding="utf-8")
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+
+    window.blueprints.scan_logs()
+    _wait_for_jobs(qapp, window.blueprints)
+    _wait_for_jobs(qapp, window.blueprints)
+
+    saved = OwnershipStore("LIVE", link_live_hotfix=True).load()
+    assert len(saved.cursors) == 1
+    assert not saved.records
+
+
+def test_g2_blueprint_scan_discards_a_result_from_the_previous_scope(
+    window, tmp_path, monkeypatch
+):
+    from starcompanion.gui.tabs.blueprints import OwnershipScanSnapshot
+    from starcompanion.ownership import OwnershipState, ScanResult
+
+    root = tmp_path / "StarCitizen" / "LIVE"
+    root.mkdir(parents=True)
+    window.state.set_target(
+        root / "data" / "Localization" / "english" / "global.ini"
+    )
+    window.blueprints.set_link_live_hotfix(True)
+    stale = OwnershipScanSnapshot(
+        "LIVE",
+        False,
+        ScanResult(
+            OwnershipState("LIVE"),
+            1,
+            1,
+            10,
+            0,
+            0,
+            0,
+            0,
+            (),
+            (),
+        ),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: pytest.fail("stale preview asked for confirmation"),
+    )
+
+    window.blueprints._scan_preview(stale)
+
+    assert "scope changed" in window.blueprints.status.text()
+    assert not window.blueprints._jobs
+
+
+def test_g2_blueprint_scan_surfaces_safe_discovery_warnings(
+    window, qapp, tmp_path, monkeypatch
+):
+    from starcompanion.gui.tabs import blueprints as blueprint_tab
+    from starcompanion.ownership import LogDiscovery, ScanDiagnostic
+
+    root = tmp_path / "StarCitizen" / "LIVE"
+    root.mkdir(parents=True)
+    window.state.set_contracts(_blueprint_contracts())
+    window.state.set_target(
+        root / "data" / "Localization" / "english" / "global.ini"
+    )
+    window.blueprints.load_ownership()
+    _wait_for_jobs(qapp, window.blueprints)
+    monkeypatch.setattr(
+        blueprint_tab,
+        "discover_logs",
+        lambda *args, **kwargs: LogDiscovery(
+            (),
+            (
+                ScanDiagnostic(
+                    "LIVE - logbackups",
+                    "unreadable-directory",
+                    "permission denied",
+                ),
+            ),
+        ),
+    )
+
+    window.blueprints.scan_logs()
+    _wait_for_jobs(qapp, window.blueprints)
+
+    assert window.blueprints.status.property("tone") == "warning"
+    assert "LIVE - logbackups" in window.blueprints.status.text()
+    assert "unreadable-directory" in window.blueprints.status.text()
+
+
+def test_g2_blueprint_tracker_ignores_a_non_channel_manual_target(window, tmp_path):
+    target = tmp_path / "scratch" / "data" / "Localization" / "english" / "global.ini"
+
+    window.state.set_target(target)
+
+    assert window.blueprints.channel is None
+    assert window.blueprints.scope_name is None
+    assert not window.blueprints.scan_button.isEnabled()
+    assert not window.blueprints.link_live_hotfix_toggle.isEnabled()
 
 
 def test_g2_support_builds_inspectable_redacted_diagnostics_in_background(window, qapp):

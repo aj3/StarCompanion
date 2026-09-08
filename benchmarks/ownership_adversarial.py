@@ -22,16 +22,28 @@ EVENT = (
 )
 
 
-def _catalog() -> BlueprintCatalog:
+def _catalog(entries: int = 2_000) -> BlueprintCatalog:
     name = "Coda Pistol"
     return BlueprintCatalog(
-        (
+        tuple(
+            [
             CatalogEntry(
                 blueprint_id=BLUEPRINT_ID,
                 name=name,
                 normalized_name=normalize_blueprint_name(name),
                 category="weapons",
             ),
+            ]
+            + [
+                CatalogEntry(
+                    blueprint_id=f"name-sha256:{index:064x}",
+                    name=f"Synthetic Blueprint {index}",
+                    normalized_name=normalize_blueprint_name(
+                        f"Synthetic Blueprint {index}"
+                    ),
+                )
+                for index in range(max(0, entries - 1))
+            ]
         )
     )
 
@@ -59,6 +71,20 @@ def run(megabytes: int) -> dict[str, int | float]:
         tracemalloc.stop()
 
         unchanged = scan_logs([log], catalog, scanned.state)
+
+        unique_log = Path(raw) / "unique.log"
+        unique_events = 10_000
+        with unique_log.open("wb") as stream:
+            for index in range(unique_events):
+                stream.write(
+                    EVENT.replace(
+                        b"41.684Z",
+                        f"41.{index:06}Z".encode("ascii"),
+                    )
+                )
+        unique_started = time.perf_counter()
+        unique = scan_logs([unique_log], catalog, OwnershipState("LIVE"))
+        unique_seconds = time.perf_counter() - unique_started
         cancel_checks = 0
 
         def cancel() -> bool:
@@ -78,6 +104,10 @@ def run(megabytes: int) -> dict[str, int | float]:
             raise AssertionError("synthetic blueprint acquisition was not found exactly once")
         if unchanged.bytes_read != 0:
             raise AssertionError("unchanged rescan read log bytes")
+        if unique.acquisitions_added != unique_events:
+            raise AssertionError("unique acquisition events were lost or deduplicated")
+        if unique_seconds >= 10.0:
+            raise AssertionError("unique-event scan exceeded ten seconds")
         if initial.records or initial.cursors:
             raise AssertionError("cancel/preview scanning mutated its input state")
         if peak >= 16 * MIB:
@@ -94,6 +124,8 @@ def run(megabytes: int) -> dict[str, int | float]:
             "peak_traced_mib": round(peak / MIB, 2),
             "acquisitions_added": scanned.acquisitions_added,
             "unchanged_rescan_bytes": unchanged.bytes_read,
+            "unique_events": unique.acquisitions_added,
+            "unique_event_seconds": round(unique_seconds, 3),
             "cancellation_seconds": round(cancellation_seconds, 4),
             "cancellation_checks": cancel_checks,
         }

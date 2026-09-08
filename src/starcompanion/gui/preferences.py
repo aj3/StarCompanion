@@ -30,12 +30,16 @@ PAGE_KEYS = frozenset(
 class UiPreferences:
     theme: ThemeName = DEFAULT_THEME
     last_page: str = DEFAULT_PAGE
+    link_live_hotfix: bool = True
 
     def with_theme(self, value: ThemeName) -> "UiPreferences":
         return replace(self, theme=value)
 
     def with_page(self, value: str) -> "UiPreferences":
         return replace(self, last_page=value if value in PAGE_KEYS else DEFAULT_PAGE)
+
+    def with_live_hotfix_link(self, enabled: bool) -> "UiPreferences":
+        return replace(self, link_live_hotfix=bool(enabled))
 
 
 @dataclass(frozen=True)
@@ -78,6 +82,7 @@ class UiPreferencesStore:
         preferences = UiPreferences(
             theme=theme if theme in {"dark", "light"} else fallback,
             last_page=page if page in PAGE_KEYS else DEFAULT_PAGE,
+            link_live_hotfix=bool(values.get("link_live_hotfix", True)),
         )
 
         if schema is None:
@@ -108,6 +113,7 @@ class UiPreferencesStore:
                 "ui_schema": UI_PREFERENCE_SCHEMA,
                 "theme": preferences.theme,
                 "last_page": preferences.last_page,
+                "link_live_hotfix": preferences.link_live_hotfix,
             }
         )
         self._store.save(values)

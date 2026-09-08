@@ -54,7 +54,7 @@ from .ownership import (
     OwnershipStore,
     apply_import as apply_ownership_import,
     apply_resolution as apply_ownership_resolution,
-    discover_log_files,
+    discover_logs,
     export_csv as export_ownership_csv,
     export_json as export_ownership_json,
     plan_import as plan_ownership_import,
@@ -1085,7 +1085,8 @@ def _blueprint_context(args):
         root=args.data_root,
         link_live_hotfix=args.link_live_hotfix,
     )
-    return catalog, store, store.load()
+    loaded = store.load_details()
+    return catalog, store, loaded.state, loaded.continuity_scopes
 
 
 def _print_blueprint_rows(rows, *, as_json: bool, limit: int) -> None:
@@ -1121,7 +1122,7 @@ def _print_blueprint_rows(rows, *, as_json: bool, limit: int) -> None:
 
 
 def cmd_blueprints_list(args) -> int:
-    catalog, _store, state = _blueprint_context(args)
+    catalog, _store, state, _continuity = _blueprint_context(args)
     rows = query_blueprints(
         catalog,
         state,
@@ -1141,13 +1142,38 @@ def cmd_blueprints_list(args) -> int:
 
 
 def cmd_blueprints_scan(args) -> int:
-    catalog, store, state = _blueprint_context(args)
+    catalog, store, state, continuity_scopes = _blueprint_context(args)
     paths = [Path(path) for path in args.log]
+    discovery_diagnostics = []
     for root in args.install:
-        paths.extend(discover_log_files(root))
-    if not paths:
+        try:
+            install_channel = installs.normalize_channel(root.name)
+        except ValueError as exc:
+            raise ValueError(
+                "--install must identify a supported Star Citizen channel directory"
+            ) from exc
+        expected_channels = (
+            {"LIVE", "HOTFIX"} if state.scope == "LIVE-HOTFIX" else {state.scope}
+        )
+        if install_channel not in expected_channels:
+            raise ValueError(
+                f"--install channel {install_channel} does not match ownership scope "
+                f"{state.scope}"
+            )
+        discovery = discover_logs(
+            root, link_live_hotfix=args.link_live_hotfix
+        )
+        paths.extend(discovery.paths)
+        discovery_diagnostics.extend(discovery.diagnostics)
+    if not paths and not args.install:
         raise ValueError("select at least one --log or --install to scan")
-    result = scan_logs(paths, catalog, state, full_rescan=args.full)
+    result = scan_logs(
+        paths,
+        catalog,
+        state,
+        full_rescan=args.full,
+        initial_diagnostics=discovery_diagnostics,
+    )
     print(f"scope        : {state.scope}")
     print(f"files        : {result.files_read:,}/{result.files_seen:,} read")
     print(f"bytes        : {result.bytes_read:,}")
@@ -1159,10 +1185,16 @@ def cmd_blueprints_scan(args) -> int:
         print(f"  unmatched: {item}")
     for item in result.diagnostics[: max(0, args.limit)]:
         print(f"  {item.code}: {item.source_name}: {item.message}")
+    if continuity_scopes:
+        print(
+            "continuity   : includes existing "
+            + " and ".join(continuity_scopes)
+            + " ownership; source stores remain unchanged"
+        )
     if not args.confirm:
         print("nothing was written; repeat with --confirm to save acquisitions and watermarks")
         return EXIT_REFUSED
-    if result.state == state:
+    if result.state == state and not continuity_scopes:
         print("unchanged     : no ownership or watermark write was needed")
         return EXIT_OK
     store.save(result.state)
@@ -1171,7 +1203,7 @@ def cmd_blueprints_scan(args) -> int:
 
 
 def cmd_blueprints_import(args) -> int:
-    catalog, store, state = _blueprint_context(args)
+    catalog, store, state, _continuity = _blueprint_context(args)
     plan = plan_ownership_import(args.file, catalog, state)
     print(f"source        : {plan.source_name}")
     print(f"add           : {plan.additions:,}")
@@ -1188,7 +1220,7 @@ def cmd_blueprints_import(args) -> int:
 
 
 def cmd_blueprints_export(args) -> int:
-    catalog, store, state = _blueprint_context(args)
+    catalog, store, state, _continuity = _blueprint_context(args)
     if not args.confirm:
         print(f"would export {len(state.records):,} owned blueprints to {args.out}")
         print("nothing was written; repeat with --confirm")
@@ -1205,7 +1237,7 @@ def cmd_blueprints_export(args) -> int:
 
 
 def cmd_blueprints_diagnostics(args) -> int:
-    catalog, _store, state = _blueprint_context(args)
+    catalog, _store, state, _continuity = _blueprint_context(args)
     known = set(catalog.by_id)
     stale = sorted(set(state.records) - known)
     fallback = sum(entry.identity_fallback for entry in catalog.entries)
@@ -1223,7 +1255,7 @@ def cmd_blueprints_diagnostics(args) -> int:
 
 
 def cmd_blueprints_unresolved(args) -> int:
-    catalog, _store, state = _blueprint_context(args)
+    catalog, _store, state, _continuity = _blueprint_context(args)
     print(f"scope      : {state.scope}")
     print(f"unresolved : {len(state.unresolved):,}")
     for item in state.unresolved[: max(0, args.limit)]:
@@ -1239,7 +1271,7 @@ def cmd_blueprints_unresolved(args) -> int:
 
 
 def cmd_blueprints_resolve(args) -> int:
-    catalog, store, state = _blueprint_context(args)
+    catalog, store, state, _continuity = _blueprint_context(args)
     plan = plan_ownership_resolution(
         state, catalog, args.acquisition, args.blueprint_id
     )

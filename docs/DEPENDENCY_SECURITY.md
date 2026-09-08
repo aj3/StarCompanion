@@ -59,7 +59,12 @@ Direct runtime pins:
    and publish its SHA-256 value with the executables, SBOM, and project notices.
 10. Publish executable, SBOM, license, and notice SHA-256 values in
    `release-manifest.json`.
-11. For a signed release, require the protected `release-signing` environment,
+11. Build through `packaging/build_release.py`. On Windows it restricts DLL
+   discovery to the selected Python environment and Windows system directories;
+   the spec removes OS API-set/UCRT shims and then fails closed if any remaining
+   binary originated outside `sys.prefix` or `sys.base_prefix`. This blocks
+   incompatible host ICU/Qt libraries as well as the originally observed shims.
+12. For a signed release, require the protected `release-signing` environment,
     submit the GitHub artifact to SignPath, verify the SignPath Foundation
     signer and timestamps, rerun the disconnected packaged smoke, and bind the
     signed hashes plus `authenticode-report.json` into the manifest. See

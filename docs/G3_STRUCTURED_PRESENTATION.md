@@ -2,8 +2,7 @@
 
 G3 begins the 0.3.0 development line and makes validated profile fields the
 normal way to shape generated contract text. It does not change extraction,
-source precedence, operation plans, game-
-folder writes, backups, or recovery.
+source precedence, operation plans, game-folder writes, backups, or recovery.
 
 ## Profile schema v2
 
@@ -40,6 +39,19 @@ render cache. Custom Wording disables its editor until advanced mode is
 enabled and distinguishes active custom wording from stored inactive source.
 No archive, filesystem, helper-process, or network operation was added to the
 GUI thread.
+
+The completed integration pass exposes all nine validated wording labels in
+the Presentation page. It also closes a C4/G2 operational gap: a visible,
+portable option defaults to reviewing current and rotated logs from both sibling
+LIVE and HOTFIX folders in one background scan. Users can separate those stores;
+the CLI continues to require its explicit shared-scope flag. Enabling the shared
+view unions older separate ownership read-only and consolidates a copy only in a
+confirmed write, without changing either source store. Test channels remain
+isolated, late results from a prior scope are discarded, cursor-only progress
+still requires confirmation, and stored evidence identifies the source channel
+without retaining absolute paths. Discovery is cancellable, rejects links and
+non-regular log entries, stops at a fixed file limit, and shows safe read
+warnings instead of reporting a false clean success.
 
 ## Rollback
 

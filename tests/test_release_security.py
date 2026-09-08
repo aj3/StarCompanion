@@ -277,6 +277,8 @@ def test_release_workflow_builds_and_offline_smokes_both_platforms() -> None:
     assert "build-ubuntu:" in workflow
     assert "StarCompanion-windows-unsigned" in workflow
     assert "StarCompanion-ubuntu-unsigned" in workflow
+    assert workflow.count("packaging\\build_release.py") == 1
+    assert workflow.count("packaging/build_release.py") == 1
     assert "pytest -q --ignore=tests/test_gui.py" in workflow
     assert "pytest -vv -s tests/test_gui.py" in workflow
     assert "pytest -q tests/test_gui_screenshots.py" in workflow
@@ -289,9 +291,30 @@ def test_release_workflow_builds_and_offline_smokes_both_platforms() -> None:
     packaged_smoke = (root / "packaging" / "verify_offline.py").read_text(
         encoding="utf-8"
     )
+    frozen_spec = (root / "packaging" / "starcompanion.spec").read_text(
+        encoding="utf-8"
+    )
     assert '"--smoke-test"' in gui_entry
+    assert "window.close()" in gui_entry
+    assert "return 0" in gui_entry
     assert '_run([str(gui), "--smoke-test"]' in packaged_smoke
     assert 'env["STARCOMPANION_ENFORCE_OFFLINE"] = "1"' in packaged_smoke
+    assert frozen_spec.count("verified_python_binaries(") == 3
+    assert 'startswith("api-ms-win-")' in frozen_spec
+    assert 'startswith("ext-ms-win-")' in frozen_spec
+    assert '== "ucrtbase.dll"' in frozen_spec
+    assert "Path(sys.prefix).resolve()" in frozen_spec
+    assert "Path(sys.base_prefix).resolve()" in frozen_spec
+    assert "outside the selected Python runtime" in frozen_spec
+
+    release_builder = (root / "packaging" / "build_release.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'environment["PATH"] = os.pathsep.join(paths)' in release_builder
+    assert '"System32"' in release_builder
+    assert "Path(sys.base_prefix).resolve()" in release_builder
+    assert 'Path(sys.base_prefix).resolve() / "DLLs"' in release_builder
+    assert '"--clean"' in release_builder
 
 
 def test_dependency_free_ownership_smoke_fixture_matches_cache_schema(

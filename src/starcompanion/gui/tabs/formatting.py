@@ -342,6 +342,10 @@ class FormattingTab(QWidget):
             "items": "Item rewards",
             "scenario": "Scenario points",
             "blueprints": "Blueprint pools",
+            "multiple_blueprints": "Multiple pools",
+            "chance": "Award chance",
+            "regional": "Regional variants",
+            "owned": "Owned marker",
         }
         self.wording_labels: dict[str, QLineEdit] = {}
         label_form = QFormLayout()

@@ -143,6 +143,100 @@ def test_blueprint_cli_scan_preview_confirm_query_and_diagnostics(workspace, cap
     assert run("blueprints", "diagnostics", *common) == EXIT_OK
 
 
+def test_blueprint_cli_linked_scan_discovers_live_and_hotfix_from_one_install(
+    workspace, capsys
+):
+    from starcompanion.ownership import OwnershipStore
+
+    source_cache = blueprint_cache(workspace)
+    data_root = workspace / "player-data"
+    game = workspace / "StarCitizen"
+    live = game / "LIVE"
+    hotfix = game / "HOTFIX"
+    live.mkdir(parents=True)
+    hotfix.mkdir(parents=True)
+    (live / "Game.log").write_text(
+        '<2026-03-26T17:15:41.684Z> [Notice] '
+        '<SHUDEvent_OnNotification> Added notification '
+        '"Received Blueprint: Coda Pistol: " [23] to queue.\n',
+        encoding="utf-8",
+    )
+    (hotfix / "Game.log").write_text(
+        '<2026-03-27T17:15:41.684Z> [Notice] '
+        '<SHUDEvent_OnNotification> Added notification '
+        '"Received Blueprint: Coda Pistol: " [23] to queue.\n',
+        encoding="utf-8",
+    )
+
+    assert run(
+        "blueprints",
+        "scan",
+        "--cache",
+        source_cache,
+        "--channel",
+        "LIVE",
+        "--data-root",
+        data_root,
+        "--install",
+        live,
+        "--link-live-hotfix",
+        "--confirm",
+    ) == EXIT_OK
+
+    state = OwnershipStore(
+        "LIVE", root=data_root, link_live_hotfix=True
+    ).load()
+    assert state.scope == "LIVE-HOTFIX"
+    assert len(state.records) == 1
+    assert len(next(iter(state.records.values())).acquisitions) == 2
+    assert len(state.cursors) == 2
+    assert {cursor.source_name for cursor in state.cursors.values()} == {
+        "LIVE - Game.log",
+        "HOTFIX - Game.log",
+    }
+    assert "files        : 2/2 read" in capsys.readouterr().out
+    assert not OwnershipStore("LIVE", root=data_root).path.exists()
+    query = (
+        "--cache",
+        source_cache,
+        "--channel",
+        "LIVE",
+        "--data-root",
+        data_root,
+        "--ownership",
+        "owned",
+    )
+    assert run("blueprints", "list", *query, "--link-live-hotfix") == EXIT_OK
+    assert "Coda Pistol" in capsys.readouterr().out
+    assert run("blueprints", "list", *query) == EXIT_OK
+    assert "Coda Pistol" not in capsys.readouterr().out
+
+
+def test_blueprint_cli_install_discovery_rejects_cross_channel_scan(workspace):
+    from starcompanion.ownership import OwnershipStore
+
+    source_cache = blueprint_cache(workspace)
+    data_root = workspace / "player-data"
+    ptu = workspace / "StarCitizen" / "PTU"
+    ptu.mkdir(parents=True)
+    (ptu / "Game.log").write_text("ordinary log line\n", encoding="utf-8")
+
+    assert run(
+        "blueprints",
+        "scan",
+        "--cache",
+        source_cache,
+        "--channel",
+        "LIVE",
+        "--data-root",
+        data_root,
+        "--install",
+        ptu,
+        "--confirm",
+    ) == EXIT_ERROR
+    assert not OwnershipStore("LIVE", root=data_root).path.exists()
+
+
 def test_blueprint_cli_corruption_requires_previewed_backup_recovery(workspace, capsys):
     source_cache = blueprint_cache(workspace)
     data_root = workspace / "player-data"

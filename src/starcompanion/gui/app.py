@@ -5,7 +5,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -62,7 +61,13 @@ class MainWindow(QMainWindow):
         self.templates = TemplatesTab(self.state)
         self.editor = AdvancedStringEditorTab(self.state)
         self.apply = ApplyTab(self.state)
-        self.blueprints = BlueprintTrackerTab(self.state)
+        self.blueprints = BlueprintTrackerTab(
+            self.state,
+            link_live_hotfix=self.ui_preferences.link_live_hotfix,
+        )
+        self.blueprints.linkLiveHotfixChanged.connect(
+            self._set_live_hotfix_preference
+        )
         self.support = SupportTab(
             self.state,
             installs_provider=lambda: self.start.installs,
@@ -263,6 +268,13 @@ class MainWindow(QMainWindow):
             self.ui_preference_warning = None
         self.start.set_ui_preference_warning(self.ui_preference_warning)
 
+    def _set_live_hotfix_preference(self, enabled: bool) -> None:
+        updated = self.ui_preferences.with_live_hotfix_link(enabled)
+        if updated == self.ui_preferences:
+            return
+        self.ui_preferences = updated
+        self._save_ui_preferences()
+
     def _reload_imported_settings(self, values: object) -> None:
         """Publish imported preferences/user values without crossing model boundaries."""
         if not isinstance(values, dict):
@@ -272,12 +284,17 @@ class MainWindow(QMainWindow):
         self.ui_preferences = UiPreferences(
             theme=theme_name if theme_name in {"dark", "light"} else self.ui_preferences.theme,
             last_page=page if page in PAGE_KEYS else "overview",
+            link_live_hotfix=bool(values.get("link_live_hotfix", True)),
         )
         self.ui_preference_warning = None
         self._applied_theme = None
         self.apply_theme()
         self._update_theme_action()
         self.start.set_ui_preference_warning(self.ui_preference_warning)
+        self.blueprints.set_link_live_hotfix(
+            self.ui_preferences.link_live_hotfix,
+            persist=False,
+        )
         if not self.editor.document.dirty:
             self.editor.load_user_edits()
 
@@ -352,10 +369,11 @@ def main(argv: list[str] | None = None) -> int:
     window = MainWindow()
     window.show()
     if smoke_test:
-        # Release assurance launches the frozen GUI with networking denied and
-        # an isolated data root.  Let the shell paint once, then exercise the
-        # ordinary close path so worker shutdown remains part of the smoke.
-        QTimer.singleShot(250, window.close)
+        # Paint once and exercise the ordinary close path deterministically.
+        app.processEvents()
+        window.close()
+        app.processEvents()
+        return 0
     return app.exec()
 
 

@@ -159,7 +159,7 @@ jobs:
           "signing-version=$version" >> $env:GITHUB_OUTPUT
 
       - name: Build one-file executable
-        run: .\build\offline-build\Scripts\pyinstaller.exe packaging\starcompanion.spec
+        run: .\build\offline-build\Scripts\python.exe packaging\build_release.py
 
       - name: Verify constrained Windows metadata
         shell: pwsh
@@ -248,7 +248,7 @@ jobs:
           build/offline-build/bin/python packaging/verify_wheel_license.py build/package-check
 
       - name: Build one-file executables
-        run: build/offline-build/bin/pyinstaller packaging/starcompanion.spec
+        run: build/offline-build/bin/python packaging/build_release.py
 
       - name: Smoke test the built CLI
         run: |
