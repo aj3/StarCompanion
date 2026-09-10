@@ -157,4 +157,3 @@ def test_delta_pack_rejects_duplicate_and_extra_zip_members(tmp_path):
         archive.writestr("../outside", b"hostile")
     with pytest.raises(DeltaPackError, match="exactly the declared files"):
         load_delta_pack(path)
-
