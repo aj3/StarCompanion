@@ -184,6 +184,10 @@ class BlueprintPoolFacts:
     diagnostics: tuple[Diagnostic, ...] = ()
     item_ids: tuple[str, ...] = ()
     item_categories: tuple[str, ...] = ()
+    item_types: tuple[str, ...] = ()
+    item_classes: tuple[str, ...] = ()
+    item_sizes: tuple[str, ...] = ()
+    item_grades: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -798,6 +802,10 @@ class _ExpandedPool:
     items: tuple[str, ...]
     item_ids: tuple[str, ...]
     item_categories: tuple[str, ...]
+    item_types: tuple[str, ...]
+    item_classes: tuple[str, ...]
+    item_sizes: tuple[str, ...]
+    item_grades: tuple[str, ...]
     evidence: tuple[Evidence, ...]
     diagnostics: tuple[Diagnostic, ...]
 
@@ -872,6 +880,46 @@ def _contract_scopes(index: DataForgeIndex, node: RecordNode) -> tuple[_RecordSc
     return (_RecordScope("$", root_value, root_fields),)
 
 
+_BLUEPRINT_METADATA_FIELDS = {
+    "type": frozenset({"type", "itemtype", "componenttype"}),
+    "class": frozenset({"class", "itemclass", "componentclass"}),
+    "size": frozenset({"size", "itemsize", "componentsize"}),
+    "grade": frozenset({"grade", "itemgrade", "componentgrade"}),
+}
+
+
+def _blueprint_metadata(
+    index: DataForgeIndex,
+    node: RecordNode,
+) -> dict[str, tuple[str, Evidence | None]]:
+    """Read only explicit scalar item metadata; never infer missing values."""
+
+    result = {key: ("", None) for key in _BLUEPRINT_METADATA_FIELDS}
+    remaining = set(result)
+    for found in index.iter_fields(node):
+        field = _field_name(found.path).casefold()
+        dimension = next(
+            (
+                key
+                for key in remaining
+                if field in _BLUEPRINT_METADATA_FIELDS[key]
+            ),
+            None,
+        )
+        if dimension is None or isinstance(found.value, bool) or not isinstance(
+            found.value, (str, int, float)
+        ):
+            continue
+        value = str(found.value).strip()
+        if not value or len(value) > 64 or any(char in value for char in "\r\n\0"):
+            continue
+        result[dimension] = (value, _evidence(node, found, found.value))
+        remaining.remove(dimension)
+        if not remaining:
+            break
+    return result
+
+
 def _build_blueprint_pools(
     index: DataForgeIndex,
 ) -> tuple[dict[str, _ExpandedPool], list[Diagnostic]]:
@@ -881,6 +929,10 @@ def _build_blueprint_pools(
         items: list[str] = []
         item_ids: list[str] = []
         item_categories: list[str] = []
+        item_types: list[str] = []
+        item_classes: list[str] = []
+        item_sizes: list[str] = []
+        item_grades: list[str] = []
         pool_evidence: list[Evidence] = []
         pool_diags: list[Diagnostic] = []
         refs = list(index.iter_fields(pool, key="blueprintRecord"))
@@ -948,6 +1000,16 @@ def _build_blueprint_pools(
                 except ValueError:
                     category = "unknown"
                 item_categories.append(category or "unknown")
+                metadata = _blueprint_metadata(index, named_node)
+                item_types.append(metadata["type"][0] or category or "unknown")
+                item_classes.append(metadata["class"][0])
+                item_sizes.append(metadata["size"][0])
+                item_grades.append(metadata["grade"][0])
+                pool_evidence.extend(
+                    evidence
+                    for _value, evidence in metadata.values()
+                    if evidence is not None
+                )
                 pool_evidence.append(name_evidence)
                 if used_fallback:
                     pool_diags.append(
@@ -966,6 +1028,10 @@ def _build_blueprint_pools(
                 tuple(items),
                 tuple(item_ids),
                 tuple(item_categories),
+                tuple(item_types),
+                tuple(item_classes),
+                tuple(item_sizes),
+                tuple(item_grades),
                 tuple(pool_evidence),
                 tuple(pool_diags),
             )
@@ -1208,6 +1274,10 @@ def _mission_blueprints(
                 items=expanded.items,
                 item_ids=expanded.item_ids,
                 item_categories=expanded.item_categories,
+                item_types=expanded.item_types,
+                item_classes=expanded.item_classes,
+                item_sizes=expanded.item_sizes,
+                item_grades=expanded.item_grades,
                 chance=chance,
                 evidence=tuple(pool_evidence),
                 diagnostics=expanded.diagnostics,

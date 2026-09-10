@@ -39,12 +39,12 @@ does not execute or silently download either project's code or generated data.
 | Multi-source merge with personal edits last | **Safe equivalent** | Fixed, inspectable `stock → language → ordered imports → generated → user.ini` precedence, conflict report, and provenance. The safety-critical user layer cannot be dragged below another source. |
 | Per-channel persistent edits across game patches | **Complete** | Per-channel/per-language `user.ini`, transactional save, import/export, and bounded model history. |
 | Preview, validate, apply, backup, rollback, and crash recovery | **Complete** | One fingerprint-bound C3 operation plan drives CLI and GUI; writes are confirmed, atomic, and journaled. |
-| Capped localization-backup retention and separate rotating `user.ini` snapshots | **Partial** | Collision-proof backups and recovery exist; G4 adds configurable pruning and protective snapshots for irreplaceable personal edits. |
+| Capped localization-backup retention and separate rotating `user.ini` snapshots | **Complete** | Profile/CLI-configurable target backup retention is exposed in the GUI and prunes only recognized unchanged restore points after verified writes. Every changed `user.ini` gets a separate bounded collision-resistant snapshot; no-op saves create none, and cleanup failure is reported without misreporting the committed edit as failed. |
 | Clear the loose localization override to return to stock | **Planned** | G7 adds a one-action, backup-first, confirmation-gated vanilla workflow instead of asking users to delete a file. |
 | Safely activate the chosen game language in `USER.cfg` | **Planned** | G7 adds preview, backup, confirmation, atomic recovery, unrelated-setting preservation, and encoding preservation. |
 | Declarative fixes for known CIG data defects | **Planned** | G5 adds build-bounded, evidence-bearing patch records with synthetic drift tests and an audit view. |
-| Freshest valid `Data.p4k` when several installs are present | **Partial** | Discovery is deterministic and channel-aware; G4 adds explicit freshness ranking and shows why a candidate won. |
-| Shareable localization pack | **Partial** | G4 provides the safe equivalent: export user-authored deltas, a profile, and rebuild instructions so recipients regenerate against their own `Data.p4k`; stock game strings are never redistributed. |
+| Freshest valid `Data.p4k` when several installs are present | **Complete** | Discovery ignores inaccessible, empty, and non-regular archives, ranks each channel by captured archive modification time with deterministic size/path tie-breaks, and visibly explains both the automatic winner and any explicit older selection. |
+| Shareable localization pack | **Complete** | G4 exports and imports a bounded authored-only ZIP with a validated profile and offline rebuild instructions. The GUI keeps source scope advisory, never activates the bundled profile automatically, and never redistributes stock game strings. |
 | Automatic application updater | **Safe equivalent** | Intentionally no startup network request or self-replacing installer. Releases remain user-initiated and hash/signature verified; any future update check must be opt-in and signed before it can be enabled. |
 | Telemetry, remote configuration, or cloud sync | **Safe equivalent** | None. Offline behavior is enforced by network-denied packaged smoke tests. |
 
@@ -74,10 +74,10 @@ does not execute or silently download either project's code or generated data.
 | Reference outcome | StarCompanion status | Evidence or remaining work |
 |---|---|---|
 | Fast full-string search, sorting, and domain/source/state/provider filters | **Complete** | Virtual model/view table and cached search projection; 50,000-row regression. |
-| Per-column filters | **Partial** | Global and typed filters exist; G4 adds independent header filters without creating widgets per row. |
+| Per-column filters | **Complete** | Seven independent cached column filters combine in one proxy invalidation without creating widgets per row; the 50,000-row regression remains bounded. |
 | Inline custom edit with stock/merged/rendered provenance | **Safe equivalent** | Complete values are edited in a debounced inspector instead of a narrow table cell; model undo/redo and safe multi-reset are already present. |
 | Filtered-row clipboard export | **Planned** | G7 adds explicit, bounded copy of the visible projection without hidden rows or private provenance fields. |
-| Styled loc-token/markup preview | **Partial** | Text and validation preview exist; G4 adds a strictly escaped visual renderer for allowlisted game tags and tokens. |
+| Styled loc-token/markup preview | **Complete** | The visual renderer strictly escapes untrusted text, interprets only balanced allowlisted game tags and recognized mission tokens, creates no links/resources, and caps previews at 32 KiB. |
 | Configurable structured labels, ordering, numeric format, tags, and expert templates | **Complete** | G3 schema v2 exposes all nine labels; expert templates remain explicit and sandboxed. |
 | Category-level enhancement toggles | **Planned** | G7 exposes coarse, understandable enable/disable controls while retaining provider-specific capability reporting. |
 | Stat-block placement above or below stock text | **Planned** | G7 adds a typed placement choice; it does not permit arbitrary execution or bypass final validation. |
@@ -85,14 +85,14 @@ does not execute or silently download either project's code or generated data.
 | Blueprint catalog, owned/unowned search, reward source, category, and acquisition queries | **Complete** | Stable C4 identities and read-only backend queries. |
 | Incremental current/rotated log scan | **Complete** | Bounded, cancellable, rotation/truncation-aware scan with confirmation before cursor/evidence save. |
 | Review both LIVE and HOTFIX logs | **Complete** | New GUI preferences review both production siblings by default; the visible control can separate them, the CLI flag selects the shared scope explicitly, and test channels cannot enter linked discovery. |
-| Manual owned/unowned shuttle and multi-select | **Planned** | G4 adds one-command model changes with preview and revision-checked save. |
-| Blueprint Mission/Type/Class/Size/Grade filters | **Partial** | Search, category, reward source, and ownership exist; G4 extends catalog metadata and GUI filters. |
-| Full rescan, unresolved resolution, and ownership import/export in GUI | **Partial** | Core/CLI workflows exist; G4 exposes them through guarded background GUI operations. |
-| Repair names altered by another localization editor | **Planned** | G4 adds evidence-backed aliases and never fuzzy-marks an item owned. |
-| Owned marker in generated blueprint lists | **Partial** | Renderer supports the marker; G4 connects the selected ownership snapshot to the normal render/plan workflow. |
-| Per-key INI conflict reconciliation | **Planned** | G4 adds reviewable keep/import/append/prepend/custom choices per key; no bulk default may silently override personal text. |
+| Manual owned/unowned shuttle and multi-select | **Complete** | G4 previews one multi-select command and rechecks the ownership revision and per-item before-state in the worker before saving. |
+| Blueprint Mission/Type/Class/Size/Grade filters | **Complete** | Catalog metadata and the virtual GUI table expose and combine Mission, Type, Class, Size, Grade, ownership, category, reward-source, and search filters. |
+| Full rescan, unresolved resolution, and ownership import/export in GUI | **Complete** | Guarded background GUI workflows provide explicit full rescan, exact unresolved resolution, bounded exact-match import, and revision-checked JSON/CSV export. |
+| Repair names altered by another localization editor | **Complete** | Evidence-backed catalog aliases normalize known bracket markers and whitespace, accept only an unambiguous exact normalized identity, and never fuzzy-mark ownership. |
+| Owned marker in generated blueprint lists | **Complete** | The selected channel-scoped ownership snapshot is joined into a render-only contract copy, leaving cached contract data immutable. |
+| Per-key INI conflict reconciliation | **Complete** | G4 loads bounded imports in a worker, requires reviewable keep/import/append/prepend/custom choices for every conflict, and rechecks the saved baseline before one provenance-aware undoable write. |
 | Ship favorites and explicit ASOP order | **Planned** | G6 persists these as irreplaceable user data, separate from generated caches. |
-| Window/splitter/column layout persistence and reset | **Partial** | Page/theme preferences persist; G4 adds bounded local-only geometry and reset without exporting machine-specific widths. |
+| Window/splitter/column layout persistence and reset | **Complete** | G4 stores strictly bounded geometry, splitter ratios, and table widths in a separate local-only file; off-screen positions are ignored, hidden-page ratios are deferred safely, invalid files are preserved, and explicit reset never changes portable preferences. |
 
 ## Operational interface
 
@@ -124,7 +124,7 @@ localization key.
 
 | Legacy behavior | StarCompanion status | Planned phase |
 |---|---|---|
-| Blueprint title markers, pools, component context, ranks, regional variants, and caveats | **Partial** | Existing mission facts/rendering cover the content; G4 completes ownership wiring. |
+| Blueprint title markers, pools, component context, ranks, regional variants, and caveats | **Complete** | Existing mission facts/rendering cover the content, and G4 joins exact channel-scoped ownership into the render-only contract copy. |
 | Reputation, direct rewards, and scenario progress in contracts | **Complete** | Existing local provider. |
 | Hauling title overhaul with origin/destination | **Planned** | G6. |
 | Asteroid resource-signature values in scan objectives | **Planned** | G6. |
@@ -134,9 +134,9 @@ localization key.
 | Shorter multi-tool attachment names | **Planned** | G6 local presentation pack. |
 | Mining guide regrouping and refueling quick tips | **Planned** | G5 journal facts, G6 explicitly maintained wording. |
 
-## Remaining phase order
+## Phase order and remaining work
 
-1. **G4 — Ownership and editor completion:** manual ownership changes, full
+1. **G4 — Ownership and editor completion (complete):** manual ownership changes, full
    tracker import/export/rescan/resolution UI, foreign-name repair, render-plan
    ownership wiring, per-key INI reconciliation, safe shareable-pack export,
    per-column filters, safe markup preview, backup retention and user-edit
@@ -157,10 +157,11 @@ localization key.
    localized UI, coach marks, redacted event-log viewer, and two additional
    accessible themes.
 
-G4 must not start until G3's complete local and hosted gate is green. Later
-phases may change provider and interface layers, but must continue using the C3
-operation plan, C4 isolated ownership store, C5 portability rules, background
-worker boundary, and confirmation-gated filesystem writes.
+G4 began only after G3's complete local and hosted gate was green. G5 must not
+start until G4's complete local gate and review are green. Later phases may
+change provider and interface layers, but must continue using the C3 operation
+plan, C4 isolated ownership store, C5 portability rules, background worker
+boundary, and confirmation-gated filesystem writes.
 
 ## Completion rule
 

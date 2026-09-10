@@ -8,9 +8,9 @@
     "header": [244, 0, 1036, 98],
     "stack": [244, 98, 1036, 672],
     "status": [244, 770, 1036, 30],
-    "filter_section": [277, 219, 970, 168],
-    "results_section": [277, 393, 970, 300],
-    "table": [294, 474, 936, 202]
+    "filter_section": [277, 219, 970, 195],
+    "results_section": [277, 420, 970, 229],
+    "table": [294, 501, 936, 131]
   },
   "minimum_colour_samples": {
     "#0b0f14": 500,

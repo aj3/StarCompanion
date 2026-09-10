@@ -7,16 +7,19 @@ game-build cache safe to delete and ownership safe from cache invalidation.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import re
 import unicodedata
 from dataclasses import dataclass, field
 from enum import StrEnum
+
 from .model import ContractSet, Evidence
 
 CATALOG_VERSION = 1
 _WS = re.compile(r"\s+")
-_LEADING_TAG = re.compile(r"^\[[^\]]{1,32}\]\s*")
+_LEADING_TAG = re.compile(r"^(?:\[[^\]\r\n]{1,32}\]\s*)+")
+_TRAILING_TAG = re.compile(r"(?:\s*\[[^\]\r\n]{1,32}\])+$")
 _UUID = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
@@ -27,6 +30,7 @@ def normalize_blueprint_name(name: str) -> str:
 
     value = unicodedata.normalize("NFKC", str(name)).strip()
     value = _LEADING_TAG.sub("", value)
+    value = _TRAILING_TAG.sub("", value)
     return _WS.sub(" ", value).casefold()
 
 
@@ -61,6 +65,10 @@ class CatalogEntry:
     name: str
     normalized_name: str
     category: str = "unknown"
+    item_type: str = "unknown"
+    item_class: str = ""
+    size: str = ""
+    grade: str = ""
     identity_fallback: bool = False
     aliases: set[str] = field(default_factory=set)
     reward_sources: set[RewardSource] = field(default_factory=set)
@@ -122,11 +130,30 @@ def build_catalog(contracts: ContractSet) -> BlueprintCatalog:
                         name=name,
                         normalized_name=normalize_blueprint_name(name),
                         category=pool.item_categories.get(name, "unknown").casefold(),
+                        item_type=pool.item_types.get(name, "unknown").casefold(),
+                        item_class=pool.item_classes.get(name, "").casefold(),
+                        size=str(pool.item_sizes.get(name, "")).casefold(),
+                        grade=str(pool.item_grades.get(name, "")).casefold(),
                         identity_fallback=fallback,
                     )
                     entries[blueprint_id] = entry
                 elif name != entry.name:
                     entry.aliases.add(name)
+                category = pool.item_categories.get(name, "").casefold()
+                item_type = pool.item_types.get(name, "").casefold()
+                item_class = pool.item_classes.get(name, "").casefold()
+                size = str(pool.item_sizes.get(name, "")).casefold()
+                grade = str(pool.item_grades.get(name, "")).casefold()
+                if entry.category == "unknown" and category:
+                    entry.category = category
+                if entry.item_type == "unknown" and item_type:
+                    entry.item_type = item_type
+                if not entry.item_class and item_class:
+                    entry.item_class = item_class
+                if not entry.size and size:
+                    entry.size = size
+                if not entry.grade and grade:
+                    entry.grade = grade
                 entry.reward_sources.add(source)
                 raw_identity = pool.item_ids.get(name, "").casefold()
                 entry.evidence.update(
@@ -173,6 +200,11 @@ class BlueprintQuery:
     reward_source: str = ""
     category: str = ""
     acquisition_source: str = ""
+    mission: str = ""
+    item_type: str = ""
+    item_class: str = ""
+    size: str = ""
+    grade: str = ""
 
 
 @dataclass(frozen=True)
@@ -195,6 +227,11 @@ def query_blueprints(
     reward_needle = query.reward_source.casefold().strip()
     category = query.category.casefold().strip()
     acquisition = query.acquisition_source.casefold().strip()
+    mission = query.mission.casefold().strip()
+    item_type = query.item_type.casefold().strip()
+    item_class = query.item_class.casefold().strip()
+    size = query.size.casefold().strip()
+    grade = query.grade.casefold().strip()
     rows: list[BlueprintRow] = []
     for entry in catalog.entries:
         record = records.get(entry.blueprint_id)
@@ -208,6 +245,19 @@ def query_blueprints(
         ):
             continue
         if category and entry.category != category:
+            continue
+        if item_type and entry.item_type != item_type:
+            continue
+        if item_class and entry.item_class != item_class:
+            continue
+        if size and entry.size != size:
+            continue
+        if grade and entry.grade != grade:
+            continue
+        if mission and not any(
+            mission in source.contract_id.casefold()
+            for source in entry.reward_sources
+        ):
             continue
         if reward_needle and not any(
             reward_needle in source.contract_id.casefold()
@@ -233,3 +283,58 @@ def categories(catalog: BlueprintCatalog) -> tuple[str, ...]:
 
 def reward_sources(catalog: BlueprintCatalog) -> tuple[str, ...]:
     return tuple(sorted({source.org for entry in catalog.entries for source in entry.reward_sources}))
+
+
+def missions(catalog: BlueprintCatalog) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {source.contract_id for entry in catalog.entries for source in entry.reward_sources},
+            key=str.casefold,
+        )
+    )
+
+
+def item_types(catalog: BlueprintCatalog) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {
+                entry.item_type
+                for entry in catalog.entries
+                if entry.item_type and entry.item_type != "unknown"
+            }
+        )
+    )
+
+
+def item_classes(catalog: BlueprintCatalog) -> tuple[str, ...]:
+    return tuple(sorted({entry.item_class for entry in catalog.entries if entry.item_class}))
+
+
+def sizes(catalog: BlueprintCatalog) -> tuple[str, ...]:
+    return tuple(sorted({entry.size for entry in catalog.entries if entry.size}))
+
+
+def grades(catalog: BlueprintCatalog) -> tuple[str, ...]:
+    return tuple(sorted({entry.grade for entry in catalog.entries if entry.grade}))
+
+
+def apply_ownership_snapshot(
+    contracts: ContractSet,
+    ownership: object,
+) -> ContractSet:
+    """Return a render-only copy with exact catalog ownership markers joined."""
+
+    result = copy.deepcopy(contracts)
+    catalog = build_catalog(result)
+    records = getattr(ownership, "records", {})
+    for contract in result.contracts:
+        for pool in contract.reward.blueprint_pools:
+            pool.owned.clear()
+            for name in pool.items:
+                supplied = pool.item_ids.get(name)
+                blueprint_id, _fallback = _stable_id(supplied, name)
+                if blueprint_id not in catalog.by_id:
+                    blueprint_id = catalog.resolve_name(name) or blueprint_id
+                if blueprint_id in records:
+                    pool.owned.add(name)
+    return result

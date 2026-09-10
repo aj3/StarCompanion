@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -26,19 +30,38 @@ from ...blueprints import (
     OwnershipFilter,
     build_catalog,
     categories,
+    grades,
+    item_classes,
+    item_types,
+    missions,
     query_blueprints,
     reward_sources,
+    sizes,
 )
 from ...ownership import (
+    ImportPlan,
+    ManualOwnershipPlan,
+    OwnershipConflictError,
     OwnershipError,
+    OwnershipDecision,
     OwnershipRecoveryAvailable,
     OwnershipState,
     OwnershipStore,
+    ResolutionPlan,
     ScanCancelled,
     ScanResult,
+    apply_import,
+    apply_manual_ownership,
+    apply_resolution,
     discover_logs,
+    export_csv,
+    export_json,
     ownership_scope,
+    plan_import,
+    plan_manual_ownership,
+    plan_resolution,
     scan_logs,
+    write_export,
 )
 from ..components import EmptyState, MetricTile, NoticeBanner, SectionCard, Tone
 from ..jobs import QtOperationJob
@@ -64,7 +87,20 @@ class OwnershipScanSnapshot:
 class BlueprintTableModel(QAbstractTableModel):
     """Virtual read-only projection returned by the C4 query service."""
 
-    HEADERS = ("Blueprint", "Category", "Owned", "Acquired", "Evidence", "Reward sources")
+    HEADERS = (
+        "Blueprint",
+        "Category",
+        "Type",
+        "Class",
+        "Size",
+        "Grade",
+        "Mission",
+        "Owned",
+        "Acquired",
+        "Evidence",
+        "Reward giver",
+    )
+    RecordRole = int(Qt.ItemDataRole.UserRole) + 1
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -92,16 +128,31 @@ class BlueprintTableModel(QAbstractTableModel):
         row = self.rows[index.row()]
         sources = ", ".join(row.acquisition_sources)
         rewards = ", ".join(sorted({item.org for item in row.entry.reward_sources}))
+        mission_names = ", ".join(
+            sorted(
+                {item.contract_id for item in row.entry.reward_sources},
+                key=str.casefold,
+            )
+        )
         values = (
             row.entry.name,
             row.entry.category.title(),
+            row.entry.item_type.title(),
+            row.entry.item_class.title() or "—",
+            row.entry.size.upper() or "—",
+            row.entry.grade.upper() or "—",
+            mission_names or "—",
             "Owned" if row.owned else "Not owned",
             row.acquired_at or "—",
             sources or "—",
             rewards or "—",
         )
-        if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.AccessibleTextRole):
+        if role == self.RecordRole:
+            return row
+        if role == Qt.ItemDataRole.DisplayRole:
             return values[index.column()]
+        if role == Qt.ItemDataRole.AccessibleTextRole:
+            return f"{self.HEADERS[index.column()]}: {values[index.column()]}"
         if role == Qt.ItemDataRole.ToolTipRole:
             return (
                 f"{row.entry.blueprint_id}\n"
@@ -115,6 +166,7 @@ class BlueprintTrackerTab(QWidget):
     """Channel-isolated ownership search and incremental log-scan UI."""
 
     linkLiveHotfixChanged = Signal(bool)
+    DEFAULT_COLUMN_WIDTHS = (240, 105, 105, 105, 70, 70, 220, 90, 165, 100, 150)
 
     def __init__(
         self,
@@ -171,17 +223,40 @@ class BlueprintTrackerTab(QWidget):
         self.category_filter.setAccessibleName("Blueprint category filter")
         self.reward_filter = QComboBox()
         self.reward_filter.setAccessibleName("Blueprint reward-source filter")
-        for combo in (self.category_filter, self.reward_filter):
+        self.mission_filter = QComboBox()
+        self.mission_filter.setAccessibleName("Blueprint mission filter")
+        self.type_filter = QComboBox()
+        self.type_filter.setAccessibleName("Blueprint item type filter")
+        self.class_filter = QComboBox()
+        self.class_filter.setAccessibleName("Blueprint item class filter")
+        self.size_filter = QComboBox()
+        self.size_filter.setAccessibleName("Blueprint item size filter")
+        self.grade_filter = QComboBox()
+        self.grade_filter.setAccessibleName("Blueprint item grade filter")
+        for combo in (
+            self.category_filter,
+            self.reward_filter,
+            self.mission_filter,
+            self.type_filter,
+            self.class_filter,
+            self.size_filter,
+            self.grade_filter,
+        ):
             combo.addItem("All", "")
             combo.currentIndexChanged.connect(self.refresh_query)
             combo.setAccessibleDescription("Filter the local C4 catalog without reading files.")
         self.ownership_filter.currentIndexChanged.connect(self.refresh_query)
 
         filter_layout = QGridLayout()
-        filter_layout.addWidget(self.search, 0, 0, 1, 3)
+        filter_layout.addWidget(self.search, 0, 0, 1, 4)
         filter_layout.addWidget(self.ownership_filter, 1, 0)
         filter_layout.addWidget(self.category_filter, 1, 1)
-        filter_layout.addWidget(self.reward_filter, 1, 2)
+        filter_layout.addWidget(self.type_filter, 1, 2)
+        filter_layout.addWidget(self.class_filter, 1, 3)
+        filter_layout.addWidget(self.size_filter, 2, 0)
+        filter_layout.addWidget(self.grade_filter, 2, 1)
+        filter_layout.addWidget(self.mission_filter, 2, 2)
+        filter_layout.addWidget(self.reward_filter, 2, 3)
         filters = SectionCard(
             "Search ownership",
             "Filters query the channel-scoped C4 catalog and ownership state in memory.",
@@ -194,16 +269,16 @@ class BlueprintTrackerTab(QWidget):
         self.table.setModel(self.model)
         self.table.setSortingEnabled(False)
         self.table.setWordWrap(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setAccessibleName("Blueprint ownership results")
         self.table.setAccessibleDescription(
             "Virtualized local blueprint catalog joined to acquisition evidence."
         )
-        self.table.setColumnWidth(0, 250)
-        self.table.setColumnWidth(1, 110)
-        self.table.setColumnWidth(2, 90)
-        self.table.setColumnWidth(3, 170)
-        self.table.setColumnWidth(4, 110)
+        for column, width in enumerate(self.DEFAULT_COLUMN_WIDTHS):
+            self.table.setColumnWidth(column, width)
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.selectionModel().selectionChanged.connect(self._selection_changed)
         results = SectionCard(
             "Blueprint catalog",
             "Ownership is personal local state; rebuilding game data never deletes it.",
@@ -218,7 +293,13 @@ class BlueprintTrackerTab(QWidget):
             "Incrementally scans the selected channel's local logs in a cancellable worker, "
             "then asks before saving ownership state."
         )
-        self.scan_button.clicked.connect(self.scan_logs)
+        self.scan_button.clicked.connect(lambda: self.scan_logs(full_rescan=False))
+        self.full_scan_button = QPushButton("Full rescan…")
+        self.full_scan_button.setAccessibleName("Fully rescan local game logs")
+        self.full_scan_button.setAccessibleDescription(
+            "Asks first, then rereads selected-channel logs from byte zero in a cancellable worker."
+        )
+        self.full_scan_button.clicked.connect(self.full_rescan)
         self.link_live_hotfix_toggle = QCheckBox(
             "Review LIVE and HOTFIX logs together"
         )
@@ -247,12 +328,54 @@ class BlueprintTrackerTab(QWidget):
         )
         self.recover_button.clicked.connect(self.recover_ownership)
         self.recover_button.setVisible(False)
-        actions = QHBoxLayout()
-        actions.addWidget(self.scan_button)
-        actions.addWidget(self.reload_button)
-        actions.addWidget(self.recover_button)
-        actions.addStretch(1)
-        actions.addWidget(self.link_live_hotfix_toggle)
+        self.mark_owned_button = QPushButton("Mark selected owned…")
+        self.mark_owned_button.setAccessibleName("Mark selected blueprints owned")
+        self.mark_owned_button.setAccessibleDescription(
+            "Previews one revision-bound manual ownership command for every selected row."
+        )
+        self.mark_owned_button.clicked.connect(
+            lambda: self.mark_selected(OwnershipDecision.OWNED)
+        )
+        self.mark_unowned_button = QPushButton("Mark selected unowned…")
+        self.mark_unowned_button.setAccessibleName("Mark selected blueprints unowned")
+        self.mark_unowned_button.setAccessibleDescription(
+            "Previews removal of local ownership records for every selected row."
+        )
+        self.mark_unowned_button.clicked.connect(
+            lambda: self.mark_selected(OwnershipDecision.UNOWNED)
+        )
+        self.resolve_button = QPushButton("Resolve exact match…")
+        self.resolve_button.setAccessibleName("Resolve unmatched acquisition by exact catalog match")
+        self.resolve_button.setAccessibleDescription(
+            "Choose one unresolved acquisition and one exact catalog alias, then preview "
+            "the revision-bound resolution before saving."
+        )
+        self.resolve_button.clicked.connect(self.resolve_unmatched)
+        self.import_button = QPushButton("Import ownership…")
+        self.import_button.setAccessibleName("Preview ownership import")
+        self.import_button.setAccessibleDescription(
+            "Validate a bounded JSON or CSV file in a background worker, preview exact "
+            "matches, and save only after confirmation."
+        )
+        self.import_button.clicked.connect(self.preview_import)
+        self.export_button = QPushButton("Export ownership…")
+        self.export_button.setAccessibleName("Export channel ownership")
+        self.export_button.setAccessibleDescription(
+            "Confirm and write the current revision of channel-scoped ownership as JSON or CSV."
+        )
+        self.export_button.clicked.connect(self.export_ownership)
+
+        actions = QGridLayout()
+        actions.addWidget(self.scan_button, 0, 0)
+        actions.addWidget(self.full_scan_button, 0, 1)
+        actions.addWidget(self.reload_button, 0, 2)
+        actions.addWidget(self.recover_button, 0, 3)
+        actions.addWidget(self.link_live_hotfix_toggle, 0, 4)
+        actions.addWidget(self.mark_owned_button, 1, 0)
+        actions.addWidget(self.mark_unowned_button, 1, 1)
+        actions.addWidget(self.resolve_button, 1, 2)
+        actions.addWidget(self.import_button, 1, 3)
+        actions.addWidget(self.export_button, 1, 4)
 
         self.empty = EmptyState(
             "No blueprint catalog yet",
@@ -275,17 +398,40 @@ class BlueprintTrackerTab(QWidget):
         self.scope_timer.timeout.connect(self.load_ownership)
 
         QWidget.setTabOrder(self.search, self.ownership_filter)
-        QWidget.setTabOrder(self.ownership_filter, self.category_filter)
-        QWidget.setTabOrder(self.category_filter, self.reward_filter)
-        QWidget.setTabOrder(self.reward_filter, self.table)
-        QWidget.setTabOrder(self.table, self.scan_button)
-        QWidget.setTabOrder(self.scan_button, self.reload_button)
-        QWidget.setTabOrder(self.reload_button, self.link_live_hotfix_toggle)
+        focus_order = (
+            self.search,
+            self.ownership_filter,
+            self.category_filter,
+            self.type_filter,
+            self.class_filter,
+            self.size_filter,
+            self.grade_filter,
+            self.mission_filter,
+            self.reward_filter,
+            self.table,
+            self.scan_button,
+            self.full_scan_button,
+            self.reload_button,
+            self.mark_owned_button,
+            self.mark_unowned_button,
+            self.resolve_button,
+            self.import_button,
+            self.export_button,
+            self.link_live_hotfix_toggle,
+        )
+        for current, following in zip(focus_order, focus_order[1:]):
+            QWidget.setTabOrder(current, following)
 
         state.contractsChanged.connect(self.rebuild_catalog)
         state.pathsChanged.connect(self.scope_changed)
         self.rebuild_catalog()
         self.scope_changed()
+
+    def reset_layout(self) -> None:
+        """Restore only machine-local blueprint table column defaults."""
+
+        for column, width in enumerate(self.DEFAULT_COLUMN_WIDTHS):
+            self.table.setColumnWidth(column, width)
 
     def _scope(self) -> tuple[str, object] | None:
         target = self.state.target
@@ -331,6 +477,11 @@ class BlueprintTrackerTab(QWidget):
         for combo, values in (
             (self.category_filter, categories(self.catalog) if self.catalog else ()),
             (self.reward_filter, reward_sources(self.catalog) if self.catalog else ()),
+            (self.mission_filter, missions(self.catalog) if self.catalog else ()),
+            (self.type_filter, item_types(self.catalog) if self.catalog else ()),
+            (self.class_filter, item_classes(self.catalog) if self.catalog else ()),
+            (self.size_filter, sizes(self.catalog) if self.catalog else ()),
+            (self.grade_filter, grades(self.catalog) if self.catalog else ()),
         ):
             current = combo.currentData()
             combo.blockSignals(True)
@@ -357,6 +508,7 @@ class BlueprintTrackerTab(QWidget):
         self.channel = channel
         self.scope_name = scope_name
         self.ownership = None
+        self.state.begin_ownership_scope(scope_name)
         self._continuity_scopes = ()
         self._recovery_target = None
         self.model.set_rows(())
@@ -416,6 +568,10 @@ class BlueprintTrackerTab(QWidget):
             or snapshot.link_live_hotfix != self._link_active()
         ):
             return
+        if not self.scope_name or not self.state.set_ownership(
+            self.scope_name, snapshot.state
+        ):
+            return
         self.ownership = snapshot.state
         self._continuity_scopes = snapshot.continuity_scopes
         self._recovery_target = None
@@ -454,6 +610,11 @@ class BlueprintTrackerTab(QWidget):
                 ),
                 category=self.category_filter.currentData() or "",
                 reward_source=self.reward_filter.currentData() or "",
+                mission=self.mission_filter.currentData() or "",
+                item_type=self.type_filter.currentData() or "",
+                item_class=self.class_filter.currentData() or "",
+                size=self.size_filter.currentData() or "",
+                grade=self.grade_filter.currentData() or "",
             ),
         )
         self.model.set_rows(rows)
@@ -470,26 +631,145 @@ class BlueprintTrackerTab(QWidget):
         self.unresolved_metric.set_value(f"{unresolved:,}")
         self.visible_metric.set_value(f"{self.model.rowCount():,}")
         ready = bool(self.catalog and self.ownership is not None and self.channel and not self._jobs)
+        selected = bool(self.table.selectionModel().selectedRows())
         self.scan_button.setEnabled(ready)
+        self.full_scan_button.setEnabled(ready)
         self.reload_button.setEnabled(bool(self.channel and not self._jobs))
+        self.mark_owned_button.setEnabled(ready and selected)
+        self.mark_unowned_button.setEnabled(ready and selected)
+        self.resolve_button.setEnabled(ready and unresolved > 0)
+        self.import_button.setEnabled(ready)
+        self.export_button.setEnabled(ready)
+        self.recover_button.setEnabled(bool(self.channel and not self._jobs))
         self.link_live_hotfix_toggle.setEnabled(
             self.channel in {"LIVE", "HOTFIX"} and not self._jobs
         )
 
-    def scan_logs(self) -> None:
+    def _selection_changed(self, *_args) -> None:
+        self._update_metrics()
+
+    def _selected_blueprint_ids(self) -> tuple[str, ...]:
+        selected = []
+        for index in self.table.selectionModel().selectedRows():
+            row = self.model.data(index, BlueprintTableModel.RecordRole)
+            if isinstance(row, BlueprintRow):
+                selected.append(row.entry.blueprint_id)
+        return tuple(sorted(set(selected)))
+
+    def mark_selected(self, decision: OwnershipDecision) -> None:
+        if not self.catalog or self.ownership is None or self._jobs:
+            return
+        selected = self._selected_blueprint_ids()
+        if not selected:
+            return
+        try:
+            plan = plan_manual_ownership(
+                self.catalog, self.ownership, selected, decision
+            )
+        except OwnershipError as exc:
+            self._job_failed(exc)
+            return
+        if not plan.changes:
+            self.status.set_tone(Tone.SUCCESS)
+            self.status.setText(
+                f"No ownership write is needed; every selected blueprint is already {decision.value}."
+            )
+            return
+        preview = "\n".join(
+            f"• {change.name}: "
+            f"{'owned' if change.before_owned else 'unowned'} → "
+            f"{'owned' if change.after_owned else 'unowned'}"
+            for change in plan.changes[:20]
+        )
+        if len(plan.changes) > 20:
+            preview += f"\n• +{len(plan.changes) - 20:,} more"
+        if QMessageBox.question(
+            self,
+            "Apply manual blueprint ownership?",
+            f"Scope: {plan.scope}\nRevision: {plan.expected_revision}\n"
+            f"Changes: {plan.summary()}\n\n{preview}\n\n"
+            "This changes only StarCompanion's local ownership store and can be reversed.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        channel = self.channel
+        linked = self._link_active(channel)
+        if channel is None:
+            return
+        self._start_job(
+            lambda token, _reporter: self._apply_manual_plan(
+                token, channel, linked, plan
+            ),
+            lambda snapshot: self._ownership_saved(
+                snapshot, f"Applied {plan.summary()} as one reviewed command."
+            ),
+        )
+
+    @staticmethod
+    def _apply_manual_plan(
+        token,
+        channel: str,
+        link_live_hotfix: bool,
+        plan: ManualOwnershipPlan,
+    ) -> OwnershipSnapshot:
+        token.checkpoint()
+        store = OwnershipStore(channel, link_live_hotfix=link_live_hotfix)
+        loaded = store.load_details()
+        updated = apply_manual_ownership(plan, loaded.state)
+        token.checkpoint()
+        store.save(updated)
+        token.checkpoint()
+        refreshed = store.load_details()
+        return OwnershipSnapshot(
+            channel,
+            link_live_hotfix,
+            refreshed.state,
+            refreshed.continuity_scopes,
+        )
+
+    def _ownership_saved(self, snapshot: OwnershipSnapshot, message: str) -> None:
+        self._ownership_loaded(snapshot)
+        if self.ownership is snapshot.state:
+            self.status.set_tone(Tone.SUCCESS)
+            self.status.setText(message)
+
+    def full_rescan(self) -> None:
+        if self.ownership is None or self._jobs:
+            return
+        if QMessageBox.question(
+            self,
+            "Reread every local log?",
+            "A full rescan ignores saved byte cursors and rereads every discovered log in the "
+            "selected ownership scope. Existing manual/import evidence is retained and duplicate "
+            "log events remain deduplicated. Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        ) == QMessageBox.StandardButton.Yes:
+            self.scan_logs(full_rescan=True)
+
+    def scan_logs(self, *, full_rescan: bool = False) -> None:
         scope = self._scope()
         if not scope or not self.catalog or self.ownership is None or self._jobs:
             return
         channel, root = scope
         linked = self._link_active(channel)
         catalog = self.catalog
-        baseline = self.ownership
+        expected_revision = self.ownership.revision
         continuity_scopes = self._continuity_scopes
         self.status.set_tone(Tone.INFO)
         label = "LIVE and HOTFIX" if linked else channel
-        self.status.setText(f"Scanning {label} local logs in the background…")
+        mode = "fully rescanning" if full_rescan else "scanning"
+        self.status.setText(f"{mode.title()} {label} local logs in the background…")
 
         def operation(token, reporter):
+            loaded = OwnershipStore(
+                channel, link_live_hotfix=linked
+            ).load_details()
+            if loaded.state.revision != expected_revision:
+                raise OwnershipConflictError(
+                    "ownership changed before the scan began; reload and review it again"
+                )
             discovery = discover_logs(
                 root,
                 link_live_hotfix=linked,
@@ -502,7 +782,8 @@ class BlueprintTrackerTab(QWidget):
                     scan_logs(
                         discovery.paths,
                         catalog,
-                        baseline,
+                        loaded.state,
+                        full_rescan=full_rescan,
                         cancel=lambda: token.is_cancelled,
                         progress=lambda current, total, name: reporter((current, total, name)),
                         initial_diagnostics=discovery.diagnostics,
@@ -617,6 +898,300 @@ class BlueprintTrackerTab(QWidget):
         ).save(state)
         token.checkpoint()
         return OwnershipSnapshot(channel, link_live_hotfix, state)
+
+    def preview_import(self) -> None:
+        if not self.catalog or self.ownership is None or self._jobs:
+            return
+        filename, _selected = QFileDialog.getOpenFileName(
+            self,
+            "Import blueprint ownership",
+            "",
+            "Ownership files (*.json *.csv)",
+        )
+        if not filename:
+            return
+        channel = self.channel
+        if channel is None:
+            return
+        linked = self._link_active(channel)
+        catalog = self.catalog
+        source = Path(filename)
+        self.status.set_tone(Tone.INFO)
+        self.status.setText("Validating the ownership import in a background worker…")
+        self._start_job(
+            lambda token, _reporter: self._plan_import(
+                token, channel, linked, catalog, source
+            ),
+            lambda plan: self._import_preview_ready(
+                channel, linked, catalog, plan
+            ),
+        )
+
+    @staticmethod
+    def _plan_import(
+        token,
+        channel: str,
+        link_live_hotfix: bool,
+        catalog: BlueprintCatalog,
+        source: Path,
+    ) -> ImportPlan:
+        token.checkpoint()
+        state = OwnershipStore(
+            channel, link_live_hotfix=link_live_hotfix
+        ).load_details().state
+        token.checkpoint()
+        result = plan_import(source, catalog, state)
+        token.checkpoint()
+        return result
+
+    def _import_preview_ready(
+        self,
+        channel: str,
+        link_live_hotfix: bool,
+        catalog: BlueprintCatalog,
+        plan: ImportPlan,
+    ) -> None:
+        if (
+            channel != self.channel
+            or link_live_hotfix != self._link_active()
+            or catalog is not self.catalog
+        ):
+            self.status.set_tone(Tone.INFO)
+            self.status.setText("Import preview discarded because the selected scope or catalog changed.")
+            return
+        sample = "\n".join(f"• {item.name}" for item in plan.candidates[:20])
+        if len(plan.candidates) > 20:
+            sample += f"\n• +{len(plan.candidates) - 20:,} more"
+        summary = (
+            f"Source: {plan.source_name}\nExact additions: {plan.additions:,}\n"
+            f"Already owned: {len(plan.already_owned):,}\n"
+            f"Unmatched (not imported): {len(plan.unmatched_names):,}"
+        )
+        if not plan.candidates:
+            self.status.set_tone(
+                Tone.WARNING if plan.unmatched_names else Tone.SUCCESS
+            )
+            self.status.setText(summary.replace("\n", " · ") + ". Nothing was written.")
+            return
+        if QMessageBox.question(
+            self,
+            "Import exact blueprint matches?",
+            f"{summary}\n\n{sample}\n\n"
+            "Only exact stable IDs or unambiguous normalized names are accepted. Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        ) != QMessageBox.StandardButton.Yes:
+            self.status.set_tone(Tone.INFO)
+            self.status.setText("Import preview discarded. Nothing was written.")
+            return
+        self._start_job(
+            lambda token, _reporter: self._apply_import_plan(
+                token, channel, link_live_hotfix, plan
+            ),
+            lambda snapshot: self._ownership_saved(
+                snapshot, f"Imported {plan.additions:,} exact blueprint match(es)."
+            ),
+        )
+
+    @staticmethod
+    def _apply_import_plan(
+        token,
+        channel: str,
+        link_live_hotfix: bool,
+        plan: ImportPlan,
+    ) -> OwnershipSnapshot:
+        token.checkpoint()
+        store = OwnershipStore(channel, link_live_hotfix=link_live_hotfix)
+        loaded = store.load_details()
+        updated = apply_import(plan, loaded.state)
+        token.checkpoint()
+        store.save(updated)
+        token.checkpoint()
+        refreshed = store.load_details()
+        return OwnershipSnapshot(
+            channel,
+            link_live_hotfix,
+            refreshed.state,
+            refreshed.continuity_scopes,
+        )
+
+    def export_ownership(self) -> None:
+        if not self.catalog or self.ownership is None or self._jobs:
+            return
+        filename, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Export blueprint ownership",
+            "starcompanion-ownership.json",
+            "JSON (*.json);;CSV (*.csv)",
+        )
+        if not filename:
+            return
+        destination = Path(filename)
+        if destination.suffix.casefold() not in {".json", ".csv"}:
+            destination = destination.with_suffix(
+                ".csv" if selected_filter.startswith("CSV") else ".json"
+            )
+        if QMessageBox.question(
+            self,
+            "Export local ownership?",
+            f"Export {len(self.ownership.records):,} owned blueprint record(s) as "
+            f"{destination.suffix[1:].upper()}? If the selected file exists, it will be replaced.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        channel = self.channel
+        if channel is None:
+            return
+        linked = self._link_active(channel)
+        catalog = self.catalog
+        expected_revision = self.ownership.revision
+        self.status.set_tone(Tone.INFO)
+        self.status.setText("Writing the ownership export in a background worker…")
+        self._start_job(
+            lambda token, _reporter: self._write_export(
+                token,
+                channel,
+                linked,
+                catalog,
+                expected_revision,
+                destination,
+            ),
+            self._export_written,
+        )
+
+    @staticmethod
+    def _write_export(
+        token,
+        channel: str,
+        link_live_hotfix: bool,
+        catalog: BlueprintCatalog,
+        expected_revision: int,
+        destination: Path,
+    ) -> tuple[Path, int]:
+        token.checkpoint()
+        store = OwnershipStore(channel, link_live_hotfix=link_live_hotfix)
+        state = store.load_details().state
+        if state.revision != expected_revision:
+            raise OwnershipConflictError(
+                "ownership changed after export confirmation; reload and try again"
+            )
+        payload = (
+            export_json(state, catalog)
+            if destination.suffix.casefold() == ".json"
+            else export_csv(state, catalog)
+        )
+        token.checkpoint()
+        write_export(destination, payload, store_path=store.path)
+        token.checkpoint()
+        return destination, len(state.records)
+
+    def _export_written(self, result: tuple[Path, int]) -> None:
+        destination, count = result
+        self.status.set_tone(Tone.SUCCESS)
+        self.status.setText(
+            f"Exported {count:,} owned blueprint record(s) to {destination}."
+        )
+
+    def resolve_unmatched(self) -> None:
+        if not self.catalog or self.ownership is None or self._jobs:
+            return
+        resolvable = [
+            item
+            for item in self.ownership.unresolved
+            if self.catalog.resolve_name_candidates(item.name)
+        ]
+        if not resolvable:
+            self.status.set_tone(Tone.WARNING)
+            self.status.setText(
+                "No unresolved acquisition currently has an exact catalog-name candidate. "
+                "StarCompanion will not guess or substitute a fuzzy match."
+            )
+            return
+        acquisition_labels = [
+            f"{item.acquisition.acquisition_id[:16]} — {item.name} ({item.reason})"
+            for item in resolvable
+        ]
+        selected_label, accepted = QInputDialog.getItem(
+            self,
+            "Choose unresolved acquisition",
+            "Logged acquisition:",
+            acquisition_labels,
+            0,
+            False,
+        )
+        if not accepted:
+            return
+        unresolved = resolvable[acquisition_labels.index(selected_label)]
+        candidate_ids = self.catalog.resolve_name_candidates(unresolved.name)
+        candidate_labels = [
+            f"{self.catalog.by_id[item].name} — {item}" for item in candidate_ids
+        ]
+        candidate_label, accepted = QInputDialog.getItem(
+            self,
+            "Choose exact blueprint identity",
+            "Exact catalog candidate:",
+            candidate_labels,
+            0,
+            False,
+        )
+        if not accepted:
+            return
+        blueprint_id = candidate_ids[candidate_labels.index(candidate_label)]
+        try:
+            plan = plan_resolution(
+                self.ownership,
+                self.catalog,
+                unresolved.acquisition.acquisition_id,
+                blueprint_id,
+            )
+        except OwnershipError as exc:
+            self._job_failed(exc)
+            return
+        if QMessageBox.question(
+            self,
+            "Apply exact acquisition resolution?",
+            f"Logged name: {plan.unresolved.name}\n"
+            f"Exact blueprint: {plan.blueprint_name}\nID: {plan.blueprint_id}\n\n"
+            "This moves only that acquisition from unresolved evidence to the selected stable ID.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        channel = self.channel
+        if channel is None:
+            return
+        linked = self._link_active(channel)
+        self._start_job(
+            lambda token, _reporter: self._apply_resolution_plan(
+                token, channel, linked, plan
+            ),
+            lambda snapshot: self._ownership_saved(
+                snapshot, f"Resolved {plan.unresolved.name} to {plan.blueprint_name}."
+            ),
+        )
+
+    @staticmethod
+    def _apply_resolution_plan(
+        token,
+        channel: str,
+        link_live_hotfix: bool,
+        plan: ResolutionPlan,
+    ) -> OwnershipSnapshot:
+        token.checkpoint()
+        store = OwnershipStore(channel, link_live_hotfix=link_live_hotfix)
+        loaded = store.load_details()
+        updated = apply_resolution(plan, loaded.state)
+        token.checkpoint()
+        store.save(updated)
+        token.checkpoint()
+        refreshed = store.load_details()
+        return OwnershipSnapshot(
+            channel,
+            link_live_hotfix,
+            refreshed.state,
+            refreshed.continuity_scopes,
+        )
 
     def recover_ownership(self) -> None:
         if not self.channel or self._jobs:

@@ -16,7 +16,13 @@ import tempfile
 from pathlib import Path
 
 from . import cache
-from .blueprints import BlueprintQuery, OwnershipFilter, build_catalog, query_blueprints
+from .blueprints import (
+    BlueprintQuery,
+    OwnershipFilter,
+    apply_ownership_snapshot,
+    build_catalog,
+    query_blueprints,
+)
 from .config import Profile, builtin_profiles, load_builtin
 from .extract import datacore, dataforge
 from .diagnostics import build_diagnostics, render_diagnostics, write_diagnostics
@@ -24,14 +30,15 @@ from .extract.p4k import P4KArchive, P4KError, is_localization_entry
 from .fallbacks import FallbackDocument, SCHEMA_VERSION, template_from_contracts
 from .ini import LocalizationFile
 from .inject import (
+    DEFAULT_BACKUP_RETENTION,
     InjectionPlan,
     MergeMode,
     UnconfirmedWriteError,
     ValidationFailedError,
     apply,
-    backup,
     looks_like_game_install,
-    restore,
+    rollback,
+    safe_backups,
 )
 from .inject import plan as plan_injection
 from . import install as installs
@@ -43,21 +50,27 @@ from .user_edits import (
     ConflictChoice,
     EditCommand,
     EditSession,
+    KeyResolution,
+    ReconciliationChoice,
     UserEditStore,
     data_dir,
     load_ini as load_user_ini,
     plan_import,
 )
+from .sharing import load_delta_pack, plan_delta_pack, write_delta_pack
 from .validate import Severity, validate_value
-from .transactions import TransactionJournal, bytes_sha256, fingerprint
+from .transactions import TransactionJournal, fingerprint
 from .ownership import (
+    OwnershipDecision,
     OwnershipStore,
     apply_import as apply_ownership_import,
+    apply_manual_ownership,
     apply_resolution as apply_ownership_resolution,
     discover_logs,
     export_csv as export_ownership_csv,
     export_json as export_ownership_json,
     plan_import as plan_ownership_import,
+    plan_manual_ownership,
     plan_resolution as plan_ownership_resolution,
     scan_logs,
     write_export as write_ownership_export,
@@ -79,6 +92,55 @@ EXIT_ERROR = 1
 EXIT_REFUSED = 3
 EXIT_INVALID = 4
 MAX_SOURCE_REPORT_BYTES = 128 * 1024 * 1024
+MAX_RESOLUTIONS_BYTES = 4 * 1024 * 1024
+
+
+def _strict_json_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key {key!r}")
+        result[key] = value
+    return result
+
+
+def _load_resolutions(path: Path | None) -> dict[str, KeyResolution]:
+    if path is None:
+        return {}
+    if not path.is_file() or path.stat().st_size > MAX_RESOLUTIONS_BYTES:
+        raise ValueError("resolution JSON is missing or exceeds its size limit")
+    data = json.loads(
+        path.read_text(encoding="utf-8"),
+        object_pairs_hook=_strict_json_object,
+    )
+    if not isinstance(data, dict) or len(data) > 100_000:
+        raise ValueError("resolution JSON must be a bounded key-to-choice object")
+    result: dict[str, KeyResolution] = {}
+    for key, record in data.items():
+        if (
+            not isinstance(key, str)
+            or not key
+            or len(key) > 512
+            or any(char in key for char in "=\r\n\0")
+            or not isinstance(record, dict)
+            or not set(record).issubset({"choice", "value"})
+            or "choice" not in record
+            or not isinstance(record["choice"], str)
+        ):
+            raise ValueError(f"invalid reconciliation record for {key!r}")
+        try:
+            choice = ReconciliationChoice(record["choice"])
+        except ValueError as exc:
+            raise ValueError(f"invalid reconciliation choice for {key!r}") from exc
+        has_value = "value" in record
+        value = record.get("value")
+        if choice is ReconciliationChoice.CUSTOM:
+            if not has_value or not isinstance(value, str):
+                raise ValueError(f"custom reconciliation for {key!r} requires text value")
+        elif has_value:
+            raise ValueError(f"only custom reconciliation may supply a value for {key!r}")
+        result[key] = KeyResolution(choice, value if has_value else None)
+    return result
 
 def _resolve_profile(value: str | None) -> Profile:
     if value is None:
@@ -176,6 +238,12 @@ def _user_store(args, channel: str) -> UserEditStore:
 
 def _transaction_journal(args, target: Path) -> TransactionJournal:
     state_dir = _channel_backup_dir(args, target)
+    return _backup_journal(state_dir)
+
+
+def _backup_journal(state_dir: Path) -> TransactionJournal:
+    """Use the same recovery records for every CLI backup workflow."""
+
     return TransactionJournal(
         state_dir / ".apply-journal.json",
         state_dir / "last-operation.json",
@@ -202,12 +270,7 @@ def _channel_backup_dir(args, target: Path) -> Path:
 
 
 def _channel_backups(directory: Path, target: Path) -> list[Path]:
-    if not directory.is_dir():
-        return []
-    return sorted(
-        (path for path in directory.glob(f"{target.stem}.*{target.suffix}") if path.is_file()),
-        reverse=True,
-    )
+    return list(safe_backups(directory, target))
 
 
 def _print_prepared(prepared, mode: MergeMode, *, limit: int) -> None:
@@ -343,12 +406,25 @@ def cmd_import(args) -> int:
 def cmd_render(args) -> int:
     contracts = cache.load(args.cache)
     profile = _resolve_profile(args.profile)
+    channel = args.channel or _cache_channel(args.cache)
 
     for problem in profile.validate_against(contracts):
         print(f"error: {problem}", file=sys.stderr)
         return EXIT_INVALID
 
-    result = profile.build_renderer().render_all(contracts)
+    render_contracts = contracts
+    ownership_store = None
+    if channel is not None and not args.no_ownership:
+        ownership_store = OwnershipStore(
+            channel,
+            root=args.data_root,
+            link_live_hotfix=args.link_live_hotfix,
+        )
+        render_contracts = apply_ownership_snapshot(
+            contracts,
+            ownership_store.load_details().state,
+        )
+    result = profile.build_renderer().render_all(render_contracts)
     stock_values = _contract_stock_values(contracts, keys=set(result.values))
     graph = SourceGraph(
         [
@@ -359,7 +435,6 @@ def cmd_render(args) -> int:
             ),
         ]
     )
-    channel = args.channel or _cache_channel(args.cache)
     if channel is not None and not args.no_language_pack:
         local_pack = LanguagePackStore(channel, args.language, args.data_root).load()
         if local_pack:
@@ -471,6 +546,8 @@ def cmd_render(args) -> int:
     print(f"  sources : {len(merged.layers)} layers, {len(merged.conflicts)} conflicts")
     if active_user_store is not None:
         print(f"  user.ini: {active_user_store.path}")
+    if ownership_store is not None:
+        print(f"  ownership: {ownership_store.path}")
     for key, reason in result.skipped[:10]:
         print(f"  skipped {key}: {reason}", file=sys.stderr)
     for key, issue in merge_errors[:10]:
@@ -535,6 +612,16 @@ def cmd_apply(args) -> int:
         print("error: --mode overwrite needs --stock (a pristine global.ini)", file=sys.stderr)
         return EXIT_INVALID
 
+    backup_dir = Path(args.backup_dir or args.target.parent / "backups")
+    journal = _backup_journal(backup_dir)
+    recovery = journal.inspect(args.target, resolve_safe=args.confirm)
+    if recovery.needs_attention:
+        print(
+            f"refusing to write while recovery needs attention: {recovery.message}",
+            file=sys.stderr,
+        )
+        return EXIT_INVALID
+
     try:
         result = apply(
             args.target,
@@ -542,8 +629,14 @@ def cmd_apply(args) -> int:
             confirmed=args.confirm,
             mode=mode,
             stock_path=args.stock,
-            backup_dir=args.backup_dir,
+            backup_dir=backup_dir,
             allowed_additions=allowed_additions,
+            journal=journal,
+            backup_retention=(
+                args.backup_retention
+                if args.backup_retention is not None
+                else profile.injection.backup_retention
+            ),
         )
     except UnconfirmedWriteError:
         preview = plan_injection(
@@ -562,7 +655,9 @@ def cmd_apply(args) -> int:
 
     print(f"applied ({mode.value}): {result.summary()}")
     print(f"  target : {args.target}")
-    print(f"  backup : {args.backup_dir or args.target.parent / 'backups'}")
+    print(f"  backup : {backup_dir}")
+    for diagnostic in result.diagnostics:
+        print(f"  diagnostic: {diagnostic}")
     return EXIT_OK
 
 
@@ -633,6 +728,7 @@ def cmd_channel_apply(args) -> int:
             confirmed=True,
             backup_dir=backup_dir,
             journal=journal,
+            backup_retention=args.backup_retention,
         )
         created = [path for path in _channel_backups(backup_dir, target) if path not in before]
         print(f"applied  : {result.summary()}")
@@ -697,18 +793,25 @@ def cmd_user_import(args) -> int:
     session = EditSession(store)
     choice = ConflictChoice(args.on_conflict)
     incoming = load_language_pack(args.file)
-    plan = plan_import(session.values, incoming, choice=choice)
+    plan = plan_import(
+        session.values,
+        incoming,
+        choice=choice,
+        resolutions=_load_resolutions(args.resolutions),
+    )
     print(f"source   : {args.file}")
     print(f"user.ini : {store.path}")
     print(f"plan     : {plan.summary()}")
     for key in plan.conflicts[: args.limit]:
+        resolution = plan.resolutions.get(key)
+        action = resolution.choice.value if resolution is not None else "unresolved"
+        print(f"  conflict {key}: {action}")
+    if plan.unresolved_conflicts:
         print(
-            f"  conflict {key}: kept existing"
-            if choice is ConflictChoice.KEEP
-            else f"  conflict {key}: {'use incoming' if choice is ConflictChoice.INCOMING else 'unresolved'}"
+            "resolve every conflict with --resolutions or choose a global "
+            "--on-conflict policy before importing",
+            file=sys.stderr,
         )
-    if plan.conflicts and choice is ConflictChoice.ERROR:
-        print("choose --on-conflict keep or incoming before importing", file=sys.stderr)
         return EXIT_INVALID
     if not plan.changes:
         print("nothing to write")
@@ -767,6 +870,74 @@ def cmd_user_redo(args) -> int:
     return EXIT_OK
 
 
+def cmd_delta_pack_export(args) -> int:
+    store = _user_store(args, args.channel)
+    profile = _resolve_profile(args.profile)
+    plan = plan_delta_pack(store, profile)
+    print(f"source   : {store.path}")
+    print(f"scope    : {plan.channel}/{plan.language}")
+    print(f"profile  : {profile.name}")
+    print(f"authored : {len(plan.authored_values):,}")
+    print(f"excluded : {plan.excluded_values:,} imported, derived, or unknown values")
+    print(f"archive  : {args.out}")
+    print("contents : user-authored deltas only; no CIG stock or game data")
+    if not args.confirm:
+        print("nothing was written; repeat with --confirm", file=sys.stderr)
+        return EXIT_REFUSED
+    write_delta_pack(plan, args.out, overwrite=args.overwrite)
+    print("written  : verified delta pack")
+    return EXIT_OK
+
+
+def cmd_delta_pack_inspect(args) -> int:
+    document = load_delta_pack(args.file)
+    print(f"archive  : {document.archive}")
+    print(f"sha256   : {document.archive_sha256}")
+    print(f"source   : {document.source_channel}/{document.language}")
+    print(f"profile  : {document.profile.name}")
+    print(f"deltas   : {len(document.values):,}")
+    print("values   : hidden; inspect never prints authored mission text")
+    print("apply    : rebuild against your own installed Data.p4k after import")
+    return EXIT_OK
+
+
+def cmd_delta_pack_import(args) -> int:
+    document = load_delta_pack(args.file)
+    store = _user_store(args, args.channel)
+    session = EditSession(store)
+    plan = plan_import(
+        session.values,
+        document.values,
+        choice=ConflictChoice(args.on_conflict),
+        resolutions=_load_resolutions(args.resolutions),
+    )
+    print(f"archive       : {document.archive}")
+    print(f"archive sha256: {document.archive_sha256}")
+    print(f"source scope  : {document.source_channel}/{document.language} (advisory)")
+    print(f"target scope  : {store.channel.upper()}/{store.language.casefold()} (explicit)")
+    print(f"profile       : {document.profile.name} (included, not activated)")
+    print(f"plan          : {plan.summary()}")
+    for key in plan.conflicts[: args.limit]:
+        resolution = plan.resolutions.get(key)
+        print(
+            f"  conflict {key}: "
+            f"{resolution.choice.value if resolution is not None else 'unresolved'}"
+        )
+    if plan.unresolved_conflicts:
+        print("every conflict must be explicitly reconciled", file=sys.stderr)
+        return EXIT_INVALID
+    if not plan.changes:
+        print("nothing to write")
+        return EXIT_OK
+    if not args.confirm:
+        print("nothing was written; repeat with --confirm", file=sys.stderr)
+        return EXIT_REFUSED
+    session.import_plan(plan)
+    print(f"written       : {store.path}")
+    print("next          : preview a render rebuilt from your own Data.p4k")
+    return EXIT_OK
+
+
 def cmd_channel_rollback(args) -> int:
     game = _resolve_install(args.install)
     target = game.localization(args.language)
@@ -811,39 +982,23 @@ def cmd_channel_rollback(args) -> int:
 
     before = fingerprint(target)
     selected_fingerprint = fingerprint(selected)
-    selected_data = selected.read_bytes()
-    after_sha256 = bytes_sha256(selected_data)
-    rollback_id = bytes_sha256(
-        f"rollback\0{target.resolve()}\0{before.sha256}\0{after_sha256}".encode(
-            "utf-8"
-        )
-    )
-    journal.begin(
-        operation="rollback",
-        plan_id=rollback_id,
-        target=target,
-        before=before,
-        after_sha256=after_sha256,
-    )
-    recovery_backup = backup(target, backup_dir) if target.is_file() else None
-    if recovery_backup is not None:
-        journal.record_backup(recovery_backup)
-    if fingerprint(target) != before:
-        raise RuntimeError("target changed while preparing rollback; nothing was restored")
-    restore(
+    result = rollback(
         selected,
         target,
+        confirmed=True,
+        backup_dir=backup_dir,
         expected_backup_fingerprint=selected_fingerprint,
         expected_target_fingerprint=before,
+        journal=journal,
+        backup_retention=args.backup_retention,
     )
-    journal.record_replaced()
-    final = fingerprint(target)
-    if final.sha256 != after_sha256:
-        raise RuntimeError("rollback verification fingerprint mismatch")
-    journal.complete(final=final)
     print("rollback : complete")
-    print(f"recovery backup: {recovery_backup or 'none (target did not exist)'}")
-    print(f"verified : {after_sha256}")
+    print(
+        f"recovery backup: {result.recovery_backup or 'none (target did not exist)'}"
+    )
+    print(f"verified : {result.final_fingerprint.sha256}")
+    for diagnostic in result.diagnostics:
+        print(f"diagnostic: {diagnostic}")
     return EXIT_OK
 
 
@@ -1022,8 +1177,58 @@ def cmd_scmdb(args) -> int:
 
 
 def cmd_restore(args) -> int:
-    restore(args.backup, args.target)
-    print(f"restored {args.target} from {args.backup}")
+    # Keep the lexical paths so the centralized safety check can still see a
+    # symlink or Windows junction instead of resolving through it first.
+    backup_path = Path(os.path.abspath(args.backup))
+    backup_dir = Path(os.path.abspath(args.backup_dir or args.backup.parent))
+    if backup_path.parent != backup_dir:
+        raise ValueError("--backup must name a file directly inside the active backup directory")
+    recognized = {Path(os.path.abspath(path)) for path in safe_backups(backup_dir, args.target)}
+    if backup_path not in recognized:
+        raise ValueError(
+            "--backup is not a recognized ordinary timestamped backup for this target"
+        )
+
+    install = looks_like_game_install(args.target)
+    if install and not args.allow_game_folder:
+        print(
+            f"refusing to write: {args.target} is inside what looks like a Star Citizen\n"
+            f"install ({install}). Re-run with --allow-game-folder if that is intended.",
+            file=sys.stderr,
+        )
+        return EXIT_REFUSED
+
+    journal = _backup_journal(backup_dir)
+    recovery = journal.inspect(args.target, resolve_safe=args.confirm)
+    print(f"target   : {args.target}")
+    print(f"backup   : {backup_path}")
+    print(f"recovery : {recovery.status} — {recovery.message}")
+    if recovery.needs_attention:
+        print("refusing restore while recovery needs attention", file=sys.stderr)
+        return EXIT_INVALID
+    if not args.confirm:
+        print("nothing was written; repeat with --confirm", file=sys.stderr)
+        return EXIT_REFUSED
+
+    before = fingerprint(args.target)
+    selected_fingerprint = fingerprint(backup_path)
+    result = rollback(
+        backup_path,
+        args.target,
+        confirmed=True,
+        backup_dir=backup_dir,
+        expected_backup_fingerprint=selected_fingerprint,
+        expected_target_fingerprint=before,
+        journal=journal,
+        backup_retention=args.backup_retention,
+    )
+    print(f"restored {args.target} from {backup_path}")
+    print(
+        f"recovery backup: {result.recovery_backup or 'none (target did not exist)'}"
+    )
+    print(f"verified : {result.final_fingerprint.sha256}")
+    for diagnostic in result.diagnostics:
+        print(f"diagnostic: {diagnostic}")
     return EXIT_OK
 
 
@@ -1097,6 +1302,10 @@ def _print_blueprint_rows(rows, *, as_json: bool, limit: int) -> None:
                 "blueprint_id": row.entry.blueprint_id,
                 "name": row.entry.name,
                 "category": row.entry.category,
+                "item_type": row.entry.item_type,
+                "item_class": row.entry.item_class,
+                "size": row.entry.size,
+                "grade": row.entry.grade,
                 "owned": row.owned,
                 "acquired_at": row.acquired_at,
                 "acquisition_sources": list(row.acquisition_sources),
@@ -1118,7 +1327,19 @@ def _print_blueprint_rows(rows, *, as_json: bool, limit: int) -> None:
     for row in selected:
         status = "owned" if row.owned else "unowned"
         sources = ", ".join(row.acquisition_sources) or "-"
-        print(f"{status:7} {row.entry.category:18} {row.entry.name} [{sources}]")
+        metadata = "/".join(
+            value or "-"
+            for value in (
+                row.entry.item_type,
+                row.entry.item_class,
+                row.entry.size,
+                row.entry.grade,
+            )
+        )
+        print(
+            f"{status:7} {row.entry.category:18} {row.entry.name} "
+            f"[{metadata}; {sources}]"
+        )
 
 
 def cmd_blueprints_list(args) -> int:
@@ -1132,12 +1353,47 @@ def cmd_blueprints_list(args) -> int:
             reward_source=args.reward_source or "",
             category=args.category or "",
             acquisition_source=args.acquisition_source or "",
+            mission=args.mission or "",
+            item_type=args.item_type or "",
+            item_class=args.item_class or "",
+            size=args.size or "",
+            grade=args.grade or "",
         ),
     )
     print(f"catalog : {len(catalog.entries):,} blueprints")
     print(f"scope   : {state.scope}")
     print(f"results : {len(rows):,}")
     _print_blueprint_rows(rows, as_json=args.json, limit=args.limit)
+    return EXIT_OK
+
+
+def cmd_blueprints_mark(args) -> int:
+    catalog, store, state, continuity_scopes = _blueprint_context(args)
+    plan = plan_manual_ownership(
+        catalog,
+        state,
+        args.blueprint_id,
+        OwnershipDecision(args.state),
+    )
+    print(f"scope    : {state.scope}")
+    print(f"revision : {plan.expected_revision}")
+    print(f"plan id  : {plan.plan_id}")
+    print(f"changes  : {plan.summary()}")
+    for change in plan.changes[: max(0, args.limit)]:
+        print(
+            f"  {change.blueprint_id}  {change.name}: "
+            f"{'owned' if change.before_owned else 'unowned'} -> "
+            f"{'owned' if change.after_owned else 'unowned'}"
+        )
+    if not plan.changes and not continuity_scopes:
+        print("nothing to write; every selected blueprint already has that state")
+        return EXIT_OK
+    if not args.confirm:
+        print("nothing was written; repeat with --confirm", file=sys.stderr)
+        return EXIT_REFUSED
+    updated = apply_manual_ownership(plan, state)
+    store.save(updated)
+    print(f"written  : {store.path}")
     return EXIT_OK
 
 
@@ -1211,6 +1467,9 @@ def cmd_blueprints_import(args) -> int:
     print(f"unmatched     : {len(plan.unmatched_names):,}")
     for item in plan.unmatched_names[: max(0, args.limit)]:
         print(f"  unmatched: {item}")
+    if not plan.candidates:
+        print("nothing to write; no new exact catalog matches were found")
+        return EXIT_OK
     if not args.confirm:
         print("nothing was written; repeat with --confirm to import matched ownership")
         return EXIT_REFUSED
@@ -1221,6 +1480,8 @@ def cmd_blueprints_import(args) -> int:
 
 def cmd_blueprints_export(args) -> int:
     catalog, store, state, _continuity = _blueprint_context(args)
+    if args.out.exists() and not args.overwrite:
+        raise ValueError("export destination exists; pass --overwrite to replace it")
     if not args.confirm:
         print(f"would export {len(state.records):,} owned blueprints to {args.out}")
         print("nothing was written; repeat with --confirm")
@@ -1560,6 +1821,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="render without the selected channel's user.ini layer",
     )
     p.add_argument(
+        "--no-ownership",
+        action="store_true",
+        help="render without channel-scoped blueprint ownership markers",
+    )
+    p.add_argument(
+        "--link-live-hotfix",
+        action="store_true",
+        help="use the explicit shared LIVE-HOTFIX ownership scope",
+    )
+    p.add_argument(
         "--language-overlay",
         type=Path,
         help="optional local language overlay INI",
@@ -1605,6 +1876,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--mode", choices=[m.value for m in MergeMode])
     p.add_argument("--stock", type=Path, help="pristine global.ini, for overwrite mode")
     p.add_argument("--backup-dir", type=Path)
+    p.add_argument("--backup-retention", type=int)
     p.add_argument("--fallbacks", type=Path, help="authorize additions from this fallback document")
     p.add_argument("--confirm", action="store_true", help="required to write anything")
     p.add_argument(
@@ -1673,6 +1945,11 @@ def build_parser() -> argparse.ArgumentParser:
         "apply", help="prepare, show, and atomically apply changes"
     )
     add_preparation(p)
+    p.add_argument(
+        "--backup-retention",
+        type=int,
+        default=DEFAULT_BACKUP_RETENTION,
+    )
     p.add_argument("--confirm", action="store_true", help="required to write anything")
     p.add_argument(
         "--expect-plan",
@@ -1685,6 +1962,11 @@ def build_parser() -> argparse.ArgumentParser:
         "rollback", help="restore the latest channel backup atomically"
     )
     add_install(p)
+    p.add_argument(
+        "--backup-retention",
+        type=int,
+        default=DEFAULT_BACKUP_RETENTION,
+    )
     p.add_argument("--backup", type=Path, help="specific scoped backup; latest by default")
     p.add_argument("--list", action="store_true", help="list available backups and exit")
     p.add_argument("--confirm", action="store_true", help="required to restore anything")
@@ -1736,9 +2018,28 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=20)
     p.set_defaults(func=cmd_scmdb)
 
-    p = sub.add_parser("restore", help="put a backup back")
+    p = sub.add_parser(
+        "restore",
+        help="preview or restore one recognized backup through guarded rollback",
+    )
     p.add_argument("--backup", type=Path, required=True)
     p.add_argument("--target", type=Path, required=True)
+    p.add_argument(
+        "--backup-dir",
+        type=Path,
+        help="active backup scope; defaults to the selected backup's directory",
+    )
+    p.add_argument(
+        "--backup-retention",
+        type=int,
+        default=DEFAULT_BACKUP_RETENTION,
+    )
+    p.add_argument("--confirm", action="store_true", help="required to restore anything")
+    p.add_argument(
+        "--allow-game-folder",
+        action="store_true",
+        help="permit restoring inside a detected Star Citizen install",
+    )
     p.set_defaults(func=cmd_restore)
 
     p = sub.add_parser("profiles", help="list built-in profiles")
@@ -1778,12 +2079,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--reward-source")
     p.add_argument("--category")
+    p.add_argument("--mission")
+    p.add_argument("--item-type")
+    p.add_argument("--item-class")
+    p.add_argument("--size")
+    p.add_argument("--grade")
     p.add_argument(
-        "--acquisition-source", choices=("log", "import")
+        "--acquisition-source", choices=("log", "import", "manual")
     )
     p.add_argument("--limit", type=int, default=50)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_blueprints_list)
+
+    p = blueprint_sub.add_parser(
+        "mark", help="preview or set exact selected blueprints owned/unowned"
+    )
+    add_blueprint_scope(p)
+    p.add_argument("--blueprint-id", action="append", required=True)
+    p.add_argument(
+        "--state",
+        choices=[item.value for item in OwnershipDecision],
+        required=True,
+    )
+    p.add_argument("--limit", type=int, default=50)
+    p.add_argument("--confirm", action="store_true")
+    p.set_defaults(func=cmd_blueprints_mark)
 
     p = blueprint_sub.add_parser(
         "scan", help="preview or persist an incremental local log scan"
@@ -1810,6 +2130,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_blueprint_scope(p)
     p.add_argument("--out", type=Path, required=True)
+    p.add_argument("--overwrite", action="store_true")
     p.add_argument("--confirm", action="store_true")
     p.set_defaults(func=cmd_blueprints_export)
 
@@ -1973,6 +2294,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[choice.value for choice in ConflictChoice],
         default=ConflictChoice.ERROR.value,
     )
+    p.add_argument(
+        "--resolutions",
+        type=Path,
+        help="strict JSON mapping conflicting keys to keep/import/append/prepend/custom",
+    )
     p.add_argument("--limit", type=int, default=20)
     p.add_argument("--confirm", action="store_true")
     p.set_defaults(func=cmd_user_import)
@@ -1992,6 +2318,39 @@ def build_parser() -> argparse.ArgumentParser:
     add_user_scope(p)
     p.add_argument("--confirm", action="store_true")
     p.set_defaults(func=cmd_user_redo)
+
+    delta_parser = sub.add_parser(
+        "delta-pack",
+        help="inspect or move user-authored deltas without redistributing CIG data",
+    )
+    delta_sub = delta_parser.add_subparsers(dest="delta_command", required=True)
+
+    p = delta_sub.add_parser("export", help="preview/create an authored-only delta ZIP")
+    add_user_scope(p)
+    p.add_argument("--profile", help="built-in profile name or profile JSON path")
+    p.add_argument("--out", type=Path, required=True)
+    p.add_argument("--overwrite", action="store_true")
+    p.add_argument("--confirm", action="store_true")
+    p.set_defaults(func=cmd_delta_pack_export)
+
+    p = delta_sub.add_parser("inspect", help="verify metadata without printing values")
+    p.add_argument("--file", type=Path, required=True)
+    p.set_defaults(func=cmd_delta_pack_inspect)
+
+    p = delta_sub.add_parser(
+        "import", help="preview/import deltas into an explicit target scope"
+    )
+    add_user_scope(p)
+    p.add_argument("--file", type=Path, required=True)
+    p.add_argument(
+        "--on-conflict",
+        choices=[choice.value for choice in ConflictChoice],
+        default=ConflictChoice.ERROR.value,
+    )
+    p.add_argument("--resolutions", type=Path)
+    p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--confirm", action="store_true")
+    p.set_defaults(func=cmd_delta_pack_import)
 
     fallback_parser = sub.add_parser(
         "fallbacks",

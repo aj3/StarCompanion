@@ -12,7 +12,10 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 
 from ..config import Profile, load_builtin
+from ..blueprints import apply_ownership_snapshot
+from ..inject import BackupSafetyError, safe_backups
 from ..model import ContractSet
+from ..ownership import OwnershipState
 from ..render import RenderResult
 from ..source_graph import SourceGraph, SourceKind, SourceLayer, report as source_report
 
@@ -22,6 +25,7 @@ class AppState(QObject):
     profileChanged = Signal()
     pathsChanged = Signal()
     userOverridesChanged = Signal()
+    ownershipChanged = Signal()
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
@@ -34,10 +38,13 @@ class AppState(QObject):
         self.user_override_scope: tuple[str, str] | None = None
         self.user_overrides: dict[str, str] = {}
         self.user_overrides_ready = True
+        self.ownership_scope: str | None = None
+        self.ownership_state: OwnershipState | None = None
+        self.ownership_ready = True
 
     # --- contracts -----------------------------------------------------------
 
-    def set_contracts(self, contracts: ContractSet) -> None:
+    def set_contracts(self, contracts: ContractSet | None) -> None:
         self.contracts = contracts
         self._rendered = None
         self.contractsChanged.emit()
@@ -94,8 +101,33 @@ class AppState(QObject):
         if self.contracts is None:
             raise RuntimeError("no contracts loaded")
         if self._rendered is None:
-            self._rendered = self.profile.build_renderer().render_all(self.contracts)
+            contracts = (
+                apply_ownership_snapshot(self.contracts, self.ownership_state)
+                if self.ownership_state is not None
+                else self.contracts
+            )
+            self._rendered = self.profile.build_renderer().render_all(contracts)
         return self._rendered
+
+    def begin_ownership_scope(self, scope: str | None) -> None:
+        """Clear ownership before a background channel-scoped load."""
+
+        self.ownership_scope = scope
+        self.ownership_state = None
+        self.ownership_ready = scope is None
+        self._rendered = None
+        self.ownershipChanged.emit()
+
+    def set_ownership(self, scope: str, state: OwnershipState) -> bool:
+        """Publish ownership only when a worker result still matches the scope."""
+
+        if scope != self.ownership_scope or state.scope != scope:
+            return False
+        self.ownership_state = state
+        self.ownership_ready = True
+        self._rendered = None
+        self.ownershipChanged.emit()
+        return True
 
     def begin_user_override_scope(self, scope: tuple[str, str] | None) -> None:
         """Clear the previous channel before a background user.ini load."""
@@ -147,6 +179,9 @@ class AppState(QObject):
 
     def backups(self) -> list[Path]:
         directory = self.backup_dir or (self.target.parent / "backups" if self.target else None)
-        if not directory or not directory.is_dir():
+        if not directory or self.target is None:
             return []
-        return sorted(directory.glob("*.ini"), reverse=True)
+        try:
+            return list(safe_backups(directory, self.target))
+        except (OSError, BackupSafetyError):
+            return []

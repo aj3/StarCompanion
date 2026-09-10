@@ -20,6 +20,7 @@ strings, usernames, and absolute paths must not enter diagnostics or releases.
 | Boundary | Assumption | Principal controls |
 |---|---|---|
 | `Data.p4k` | Large and possibly truncated/corrupt; not an authenticity root | Read-only handle, bounded processing, compression and exact-length validation, ZIP CRC enforcement, narrowly classified CIG method-100 warning |
+| Local game install discovery | Several channel folders may be stale, inaccessible, empty, or non-regular | Cancellable background discovery, supported-channel validation, non-empty regular-file checks, captured modification-time ranking with deterministic size/path tie-breaks, and visible automatic/manual selection evidence |
 | Local INI/JSON/CSV imports | User-selected but potentially hostile | Size/count/depth/schema limits, duplicate rejection, exact scopes, value validation, no remote retrieval |
 | Settings ZIP | Fully untrusted portable input | No encrypted/path-traversing input, allowlisted paths/kinds/preferences, count/size/ratio limits, ZIP CRC plus manifest SHA-256, preview, conflict authorization, link/junction revalidation, crash journal and transactional rollback |
 | User fallback JSON | Fully untrusted local input | Exact schema, duplicate-key/depth/count/length/size limits, unresolved-key allowlist, build/language binding, explicit authored text only |
@@ -29,7 +30,7 @@ strings, usernames, and absolute paths must not enter diagnostics or releases.
 | Archive helper process | May crash, hang, or be cancelled | Parent-owned file artifacts, bounded cancellation/termination, validated result format, parent cleanup |
 | Diagnostics | Intended to be shareable | Aggregate counts/status only; excludes paths, usernames, values, logs, ownership, and game strings |
 | GUI administration | User-selected paths and long-running local work cross the event loop/worker boundary | Background jobs own discovery, archive reading, ownership scanning, settings portability, and diagnostics I/O; model snapshots cross back to Qt; shutdown requests cancellation and waits boundedly |
-| Advanced string editor | Large local string graphs and bulk edits could freeze or accidentally broaden a write | Virtualized projection, debounced in-memory validation, model-level undo/redo, explicit multi-select reset, and the unchanged serialized C3 operation plan as the only apply boundary |
+| Advanced string editor | Large local string graphs and bulk edits could freeze, accidentally broaden a write, or lose personal text during replacement | Virtualized projection, debounced in-memory validation, model-level undo/redo, explicit multi-select reset, the unchanged serialized C3 operation plan as the only apply boundary, and separate capped collision-resistant `user.ini` snapshots before changed saves |
 | Backup browser | A listed file can be replaced or redirected before restore | Target-scoped ordinary-file filtering, preview fingerprints, pre-write revalidation, preservation of the current target, journaled atomic replacement, and final digest verification |
 | Dependencies/release | Third-party code or signing credentials may be compromised | Exact pins and hashes, offline wheelhouse build, vulnerability audit, CycloneDX SBOM, license/notice verification, frozen offline smoke, protected manual signing environment, thumbprint pin, timestamp and signature verification |
 

@@ -6,7 +6,17 @@ import pytest
 from starcompanion.__main__ import EXIT_ERROR, EXIT_INVALID, EXIT_OK, EXIT_REFUSED, main
 from starcompanion.ini import BOM, LocalizationFile
 from starcompanion import cache
-from starcompanion.model import BlueprintPool, Contract, ContractSet, Evidence, Org, Reward
+from starcompanion.model import (
+    BlueprintPool,
+    Contract,
+    ContractSet,
+    Evidence,
+    Org,
+    Reward,
+    StringKind,
+)
+from starcompanion.user_edits import UserEditStore
+from starcompanion.transactions import TransactionJournal, fingerprint
 
 SAMPLES = Path(__file__).parent / "samples"
 
@@ -47,6 +57,9 @@ def blueprint_cache(workspace: Path) -> Path:
                 "Test_Mission",
                 org,
                 "Mission",
+                keys={StringKind.DESC: ["Test_Mission_desc"]},
+                texts={"Test_Mission_desc": "Complete the test mission."},
+                base_texts={"Test_Mission_desc": "Complete the test mission."},
                 reward=Reward(
                     blueprint_pools=[
                         BlueprintPool(
@@ -55,6 +68,10 @@ def blueprint_cache(workspace: Path) -> Path:
                                 "Coda Pistol": "11111111-1111-1111-1111-111111111111"
                             },
                             item_categories={"Coda Pistol": "weapons"},
+                            item_types={"Coda Pistol": "pistol"},
+                            item_classes={"Coda Pistol": "ballistic"},
+                            item_sizes={"Coda Pistol": "1"},
+                            item_grades={"Coda Pistol": "a"},
                         )
                     ]
                 ),
@@ -141,6 +158,74 @@ def test_blueprint_cli_scan_preview_confirm_query_and_diagnostics(workspace, cap
     ) == EXIT_OK
     assert "Coda Pistol" in capsys.readouterr().out
     assert run("blueprints", "diagnostics", *common) == EXIT_OK
+
+
+def test_blueprint_cli_manual_mark_metadata_filters_and_render_join(workspace, capsys):
+    source_cache = blueprint_cache(workspace)
+    data_root = workspace / "player-data"
+    blueprint_id = "cig:11111111-1111-1111-1111-111111111111"
+    common = (
+        "--cache",
+        source_cache,
+        "--channel",
+        "LIVE",
+        "--data-root",
+        data_root,
+    )
+    state_path = data_root / "channels" / "LIVE" / "ownership.json"
+
+    assert run(
+        "blueprints", "mark", *common,
+        "--blueprint-id", blueprint_id, "--state", "owned",
+    ) == EXIT_REFUSED
+    assert not state_path.exists()
+    assert run(
+        "blueprints", "mark", *common,
+        "--blueprint-id", blueprint_id, "--state", "owned", "--confirm",
+    ) == EXIT_OK
+    before = state_path.read_bytes()
+    assert run(
+        "blueprints", "mark", *common,
+        "--blueprint-id", blueprint_id, "--state", "owned", "--confirm",
+    ) == EXIT_OK
+    assert state_path.read_bytes() == before
+
+    assert run(
+        "blueprints", "list", *common,
+        "--mission", "test_mission",
+        "--item-type", "pistol",
+        "--item-class", "ballistic",
+        "--size", "1",
+        "--grade", "a",
+        "--acquisition-source", "manual",
+        "--json",
+    ) == EXIT_OK
+    output = capsys.readouterr().out
+    assert '"item_type": "pistol"' in output
+    assert '"item_class": "ballistic"' in output
+
+    rendered = workspace / "owned-render.json"
+    assert run(
+        "render", "--cache", source_cache, "--data-root", data_root, "--out", rendered
+    ) == EXIT_OK
+    assert "[Owned]" in json.loads(rendered.read_text(encoding="utf-8"))["Test_Mission_desc"]
+    assert run(
+        "render", "--cache", source_cache, "--data-root", data_root,
+        "--out", workspace / "unowned-render.json", "--no-ownership",
+    ) == EXIT_OK
+    assert "[Owned]" not in json.loads(
+        (workspace / "unowned-render.json").read_text(encoding="utf-8")
+    )["Test_Mission_desc"]
+
+    assert run(
+        "blueprints", "mark", *common,
+        "--blueprint-id", blueprint_id, "--state", "unowned", "--confirm",
+    ) == EXIT_OK
+    capsys.readouterr()
+    assert run(
+        "blueprints", "list", *common, "--ownership", "owned"
+    ) == EXIT_OK
+    assert "Coda Pistol" not in capsys.readouterr().out
 
 
 def test_blueprint_cli_linked_scan_discovers_live_and_hotfix_from_one_install(
@@ -494,8 +579,13 @@ def test_apply_backs_up_before_writing(workspace):
         "--target", workspace / "global.ini",
         "--backup-dir", workspace / "backups", "--confirm")
 
-    backups = list((workspace / "backups").iterdir())
+    backups = list((workspace / "backups").glob("global.*.ini"))
     assert len(backups) == 1 and backups[0].read_bytes() == before
+    completed = json.loads(
+        (workspace / "backups" / "last-operation.json").read_text(encoding="utf-8")
+    )
+    assert completed["operation"] == "apply"
+    assert completed["stage"] == "complete"
 
 
 def test_restore_returns_the_file_byte_identical(workspace):
@@ -507,9 +597,120 @@ def test_restore_returns_the_file_byte_identical(workspace):
         "--backup-dir", workspace / "backups", "--confirm")
     assert (workspace / "global.ini").read_bytes() != original
 
-    backup = next(iter((workspace / "backups").iterdir()))
-    assert run("restore", "--backup", backup, "--target", workspace / "global.ini") == EXIT_OK
+    backup = next((workspace / "backups").glob("global.*.ini"))
+    assert run(
+        "restore", "--backup", backup, "--target", workspace / "global.ini",
+        "--confirm",
+    ) == EXIT_OK
     assert (workspace / "global.ini").read_bytes() == original
+    completed = json.loads(
+        (workspace / "backups" / "last-operation.json").read_text(encoding="utf-8")
+    )
+    assert completed["operation"] == "rollback"
+    assert completed["stage"] == "complete"
+    assert len(list((workspace / "backups").glob("global.*.ini"))) == 2
+
+
+def test_legacy_restore_is_preview_only_without_confirmation(workspace, capsys):
+    chain(workspace)
+    target = workspace / "global.ini"
+    run(
+        "apply", "--rendered", workspace / "rendered.json", "--target", target,
+        "--backup-dir", workspace / "backups", "--confirm",
+    )
+    changed = target.read_bytes()
+    backup = next((workspace / "backups").glob("global.*.ini"))
+
+    assert run("restore", "--backup", backup, "--target", target) == EXIT_REFUSED
+    assert target.read_bytes() == changed
+    assert len(list((workspace / "backups").glob("global.*.ini"))) == 1
+    assert "--confirm" in capsys.readouterr().err
+
+
+def test_legacy_restore_rejects_unrecognized_and_linked_backups(
+    workspace, tmp_path, capsys
+):
+    target = workspace / "global.ini"
+    before = target.read_bytes()
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    arbitrary = backup_dir / "global.handwritten.ini"
+    arbitrary.write_bytes(BOM.encode("utf-8") + b"Other=hostile\n")
+
+    assert run(
+        "restore", "--backup", arbitrary, "--target", target, "--confirm"
+    ) == EXIT_ERROR
+    assert target.read_bytes() == before
+    assert "recognized ordinary timestamped backup" in capsys.readouterr().err
+
+    outside = tmp_path / "outside.ini"
+    outside.write_bytes(BOM.encode("utf-8") + b"Other=outside\n")
+    linked = backup_dir / "global.20991231-235959-999999.ini"
+    try:
+        linked.symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"file symlinks unavailable: {exc}")
+    assert run(
+        "restore", "--backup", linked, "--target", target, "--confirm"
+    ) == EXIT_ERROR
+    assert target.read_bytes() == before
+    assert outside.read_bytes().endswith(b"Other=outside\n")
+
+
+def test_legacy_restore_rejects_a_linked_backup_root(workspace, tmp_path, capsys):
+    target = workspace / "global.ini"
+    before = target.read_bytes()
+    real_root = tmp_path / "real-backups"
+    real_root.mkdir()
+    backup = real_root / "global.20991231-235959-999999.ini"
+    backup.write_bytes(BOM.encode("utf-8") + b"Other=backup\n")
+    linked_root = tmp_path / "linked-backups"
+    try:
+        linked_root.symlink_to(real_root, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+
+    assert run(
+        "restore",
+        "--backup", linked_root / backup.name,
+        "--backup-dir", linked_root,
+        "--target", target,
+        "--confirm",
+    ) == EXIT_ERROR
+    assert target.read_bytes() == before
+    assert "ordinary local directory" in capsys.readouterr().err
+
+
+def test_legacy_restore_refuses_unknown_interrupted_state(workspace, capsys):
+    chain(workspace)
+    target = workspace / "global.ini"
+    backup_dir = workspace / "backups"
+    assert run(
+        "apply", "--rendered", workspace / "rendered.json", "--target", target,
+        "--backup-dir", backup_dir, "--confirm",
+    ) == EXIT_OK
+    backup = next(backup_dir.glob("global.*.ini"))
+    journal = TransactionJournal(
+        backup_dir / ".apply-journal.json",
+        backup_dir / "last-operation.json",
+    )
+    current = fingerprint(target)
+    journal.begin(
+        operation="apply",
+        plan_id="f" * 64,
+        target=target,
+        before=current,
+        after_sha256="a" * 64,
+    )
+    target.write_bytes(BOM.encode("utf-8") + b"Other=unknown-state\n")
+    unknown = target.read_bytes()
+
+    assert run(
+        "restore", "--backup", backup, "--target", target, "--confirm"
+    ) == EXIT_INVALID
+    assert target.read_bytes() == unknown
+    assert (backup_dir / ".apply-journal.json").is_file()
+    assert "recovery needs attention" in capsys.readouterr().err
 
 
 def test_overwrite_mode_requires_a_stock_file(workspace):
@@ -552,6 +753,34 @@ def test_apply_proceeds_in_game_install_when_explicitly_allowed(workspace, fake_
     assert run("apply", "--rendered", workspace / "rendered.json",
                "--target", fake_install, "--confirm", "--allow-game-folder") == EXIT_OK
     assert fake_install.read_bytes() != before
+
+
+def test_legacy_restore_keeps_the_game_folder_guard(
+    workspace, fake_install, tmp_path, capsys
+):
+    chain(workspace)
+    original = fake_install.read_bytes()
+    backup_dir = tmp_path / "backups"
+    assert run(
+        "apply", "--rendered", workspace / "rendered.json",
+        "--target", fake_install,
+        "--backup-dir", backup_dir,
+        "--confirm", "--allow-game-folder",
+    ) == EXIT_OK
+    changed = fake_install.read_bytes()
+    backup = next(backup_dir.glob("global.*.ini"))
+
+    assert run(
+        "restore", "--backup", backup, "--target", fake_install, "--confirm"
+    ) == EXIT_REFUSED
+    assert fake_install.read_bytes() == changed
+    assert "--allow-game-folder" in capsys.readouterr().err
+
+    assert run(
+        "restore", "--backup", backup, "--target", fake_install,
+        "--confirm", "--allow-game-folder",
+    ) == EXIT_OK
+    assert fake_install.read_bytes() == original
 
 
 # --- failure handling --------------------------------------------------------
@@ -598,8 +827,10 @@ def test_full_chain_against_the_real_corpus(tmp_path):
     assert len(result) == 90121, "key count must be preserved"
     assert result.get("Foxwell_ShipAmbush_M_title_001").startswith("[Foxwell 3]")
 
-    backup = next(iter((tmp_path / "backups").iterdir()))
-    assert run("restore", "--backup", backup, "--target", target) == EXIT_OK
+    backup = next((tmp_path / "backups").glob("global.*.ini"))
+    assert run(
+        "restore", "--backup", backup, "--target", target, "--confirm"
+    ) == EXIT_OK
     assert target.read_bytes() == original
 
 
@@ -1181,6 +1412,111 @@ def test_user_import_requires_explicit_conflict_choice_and_can_undo(tmp_path):
     assert {entry.key: entry.value for entry in LocalizationFile.load(user_ini).entries()} == {
         "Conflict": "old"
     }
+
+
+def test_user_import_supports_strict_per_key_reconciliation(tmp_path):
+    data_root = tmp_path / "data"
+    scope = ("--channel", "LIVE", "--data-root", data_root)
+    incoming = tmp_path / "incoming.ini"
+    incoming.write_text(
+        BOM + "Added=value\nAppend=new\nCustom=new\n",
+        encoding="utf-8",
+    )
+    for key in ("Append", "Custom"):
+        assert run(
+            "user", "set", *scope, "--key", key, "--value", "old", "--confirm"
+        ) == EXIT_OK
+
+    partial = tmp_path / "partial.json"
+    partial.write_text(
+        json.dumps({"Append": {"choice": "append"}}), encoding="utf-8"
+    )
+    assert run(
+        "user", "import", *scope, "--file", incoming,
+        "--resolutions", partial, "--confirm",
+    ) == EXIT_INVALID
+    assert UserEditStore("LIVE", root=data_root).load() == {
+        "Append": "old",
+        "Custom": "old",
+    }
+
+    complete = tmp_path / "complete.json"
+    complete.write_text(
+        json.dumps(
+            {
+                "Append": {"choice": "append"},
+                "Custom": {"choice": "custom", "value": "reviewed"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert run(
+        "user", "import", *scope, "--file", incoming,
+        "--resolutions", complete, "--confirm",
+    ) == EXIT_OK
+    store = UserEditStore("LIVE", root=data_root)
+    assert store.load() == {
+        "Added": "value",
+        "Append": "oldnew",
+        "Custom": "reviewed",
+    }
+    assert store.load_origins() == {
+        "Added": "imported",
+        "Append": "derived",
+        "Custom": "authored",
+    }
+
+    hostile = tmp_path / "hostile.json"
+    hostile.write_text(
+        '{"Append":{"choice":"keep","value":"smuggled"}}',
+        encoding="utf-8",
+    )
+    assert run(
+        "user", "import", *scope, "--file", incoming,
+        "--resolutions", hostile,
+    ) == EXIT_ERROR
+
+
+def test_delta_pack_cli_is_authored_only_previewed_and_scope_explicit(tmp_path, capsys):
+    data_root = tmp_path / "data"
+    live = ("--channel", "LIVE", "--data-root", data_root)
+    assert run(
+        "user", "set", *live,
+        "--key", "Authored", "--value", "private authored phrase", "--confirm",
+    ) == EXIT_OK
+    incoming = tmp_path / "third-party.ini"
+    incoming.write_text(BOM + "Imported=third-party phrase\n", encoding="utf-8")
+    assert run(
+        "user", "import", *live, "--file", incoming,
+        "--on-conflict", "incoming", "--confirm",
+    ) == EXIT_OK
+
+    archive = tmp_path / "share.zip"
+    assert run(
+        "delta-pack", "export", *live, "--out", archive
+    ) == EXIT_REFUSED
+    assert not archive.exists()
+    assert run(
+        "delta-pack", "export", *live, "--out", archive, "--confirm"
+    ) == EXIT_OK
+    capsys.readouterr()
+    assert run("delta-pack", "inspect", "--file", archive) == EXIT_OK
+    inspected = capsys.readouterr().out
+    assert "sha256" in inspected and "deltas   : 1" in inspected
+    assert "private authored phrase" not in inspected
+    assert "third-party phrase" not in inspected
+
+    ptu = ("--channel", "PTU", "--data-root", data_root)
+    assert run(
+        "delta-pack", "import", *ptu, "--file", archive
+    ) == EXIT_REFUSED
+    assert UserEditStore("PTU", root=data_root).load() == {}
+    assert run(
+        "delta-pack", "import", *ptu, "--file", archive, "--confirm"
+    ) == EXIT_OK
+    target = UserEditStore("PTU", root=data_root)
+    assert target.load() == {"Authored": "private authored phrase"}
+    assert target.load_origins() == {"Authored": "imported"}
 
 
 def test_import_from_install_uses_archive_operation(tmp_path, capsys):

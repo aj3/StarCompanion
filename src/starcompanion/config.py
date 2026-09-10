@@ -21,7 +21,7 @@ from pydantic import (
     model_validator,
 )
 
-from .inject import MergeMode
+from .inject import DEFAULT_BACKUP_RETENTION, MAX_BACKUP_RETENTION, MergeMode
 from .model import ContractSet
 from .render.renderer import (
     Field as RenderField,
@@ -172,6 +172,11 @@ class OrgTemplates(Strict):
 class Injection(Strict):
     mode: Literal["merge", "overwrite"] = MergeMode.MERGE.value
     backup: bool = True
+    backup_retention: int = Field(
+        default=DEFAULT_BACKUP_RETENTION,
+        ge=1,
+        le=MAX_BACKUP_RETENTION,
+    )
 
     @property
     def merge_mode(self) -> MergeMode:

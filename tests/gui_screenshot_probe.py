@@ -32,6 +32,7 @@ def main() -> int:
     if page == "manual-apply":
         os.environ["STARCOMPANION_EXPERT"] = "1"
     install.find_default = lambda: None
+    install.find_installs = lambda **_kwargs: []
     app = QApplication([])
     window = MainWindow()
     if page in ("templates", "string-editor", "manual-apply"):

@@ -129,6 +129,26 @@ class MissionEnhancementProvider:
                                 for display, position in resolved_items
                                 if position < len(pool.item_categories)
                             },
+                            item_types={
+                                display: pool.item_types[position]
+                                for display, position in resolved_items
+                                if position < len(pool.item_types) and pool.item_types[position]
+                            },
+                            item_classes={
+                                display: pool.item_classes[position]
+                                for display, position in resolved_items
+                                if position < len(pool.item_classes) and pool.item_classes[position]
+                            },
+                            item_sizes={
+                                display: pool.item_sizes[position]
+                                for display, position in resolved_items
+                                if position < len(pool.item_sizes) and pool.item_sizes[position]
+                            },
+                            item_grades={
+                                display: pool.item_grades[position]
+                                for display, position in resolved_items
+                                if position < len(pool.item_grades) and pool.item_grades[position]
+                            },
                             label=(
                                 f"Pool {index}"
                                 if len(fact.blueprint_pools) > 1

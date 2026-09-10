@@ -48,6 +48,18 @@ def test_job_delivers_result_and_keeps_event_loop_responsive(qapp):
     assert ticks == ["tick"]
 
 
+def test_public_outcome_is_delivered_before_finished(qapp):
+    events = []
+    job = QtOperationJob(lambda _token, _reporter: 42)
+    job.succeeded.connect(lambda value: events.append(("success", value)))
+    job.finished.connect(lambda: events.append(("finished", None)))
+
+    job.start()
+    spin_until(qapp, lambda: not job.is_running and len(events) == 2)
+
+    assert events == [("success", 42), ("finished", None)]
+
+
 def test_cancel_reaches_running_worker_and_joins_cleanly(qapp):
     cancelled = []
 

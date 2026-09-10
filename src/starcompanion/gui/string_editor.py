@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Iterable
 
@@ -14,6 +15,19 @@ from ..render import RenderResult
 from ..source_graph import Contribution, ResolvedEntry, SourceGraph, SourceKind, SourceLayer
 from ..user_edits import Change, EditCommand, MAX_HISTORY
 from ..validate import Issue, Severity
+
+COLUMN_FILTER_KEYS = (
+    "key",
+    "category",
+    "stock",
+    "rendered",
+    "merged",
+    "source",
+    "outcome",
+)
+_COLUMN_FILTER_INDEX = {
+    name: index for index, name in enumerate(COLUMN_FILTER_KEYS)
+}
 
 
 @dataclass(frozen=True)
@@ -30,6 +44,51 @@ class StringRecord:
     evidence: tuple[Evidence, ...]
     operation: str
     issues: tuple[Issue, ...] = ()
+    _normalized_columns: tuple[str, ...] = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _search_text: str = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        source = f"{self.winner.source_id} ({self.winner.kind.value})"
+        object.__setattr__(
+            self,
+            "_normalized_columns",
+            tuple(
+                value.casefold()
+                for value in (
+                    self.key,
+                    self.category,
+                    self.stock or "",
+                    self.rendered or "",
+                    self.merged,
+                    source,
+                    self.operation,
+                )
+            ),
+        )
+        # Preserve the wider global-search surface while avoiding a new join
+        # and casefold operation for every filter pass.
+        object.__setattr__(
+            self,
+            "_search_text",
+            "\0".join(
+                (
+                    self.key,
+                    self.category,
+                    self.organization,
+                    self.family,
+                    self.stock or "",
+                    self.rendered or "",
+                    self.merged,
+                    self.winner.source_id,
+                    self.winner.kind.value,
+                    *self.providers,
+                )
+            ).casefold(),
+        )
 
     @property
     def modified(self) -> bool:
@@ -53,20 +112,13 @@ class StringRecord:
 
     @property
     def search_text(self) -> str:
-        return "\0".join(
-            (
-                self.key,
-                self.category,
-                self.organization,
-                self.family,
-                self.stock or "",
-                self.rendered or "",
-                self.merged,
-                self.winner.source_id,
-                self.winner.kind.value,
-                *self.providers,
-            )
-        ).casefold()
+        return self._search_text
+
+    @property
+    def normalized_columns(self) -> tuple[str, ...]:
+        """Case-folded text for the seven visible table columns."""
+
+        return self._normalized_columns
 
 
 @dataclass(frozen=True)
@@ -367,8 +419,38 @@ class StringFilterProxyModel(QSortFilterProxyModel):
         self.source_filter = "all"
         self.category_filter = "all"
         self.provider_filter = "all"
+        self._column_filters: dict[str, str] = {}
         self.setDynamicSortFilter(True)
         self.setSortCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+
+    @property
+    def column_filters(self) -> dict[str, str]:
+        return dict(self._column_filters)
+
+    def set_column_filters(self, filters: Mapping[str, str]) -> None:
+        """Replace all visible-column filters and invalidate only once.
+
+        Keys are stable lowercase identifiers from :data:`COLUMN_FILTER_KEYS`.
+        Invalid keys or non-text values reject the whole batch without changing
+        the active filters.
+        """
+
+        if not isinstance(filters, Mapping):
+            raise TypeError("column filters must be a mapping")
+        invalid = [key for key in filters if key not in _COLUMN_FILTER_INDEX]
+        if invalid:
+            shown = ", ".join(repr(key) for key in invalid[:5])
+            raise ValueError(f"unknown string-editor column filter(s): {shown}")
+        if any(not isinstance(value, str) for value in filters.values()):
+            raise TypeError("column filter values must be text")
+        normalized = {
+            key: value.strip().casefold()
+            for key, value in filters.items()
+            if value.strip()
+        }
+        if normalized != self._column_filters:
+            self._column_filters = normalized
+            self._refilter()
 
     def set_query(self, value: str) -> None:
         normalized = value.strip().casefold()
@@ -419,10 +501,16 @@ class StringFilterProxyModel(QSortFilterProxyModel):
             return False
         if self.provider_filter != "all" and self.provider_filter not in record.providers:
             return False
+        if any(
+            needle not in record.normalized_columns[_COLUMN_FILTER_INDEX[key]]
+            for key, needle in self._column_filters.items()
+        ):
+            return False
         return True
 
 
 __all__ = [
+    "COLUMN_FILTER_KEYS",
     "StringEditorDocument",
     "StringEditorSnapshot",
     "StringFilterProxyModel",

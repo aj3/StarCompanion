@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import QObject, QThread, Signal, Slot
+from PySide6.QtCore import QObject, QThread, Signal, Slot, Qt
 
 from ..tasks import CancellationToken, OperationCancelled, ProgressReporter
 
@@ -53,12 +53,23 @@ class QtOperationJob(QObject):
         self._worker = _OperationWorker(operation, self.token)
         self._worker.moveToThread(self._thread)
         self._stopped = False
+        self._outcome: tuple[str, object | None] | None = None
 
         self._thread.started.connect(self._worker.run)
         self._worker.progress.connect(self.progress.emit)
-        self._worker.succeeded.connect(self.succeeded.emit)
-        self._worker.failed.connect(self.failed.emit)
-        self._worker.cancelled.connect(self.cancelled.emit)
+        # Record the outcome synchronously in the worker before it requests
+        # thread shutdown. The public outcome is emitted from the GUI thread
+        # in _thread_finished, before finished, so consumers cannot observe a
+        # completed job before its result callback has run.
+        self._worker.succeeded.connect(
+            self._record_success, Qt.ConnectionType.DirectConnection
+        )
+        self._worker.failed.connect(
+            self._record_failure, Qt.ConnectionType.DirectConnection
+        )
+        self._worker.cancelled.connect(
+            self._record_cancelled, Qt.ConnectionType.DirectConnection
+        )
         self._worker.done.connect(self._worker.deleteLater)
         self._worker.done.connect(self._thread.quit)
         self._thread.finished.connect(self._thread_finished)
@@ -89,6 +100,15 @@ class QtOperationJob(QObject):
         self._thread.quit()
         return self.wait(timeout_ms)
 
+    def _record_success(self, value: object) -> None:
+        self._outcome = ("success", value)
+
+    def _record_failure(self, exc: object) -> None:
+        self._outcome = ("failure", exc)
+
+    def _record_cancelled(self) -> None:
+        self._outcome = ("cancelled", None)
+
     @Slot()
     def _thread_finished(self) -> None:
         self._stopped = True
@@ -96,6 +116,15 @@ class QtOperationJob(QObject):
         # owning job from ``finished``.  Reversing that order leaves a narrow
         # teardown race when one Qt test/window follows another immediately.
         self._thread.deleteLater()
+        outcome = self._outcome
+        if outcome is not None:
+            kind, value = outcome
+            if kind == "success":
+                self.succeeded.emit(value)
+            elif kind == "failure":
+                self.failed.emit(value)
+            else:
+                self.cancelled.emit()
         self.finished.emit()
 
 

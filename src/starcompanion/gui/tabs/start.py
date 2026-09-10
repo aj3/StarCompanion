@@ -12,10 +12,11 @@ Design rules here, deliberately different from the other tabs:
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
@@ -34,11 +35,11 @@ from ... import install as installs
 from ... import store
 from ...features import community_rewards_enabled
 from ..labels import PREFIX_CAPTION, TITLE_PREFIXES
-from ...inject import restore as restore_backup
 from ...model import ProviderStatus
 from ...operations import PreparedUpdate, prepare_update, read_contracts
 from ...sources import contracts_ini
 from ...tasks import ProgressEvent
+from ...transactions import TransactionJournal
 from ..jobs import Operation, QtOperationJob
 from ..state import AppState
 from ..components import DashboardHero, EmptyState, NoticeBanner, StatusCard, Tone
@@ -59,6 +60,8 @@ LOOKS = (
 
 
 class StartTab(QWidget):
+    recoveryRequested = Signal()
+
     def __init__(self, state: AppState, parent: QWidget | None = None):
         super().__init__(parent)
         self.state = state
@@ -66,8 +69,20 @@ class StartTab(QWidget):
         self.installs: list[installs.GameInstall] = []
         self.load_error: str | None = None
         self.operation_status: str | None = None
+        self.selection_status: str | None = None
         self._jobs: set[QtOperationJob] = set()
         self._busy = False
+        self._shutting_down = False
+        self._pending_cache_install: installs.GameInstall | None = None
+        self._pending_operation_after = None
+        self._pending_prepared: PreparedUpdate | None = None
+        self._contracts_install_key: str | None = None
+        self._discovery_timer = QTimer(self)
+        self._discovery_timer.setSingleShot(True)
+        self._discovery_timer.timeout.connect(self.detect_game)
+        self._continuation_timer = QTimer(self)
+        self._continuation_timer.setSingleShot(True)
+        self._continuation_timer.timeout.connect(self._run_pending_continuation)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(16)
@@ -132,7 +147,7 @@ class StartTab(QWidget):
         state.contractsChanged.connect(self.refresh)
         state.profileChanged.connect(self.refresh)
         state.userOverridesChanged.connect(self.refresh)
-        self.detect_game()
+        self._discovery_timer.start(0)
         self.refresh()
 
     # --- step 1: the game ----------------------------------------------------
@@ -169,7 +184,7 @@ class StartTab(QWidget):
         self.find_game_button.setAccessibleDescription(
             "Repeat automatic discovery of installed Star Citizen channels."
         )
-        self.find_game_button.clicked.connect(lambda: (self.detect_game(), self.refresh()))
+        self.find_game_button.clicked.connect(self.discover_channels)
         self.choose_game_button = QPushButton("Choose folder…")
         self.choose_game_button.setAccessibleDescription(
             "Choose a channel folder containing Data.p4k."
@@ -208,8 +223,15 @@ class StartTab(QWidget):
         return card
 
     def detect_game(self) -> None:
-        found = installs.find_default()
-        self._set_installs([found] if found is not None else [])
+        """Compatibility entry point for background-only installation discovery."""
+
+        self.discover_channels()
+
+    @staticmethod
+    def _install_key(install: installs.GameInstall | None) -> str | None:
+        if install is None:
+            return None
+        return os.path.normcase(os.path.abspath(install.root))
 
     def discover_channels(self) -> None:
         """Run the potentially broad launcher-location scan outside Qt's UI thread."""
@@ -230,30 +252,44 @@ class StartTab(QWidget):
         return found
 
     def _set_installs(self, found) -> None:
-        unique = {item.root.resolve(): item for item in found if item is not None}
-        self.installs = sorted(
-            unique.values(),
-            key=lambda item: (installs.CHANNELS.index(item.channel), str(item.root)),
-        )
-        previous = self.install.root.resolve() if self.install is not None else None
+        unique = {
+            self._install_key(item): item for item in found if item is not None
+        }
+        self.installs = sorted(unique.values(), key=installs.install_rank)
+        previous = self._install_key(self.install)
         self.channel_selector.blockSignals(True)
         self.channel_selector.clear()
         for item in self.installs:
             self.channel_selector.addItem(item.label, item)
+            item_index = self.channel_selector.count() - 1
+            self.channel_selector.setItemData(
+                item_index,
+                installs.selection_evidence(item, self.installs),
+                Qt.ItemDataRole.ToolTipRole,
+            )
         selected = next(
             (
                 index
                 for index, item in enumerate(self.installs)
-                if previous is not None and item.root.resolve() == previous
+                if previous is not None and self._install_key(item) == previous
             ),
             0 if self.installs else -1,
         )
         self.channel_selector.setCurrentIndex(selected)
         self.channel_selector.blockSignals(False)
         self.install = self.installs[selected] if selected >= 0 else None
+        retained = previous is not None and self._install_key(self.install) == previous
+        self.selection_status = (
+            f"Retained your previous selection. {self.install.freshness_evidence}"
+            if retained and self.install is not None
+            else installs.selection_evidence(self.install, self.installs)
+            if self.install is not None
+            else None
+        )
         self._adopt_install()
         self.operation_status = (
-            f"Discovered {len(self.installs):,} installed channel(s)."
+            f"Discovered {len(self.installs):,} install candidate(s). "
+            f"{self.selection_status}"
             if self.installs
             else "No installed channels were found automatically. Choose a folder to continue."
         )
@@ -264,8 +300,12 @@ class StartTab(QWidget):
         if not isinstance(item, installs.GameInstall):
             return
         self.install = item
+        self.selection_status = f"Selected explicitly. {item.freshness_evidence}"
         self._adopt_install()
-        self.operation_status = f"Selected {item.channel}; channel-scoped state is loading."
+        self.operation_status = (
+            f"{self.selection_status} "
+            "Channel-scoped state is loading."
+        )
         self.refresh()
 
     def choose_game(self) -> None:
@@ -290,23 +330,74 @@ class StartTab(QWidget):
         self._set_installs([*self.installs, found])
 
     def _adopt_install(self) -> None:
-        """Derive everything else from the install, including the contracts.
+        """Publish the path now and queue cache I/O on a worker."""
 
-        The game's own strings are the source. Reading them here is what makes
-        the second step optional rather than required.
-        """
         if self.install is None:
+            self._pending_cache_install = None
+            self._contracts_install_key = None
             self.state.set_target(None)
+            self.state.set_contracts(None)
             return
 
+        selected_key = self._install_key(self.install)
+        if selected_key != self._contracts_install_key:
+            self.state.set_contracts(None)
         self.state.set_target(self.install.localization())
+        self._pending_cache_install = self.install
+        if not self._jobs:
+            self._start_pending_cache_load()
 
-        # Only ever the cache here. Reading the archive takes ~30 seconds on a
-        # real install, which must never happen during startup.
-        cached = store.load(self.install)
+    def _start_pending_cache_load(self) -> None:
+        if self._shutting_down or self._jobs or self._pending_cache_install is None:
+            return
+        install = self._pending_cache_install
+        self._pending_cache_install = None
+        job = QtOperationJob(
+            lambda token, _reporter: (
+                token.checkpoint(),
+                store.load(install),
+                token.checkpoint(),
+            )[1],
+            self,
+        )
+        self._jobs.add(job)
+        self._busy = True
+        self.operation_status = f"Loading the {install.channel} local cache in the background…"
+        self.refresh()
+        job.succeeded.connect(lambda cached: self._cache_loaded(install, cached))
+        job.failed.connect(lambda exc: self._cache_load_failed(install, exc))
+        job.cancelled.connect(
+            lambda: setattr(
+                self, "operation_status", "Cache loading cancelled safely."
+            )
+        )
+        job.finished.connect(lambda: self._operation_finished(job, None))
+        job.start()
+
+    def _cache_loaded(self, install: installs.GameInstall, cached) -> None:
+        if self._install_key(install) != self._install_key(self.install):
+            return
         if cached is not None:
             self.state.set_contracts(cached)
+            self._contracts_install_key = self._install_key(install)
             self.load_error = None
+            self.operation_status = (
+                f"Loaded the verified {install.channel} contract cache in the background."
+            )
+        else:
+            self.operation_status = (
+                f"No current {install.channel} cache was found. Read contracts to build it."
+            )
+
+    def _cache_load_failed(
+        self,
+        install: installs.GameInstall,
+        exc: Exception,
+    ) -> None:
+        if self._install_key(install) != self._install_key(self.install):
+            return
+        self.load_error = str(exc)
+        self.operation_status = f"The {install.channel} cache could not be loaded safely: {exc}"
 
     def read_game(self, *, force: bool = False, after=None) -> None:
         """Read contracts from the archive, with progress, and cache them.
@@ -318,44 +409,52 @@ class StartTab(QWidget):
         if self.install is None:
             return
 
-        if not force:
-            cached = store.load(self.install)
-            if cached is not None:
-                self.state.set_contracts(cached)
-                self.load_error = None
-                self.refresh()
-                if after is not None:
-                    after()
-                return
-
         install = self.install
-        succeeded = {"value": False}
 
         def loaded(contracts) -> None:
-            succeeded["value"] = True
             self.load_error = None
-            store.save(install, contracts)
             self.state.set_contracts(contracts)
+            self._contracts_install_key = self._install_key(install)
+            self._pending_operation_after = after
+            if after is not None:
+                self._continuation_timer.start(0)
             self.refresh()
 
         def failed(exc: Exception) -> None:
             self.load_error = str(exc)
             QMessageBox.warning(self, "Could not read your game", str(exc))
 
-        job = self._run_operation(
+        self._run_operation(
             "Reading your game files…",
-            lambda token, reporter: read_contracts(
+            lambda token, reporter: self._load_or_read_contracts(
                 install,
+                force=force,
                 token=token,
                 reporter=reporter,
             ),
             on_success=loaded,
             on_failure=failed,
         )
-        if job is not None and after is not None:
-            job.finished.connect(
-                lambda: after() if succeeded["value"] else None
-            )
+
+    @staticmethod
+    def _load_or_read_contracts(
+        install: installs.GameInstall,
+        *,
+        force: bool,
+        token,
+        reporter,
+    ):
+        token.checkpoint()
+        if not force:
+            cached = store.load(install)
+            token.checkpoint()
+            if cached is not None:
+                return cached
+        contracts = read_contracts(install, token=token, reporter=reporter)
+        token.checkpoint()
+        store.save(install, contracts)
+        token.checkpoint()
+        return contracts
 
     # --- step 2: contract data -----------------------------------------------
 
@@ -394,13 +493,29 @@ class StartTab(QWidget):
         if not chosen:
             return
 
-        try:
-            self.state.set_contracts(contracts_ini.load(Path(chosen)))
-        except (OSError, ValueError) as exc:
-            QMessageBox.warning(
-                self, "Could not read that file",
+        source = Path(chosen)
+        install_key = self._install_key(self.install)
+
+        def loaded(contracts) -> None:
+            if install_key != self._install_key(self.install):
+                return
+            self.state.set_contracts(contracts)
+            self._contracts_install_key = install_key
+
+        self._run_operation(
+            "Reading the selected contract list…",
+            lambda token, _reporter: (
+                token.checkpoint(),
+                contracts_ini.load(source),
+                token.checkpoint(),
+            )[1],
+            on_success=loaded,
+            on_failure=lambda exc: QMessageBox.warning(
+                self,
+                "Could not read that file",
                 f"{exc}\n\nIt should be the contracts.ini from StarStrings.",
-            )
+            ),
+        )
 
     # --- step 3: the look ----------------------------------------------------
 
@@ -483,20 +598,29 @@ class StartTab(QWidget):
         )
 
     def _confirm_prepared_update(self, prepared: PreparedUpdate) -> None:
-        try:
-            self._use_prepared_update(prepared)
-        finally:
+        if not self._use_prepared_update(prepared):
             prepared.cleanup()
 
-    def _use_prepared_update(self, prepared: PreparedUpdate) -> None:
+    def _use_prepared_update(self, prepared: PreparedUpdate) -> bool:
         result = prepared.plan
 
-        if not result.updated:
+        if not (result.added or result.updated or result.removed):
             QMessageBox.information(
                 self, "Nothing to change",
                 "Your game text already matches these settings.",
             )
-            return
+            return False
+
+        recovery = self._journal().inspect(prepared.localization.target)
+        if recovery.status != "clean":
+            QMessageBox.warning(
+                self,
+                "Recovery must be reviewed first",
+                f"{recovery.status}: {recovery.message}\n\n"
+                "Open Backup & recovery to resolve this without overwriting unknown state.",
+            )
+            self.recoveryRequested.emit()
+            return False
 
         confirmed = QMessageBox.question(
             self,
@@ -509,21 +633,55 @@ class StartTab(QWidget):
             QMessageBox.StandardButton.Cancel,
         )
         if confirmed != QMessageBox.StandardButton.Yes:
-            return
+            return False
 
-        try:
-            written = prepared.localization.commit(
-                prepared.replacements,
-                confirmed=True,
-                backup_dir=self.state.backup_dir,
-            )
-        except Exception as exc:  # surfaced, never swallowed
-            QMessageBox.critical(
-                self, "Could not update your game",
+        # The prepare result arrives before that worker's finished signal. Queue
+        # the write so it starts only after the first thread has fully stopped.
+        self._pending_prepared = prepared
+        self._pending_operation_after = self._commit_pending_prepared
+        self._continuation_timer.start(0)
+        return True
+
+    def _commit_pending_prepared(self) -> None:
+        prepared = self._pending_prepared
+        self._pending_prepared = None
+        if prepared is None:
+            return
+        backup_dir = self.state.backup_dir
+        journal = self._journal()
+        backup_retention = self.state.profile.injection.backup_retention
+
+        def commit(token, _reporter):
+            try:
+                token.checkpoint()
+                return prepared.commit(
+                    confirmed=True,
+                    backup_dir=backup_dir,
+                    journal=journal,
+                    backup_retention=backup_retention,
+                )
+            finally:
+                prepared.cleanup()
+
+        job = self._run_operation(
+            "Applying the verified update safely…",
+            commit,
+            on_success=self._prepared_update_committed,
+            on_failure=lambda exc: QMessageBox.critical(
+                self,
+                "Could not update your game",
                 f"{exc}\n\nYour game text was not changed.",
+            ),
+        )
+        if job is None:
+            prepared.cleanup()
+            QMessageBox.critical(
+                self,
+                "Could not start the update",
+                "Another game-file operation is still active. Nothing was changed.",
             )
-            return
 
+    def _prepared_update_committed(self, written) -> None:
         self.refresh()
         QMessageBox.information(
             self,
@@ -543,7 +701,7 @@ class StartTab(QWidget):
         on_success,
         on_failure,
     ) -> QtOperationJob | None:
-        if self._jobs:
+        if self._shutting_down or self._jobs:
             return None
 
         dialog = QProgressDialog(title, "Cancel", 0, 1000, self)
@@ -591,26 +749,65 @@ class StartTab(QWidget):
     def _operation_finished(
         self,
         job: QtOperationJob,
-        dialog: QProgressDialog,
+        dialog: QProgressDialog | None,
     ) -> None:
-        dialog.close()
+        if dialog is not None:
+            dialog.close()
         self._jobs.discard(job)
         job.deleteLater()
         self._busy = bool(self._jobs)
         self.refresh()
+        if self._shutting_down:
+            return
+        if not self._jobs and self._pending_cache_install is not None:
+            self._start_pending_cache_load()
+            return
+        if self._pending_operation_after is not None:
+            self._continuation_timer.start(0)
+
+    def _run_pending_continuation(self) -> None:
+        if self._shutting_down:
+            return
+        if self._jobs:
+            self._continuation_timer.start(10)
+            return
+        after = self._pending_operation_after
+        self._pending_operation_after = None
+        if after is not None:
+            after()
 
     def wait_for_jobs(self, timeout_ms: int = 5000) -> bool:
         """Pump queued results while waiting; intended for tests and smoke tools."""
         deadline = time.monotonic() + (timeout_ms / 1000)
-        while self._jobs and time.monotonic() < deadline:
+        while time.monotonic() < deadline:
             QApplication.processEvents()
             for job in list(self._jobs):
                 job.wait(5)
-        QApplication.processEvents()
-        return not self._jobs
+            pending = bool(
+                self._jobs
+                or self._pending_cache_install is not None
+                or self._pending_operation_after is not None
+                or self._discovery_timer.isActive()
+                or self._continuation_timer.isActive()
+            )
+            if not pending:
+                QApplication.processEvents()
+                if not self._jobs and self._pending_operation_after is None:
+                    return True
+            time.sleep(0.001)
+        return False
 
     def shutdown_jobs(self) -> None:
         """Cancel and visibly join workers before their window disappears."""
+        self._shutting_down = True
+        self._discovery_timer.stop()
+        self._continuation_timer.stop()
+        self._pending_cache_install = None
+        pending_prepared = self._pending_prepared
+        self._pending_prepared = None
+        self._pending_operation_after = None
+        if pending_prepared is not None:
+            pending_prepared.cleanup()
         jobs = list(self._jobs)
         if not jobs:
             return
@@ -647,6 +844,7 @@ class StartTab(QWidget):
 
         dialog.close()
         self._jobs.clear()
+        self._pending_cache_install = None
         self._busy = False
         self.operation_status = "Background game-file work stopped safely."
 
@@ -661,18 +859,25 @@ class StartTab(QWidget):
         if self.state.target is None:
             return
 
-        newest = backups[0]
-        if QMessageBox.question(
-            self, "Undo the last change?",
-            f"This restores your game text from:\n{newest.name}",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        ) != QMessageBox.StandardButton.Yes:
-            return
+        self.operation_status = (
+            "Choose the reviewed restore point in Backup & recovery. "
+            "The current file will be backed up before restoration."
+        )
+        self.recoveryRequested.emit()
 
-        restore_backup(newest, self.state.target)
-        self.refresh()
-        QMessageBox.information(self, "Undone", "Your game text was put back.")
+    def _backup_directory(self) -> Path:
+        if self.state.backup_dir is not None:
+            return self.state.backup_dir
+        if self.state.target is None:
+            return Path("backups")
+        return self.state.target.parent / "backups"
+
+    def _journal(self) -> TransactionJournal:
+        directory = self._backup_directory()
+        return TransactionJournal(
+            directory / ".apply-journal.json",
+            directory / "last-operation.json",
+        )
 
     # --- display -------------------------------------------------------------
 
@@ -813,7 +1018,8 @@ class StartTab(QWidget):
         version = f" {self.install.version}" if self.install.version else ""
         return (
             f"{OK} Found Star Citizen {self.install.channel}{version}{modified}\n"
-            f"{self.install.root}"
+            f"{self.install.root}\n"
+            f"{self.selection_status or installs.selection_evidence(self.install, self.installs or [self.install])}"
         )
 
     def contracts_status_text(self) -> str:

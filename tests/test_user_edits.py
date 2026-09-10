@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,8 @@ from starcompanion.user_edits import (
     EmptyUserModelError,
     NothingToRedoError,
     NothingToUndoError,
+    KeyResolution,
+    ReconciliationChoice,
     UserEditError,
     UserEditStore,
     load_ini,
@@ -219,6 +222,161 @@ def test_import_rejects_duplicate_keys(tmp_path):
     path.write_text(BOM + "Key=one\nKey=two\n", encoding="utf-8")
     with pytest.raises(UserEditError, match="duplicate"):
         load_ini(path)
+
+
+@pytest.mark.parametrize(
+    ("choice", "custom", "expected", "origin"),
+    [
+        (ReconciliationChoice.KEEP, None, "current", "authored"),
+        (ReconciliationChoice.IMPORT, None, "incoming", "imported"),
+        (ReconciliationChoice.APPEND, None, "currentincoming", "derived"),
+        (ReconciliationChoice.PREPEND, None, "incomingcurrent", "derived"),
+        (ReconciliationChoice.CUSTOM, "reviewed", "reviewed", "authored"),
+    ],
+)
+def test_per_key_reconciliation_is_explicit_and_tracks_origin(
+    tmp_path, choice, custom, expected, origin
+):
+    target = store(tmp_path)
+    session = EditSession(target)
+    session.execute(EditCommand.set(session.values, "Conflict", "current"))
+    plan = plan_import(
+        session.values,
+        {"Conflict": "incoming"},
+        resolutions={"Conflict": KeyResolution(choice, custom)},
+    )
+    assert not plan.unresolved_conflicts
+    session.import_plan(plan)
+    assert session.values["Conflict"] == expected
+    assert session.origins["Conflict"] == origin
+
+
+def test_per_key_reconciliation_rejects_unresolved_typo_and_invalid_custom(tmp_path):
+    current = {"Conflict": "current"}
+    incoming = {"Conflict": "incoming"}
+    unresolved = plan_import(current, incoming)
+    assert unresolved.unresolved_conflicts == ("Conflict",)
+    with pytest.raises(UserEditError, match="unresolved conflicts"):
+        EditSession(store(tmp_path)).import_plan(unresolved)
+    with pytest.raises(UserEditError, match="non-conflicting"):
+        plan_import(
+            current,
+            incoming,
+            resolutions={"Typo": KeyResolution(ReconciliationChoice.KEEP)},
+        )
+    with pytest.raises(UserEditError, match="requires an explicit value"):
+        plan_import(
+            current,
+            incoming,
+            resolutions={"Conflict": KeyResolution(ReconciliationChoice.CUSTOM)},
+        )
+
+
+def test_user_ini_snapshots_are_capped_and_noop_saves_do_not_create_one(tmp_path):
+    target = UserEditStore("LIVE", root=tmp_path / "data", snapshot_retention=2)
+    target.save({"Key": "one"})
+    target.save({"Key": "one"})
+    assert not target.snapshots()
+    target.save({"Key": "two"})
+    target.save({"Key": "three"})
+    target.save({"Key": "four"})
+    assert len(target.snapshots()) == 2
+    assert [load_ini(path)["Key"] for path in target.snapshots()] == ["three", "two"]
+
+
+def test_same_timestamp_user_snapshots_never_overwrite_each_other(
+    tmp_path,
+    monkeypatch,
+):
+    class FrozenDateTime:
+        @staticmethod
+        def now(_timezone):
+            return datetime(2026, 9, 9, 12, 0, tzinfo=timezone.utc)
+
+    nonces = iter(("1" * 32, "2" * 32))
+    monkeypatch.setattr("starcompanion.user_edits.datetime", FrozenDateTime)
+    monkeypatch.setattr(
+        "starcompanion.user_edits.secrets.token_hex",
+        lambda _length: next(nonces),
+    )
+    target = UserEditStore("LIVE", root=tmp_path / "data", snapshot_retention=3)
+    target.save({"Key": "one"})
+    target.save({"Key": "two"})
+    target.save({"Key": "three"})
+
+    snapshots = target.snapshots()
+    assert len(snapshots) == 2
+    assert snapshots[0].name != snapshots[1].name
+    assert {load_ini(path)["Key"] for path in snapshots} == {"one", "two"}
+
+
+def test_snapshot_cleanup_failure_does_not_turn_verified_save_into_false_failure(
+    tmp_path,
+    monkeypatch,
+):
+    target = UserEditStore("LIVE", root=tmp_path / "data", snapshot_retention=1)
+    target.save({"Key": "one"})
+    target.save({"Key": "two"})
+    original_unlink = Path.unlink
+
+    def deny_snapshot_cleanup(path, *args, **kwargs):
+        if (
+            path.parent == target.snapshot_dir
+            and path.name.startswith("user.")
+            and path.suffix == ".ini"
+        ):
+            raise PermissionError(13, "permission denied")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", deny_snapshot_cleanup)
+
+    target.save({"Key": "three"})
+
+    assert target.load() == {"Key": "three"}
+    assert "cleanup was skipped" in target.last_snapshot_warning
+
+
+def test_origin_damage_and_digest_mismatch_fail_closed(tmp_path):
+    target = store(tmp_path)
+    session = EditSession(target)
+    session.execute(EditCommand.set(session.values, "Key", "authored"))
+    assert target.load_origins() == {"Key": "authored"}
+
+    target.origins_path.write_text(
+        target.origins_path.read_text(encoding="utf-8").replace(
+            '"origins": {', '"origins": {}, "origins": {'
+        ),
+        encoding="utf-8",
+    )
+    assert target.load_origins() == {}
+
+    session = EditSession(target)
+    session.execute(EditCommand.set(session.values, "Key", "authored again"))
+    target.path.write_text(BOM + "Key=external\n", encoding="utf-8")
+    assert target.load_origins() == {}
+
+
+def test_origin_write_failure_leaves_user_ini_unchanged(tmp_path, monkeypatch):
+    target = store(tmp_path)
+    target.save({"Key": "before"}, origins={"Key": "authored"})
+    before = target.path.read_bytes()
+    original_write = __import__(
+        "starcompanion.user_edits", fromlist=["_atomic_write"]
+    )._atomic_write
+
+    def fail_origins(path, text):
+        if path == target.origins_path:
+            raise OSError("simulated origin write failure")
+        return original_write(path, text)
+
+    monkeypatch.setattr("starcompanion.user_edits._atomic_write", fail_origins)
+
+    with pytest.raises(OSError, match="origin write failure"):
+        target.save({"Key": "after"}, origins={"Key": "authored"})
+
+    assert target.path.read_bytes() == before
+    assert target.load() == {"Key": "before"}
+    assert target.load_origins() == {"Key": "authored"}
 
 
 def test_export_is_atomic_and_round_trips(tmp_path):

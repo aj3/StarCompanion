@@ -7,7 +7,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from .inject import InjectionPlan, MergeMode, apply
+from .inject import DEFAULT_BACKUP_RETENTION, InjectionPlan, MergeMode, apply
 from .ini import LocalizationFile
 from .install import DEFAULT_LANGUAGE, GameInstall
 from .model import ContractSet
@@ -38,6 +38,7 @@ class PreparedUpdate:
         confirmed: bool,
         backup_dir: Path | None = None,
         journal: TransactionJournal | None = None,
+        backup_retention: int = DEFAULT_BACKUP_RETENTION,
     ) -> InjectionPlan:
         result = apply(
             self.localization.target,
@@ -51,6 +52,7 @@ class PreparedUpdate:
             expected_fingerprint=self.plan.target_fingerprint,
             operation_plan=self.plan,
             journal=journal,
+            backup_retention=backup_retention,
         )
         self.plan.backup = result.backup
         self.plan.transaction_status = result.transaction_status

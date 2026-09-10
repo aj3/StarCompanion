@@ -20,6 +20,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
+from enum import StrEnum
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -70,6 +71,11 @@ class OwnershipRecoveryAvailable(OwnershipError):
         super().__init__(message)
         self.channel = channel
         self.link_live_hotfix = link_live_hotfix
+
+
+class OwnershipDecision(StrEnum):
+    OWNED = "owned"
+    UNOWNED = "unowned"
 
 
 def _check_json_depth(text: str, *, label: str) -> None:
@@ -230,6 +236,119 @@ class OwnershipState:
         acquisition_ids.add(item.acquisition.acquisition_id)
         self._acquisition_count = count + 1
         return True
+
+
+@dataclass(frozen=True)
+class ManualOwnershipChange:
+    blueprint_id: str
+    name: str
+    before_owned: bool
+    after_owned: bool
+
+
+@dataclass(frozen=True)
+class ManualOwnershipPlan:
+    scope: str
+    expected_revision: int
+    decision: OwnershipDecision
+    changes: tuple[ManualOwnershipChange, ...]
+    planned_at: str
+    plan_id: str
+
+    def summary(self) -> str:
+        return f"{len(self.changes):,} blueprint(s) -> {self.decision.value}"
+
+
+def plan_manual_ownership(
+    catalog: BlueprintCatalog,
+    state: OwnershipState,
+    blueprint_ids: Iterable[str],
+    decision: OwnershipDecision | str,
+    *,
+    now: str | None = None,
+) -> ManualOwnershipPlan:
+    """Prepare one revision-bound multi-select ownership decision."""
+
+    selected = OwnershipDecision(decision)
+    by_id = catalog.by_id
+    changes: list[ManualOwnershipChange] = []
+    for blueprint_id in sorted(set(blueprint_ids)):
+        if blueprint_id not in by_id:
+            raise OwnershipError(
+                f"selected blueprint ID is not present in this catalog: {blueprint_id}"
+            )
+        before = blueprint_id in state.records
+        after = selected is OwnershipDecision.OWNED
+        if before != after:
+            changes.append(
+                ManualOwnershipChange(
+                    blueprint_id,
+                    by_id[blueprint_id].name,
+                    before,
+                    after,
+                )
+            )
+    timestamp = now or datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
+        "+00:00", "Z"
+    )
+    identity = hashlib.sha256(
+        json.dumps(
+            {
+                "scope": state.scope,
+                "revision": state.revision,
+                "decision": selected.value,
+                "ids": [change.blueprint_id for change in changes],
+                "planned_at": timestamp,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return ManualOwnershipPlan(
+        state.scope,
+        state.revision,
+        selected,
+        tuple(changes),
+        timestamp,
+        identity,
+    )
+
+
+def apply_manual_ownership(
+    plan: ManualOwnershipPlan,
+    state: OwnershipState,
+) -> OwnershipState:
+    """Apply only the exact revision and before-state shown by the preview."""
+
+    if state.scope != plan.scope or state.revision != plan.expected_revision:
+        raise OwnershipConflictError(
+            "ownership state changed after preview; reload and review the selection again"
+        )
+    result = copy.deepcopy(state)
+    for change in plan.changes:
+        if (change.blueprint_id in result.records) != change.before_owned:
+            raise OwnershipConflictError(
+                f"ownership changed after preview for {change.blueprint_id}"
+            )
+        if change.after_owned:
+            acquisition_id = hashlib.sha256(
+                f"manual\0{plan.plan_id}\0{change.blueprint_id}".encode("utf-8")
+            ).hexdigest()
+            result.add(
+                change.blueprint_id,
+                change.name,
+                Acquisition(
+                    acquisition_id,
+                    "manual",
+                    plan.planned_at,
+                    "StarCompanion manual decision",
+                    plan.plan_id,
+                ),
+            )
+        else:
+            del result.records[change.blueprint_id]
+            result._invalidate_acquisition_index()
+    return result
 
 
 def _atomic_bytes(path: Path, payload: bytes) -> None:
@@ -442,7 +561,7 @@ def _parse_acquisition(item: object) -> Acquisition:
     offset = item.get("byte_offset")
     line_hash = item.get("line_sha256")
     if (
-        source not in {"log", "import"}
+        source not in {"log", "import", "manual"}
         or not isinstance(source_name, str)
         or not source_name
         or len(source_name) > 255
@@ -1454,6 +1573,8 @@ class ImportCandidate:
 class ImportPlan:
     source_name: str
     source_sha256: str
+    expected_scope: str
+    expected_revision: int
     candidates: tuple[ImportCandidate, ...]
     unmatched_names: tuple[str, ...]
     already_owned: tuple[str, ...]
@@ -1465,6 +1586,8 @@ class ImportPlan:
 
 @dataclass(frozen=True)
 class ResolutionPlan:
+    expected_scope: str
+    expected_revision: int
     unresolved: UnresolvedAcquisition
     blueprint_id: str
     blueprint_name: str
@@ -1496,10 +1619,20 @@ def plan_resolution(
         raise OwnershipError(
             "selected blueprint is not an exact-name candidate for this acquisition"
         )
-    return ResolutionPlan(item, blueprint_id, catalog.by_id[blueprint_id].name)
+    return ResolutionPlan(
+        state.scope,
+        state.revision,
+        item,
+        blueprint_id,
+        catalog.by_id[blueprint_id].name,
+    )
 
 
 def apply_resolution(plan: ResolutionPlan, state: OwnershipState) -> OwnershipState:
+    if state.scope != plan.expected_scope or state.revision != plan.expected_revision:
+        raise OwnershipConflictError(
+            "ownership state changed after preview; reload and review the resolution again"
+        )
     result = copy.deepcopy(state)
     result.unresolved = [
         item
@@ -1581,6 +1714,8 @@ def plan_import(path: Path, catalog: BlueprintCatalog, state: OwnershipState) ->
     return ImportPlan(
         Path(path).name,
         hashlib.sha256(payload).hexdigest(),
+        state.scope,
+        state.revision,
         tuple(candidates[key] for key in sorted(candidates)),
         tuple(sorted(unmatched, key=str.casefold)),
         tuple(sorted(already, key=str.casefold)),
@@ -1588,6 +1723,10 @@ def plan_import(path: Path, catalog: BlueprintCatalog, state: OwnershipState) ->
 
 
 def apply_import(plan: ImportPlan, state: OwnershipState) -> OwnershipState:
+    if state.scope != plan.expected_scope or state.revision != plan.expected_revision:
+        raise OwnershipConflictError(
+            "ownership state changed after preview; reload and review the import again"
+        )
     result = copy.deepcopy(state)
     now = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     for candidate in plan.candidates:

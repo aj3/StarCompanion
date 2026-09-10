@@ -8,9 +8,9 @@
     "header": [244, 0, 1036, 98],
     "stack": [244, 98, 1036, 672],
     "status": [244, 770, 1036, 30],
-    "target_section": [253, 186, 1000, 178],
-    "plan_view": [253, 370, 498, 490],
-    "recovery_section": [755, 370, 498, 534]
+    "target_section": [253, 186, 1000, 221],
+    "plan_view": [253, 413, 498, 490],
+    "recovery_section": [755, 413, 498, 534]
   },
   "minimum_colour_samples": {
     "#0b0f14": 500,
