@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -28,14 +29,16 @@ from PySide6.QtWidgets import (
 
 from ...ini import LocalizationFile
 from ...inject import (
+    BackupSafetyError,
     InjectionPlan,
+    MAX_BACKUP_RETENTION,
     MergeMode,
     ValidationFailedError,
     apply,
-    backup as create_backup,
     build_operation_plan,
     looks_like_game_install,
-    restore,
+    rollback,
+    safe_backups,
 )
 from ...transactions import (
     TargetChangedError,
@@ -123,6 +126,16 @@ class ApplyTab(QWidget):
             self.mode.addItem(label, value)
         self.mode.currentIndexChanged.connect(self._mode_changed)
 
+        self.backup_retention = QSpinBox()
+        self.backup_retention.setRange(1, MAX_BACKUP_RETENTION)
+        self.backup_retention.setSuffix(" backups")
+        self.backup_retention.setAccessibleName("Localization backup retention")
+        self.backup_retention.setAccessibleDescription(
+            "Choose how many newest target-scoped localization backups are retained "
+            "after a verified apply or restore."
+        )
+        self.backup_retention.valueChanged.connect(self._retention_changed)
+
         target_row = QHBoxLayout()
         target_row.addWidget(QLabel("Target"))
         target_row.addWidget(self.target_edit, 1)
@@ -134,6 +147,10 @@ class ApplyTab(QWidget):
         stock_row.addWidget(self.stock_browse)
         self.stock_container = QWidget()
         self.stock_container.setLayout(stock_row)
+        retention_row = QHBoxLayout()
+        retention_row.addWidget(QLabel("Keep newest"))
+        retention_row.addWidget(self.backup_retention)
+        retention_row.addStretch(1)
 
         self.install_warning = NoticeBanner(tone=Tone.WARNING)
         self.install_warning.setVisible(False)
@@ -144,6 +161,7 @@ class ApplyTab(QWidget):
         self.target_section.add_layout(target_row)
         self.target_section.add_widget(self.stock_container)
         self.target_section.add_widget(self.mode)
+        self.target_section.add_layout(retention_row)
         self.target_section.add_widget(self.install_warning)
 
         self.refresh_button = QPushButton("Prepare reviewed preview")
@@ -251,6 +269,7 @@ class ApplyTab(QWidget):
             self.stock_edit,
             self.stock_browse,
             self.mode,
+            self.backup_retention,
             self.refresh_button,
             self.plan_view.filter,
             self.plan_view.tree,
@@ -274,6 +293,12 @@ class ApplyTab(QWidget):
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
         # Use the shell width, not this page's current size hint: the wide
         # splitter itself can otherwise keep a narrow viewport artificially wide.
+        self.sync_splitter_orientation()
+        super().resizeEvent(event)
+
+    def sync_splitter_orientation(self) -> None:
+        """Set responsive orientation before a saved ratio is restored."""
+
         wide = self.window().width() >= 1180
         orientation = (
             Qt.Orientation.Horizontal if wide else Qt.Orientation.Vertical
@@ -281,8 +306,16 @@ class ApplyTab(QWidget):
         if self.workspace_splitter.orientation() != orientation:
             self.workspace_splitter.setOrientation(orientation)
             self.workspace_splitter.setMinimumHeight(360 if wide else 900)
-            self.workspace_splitter.setSizes([650, 420] if wide else [480, 410])
-        super().resizeEvent(event)
+            self.workspace_splitter.setSizes(list(self.default_splitter_sizes()))
+
+    def default_splitter_sizes(self) -> tuple[int, int]:
+        if self.workspace_splitter.orientation() is Qt.Orientation.Horizontal:
+            return (650, 420)
+        return (480, 410)
+
+    def reset_splitter_layout(self) -> None:
+        self.sync_splitter_orientation()
+        self.workspace_splitter.setSizes(list(self.default_splitter_sizes()))
 
     # --- target and plan -------------------------------------------------
 
@@ -322,12 +355,21 @@ class ApplyTab(QWidget):
         self.state.profile.injection.mode = value.value
         self.state.touch_profile()
 
+    def _retention_changed(self, value: int) -> None:
+        self.state.profile.injection.backup_retention = value
+        self.state.touch_profile()
+
     def _sync_mode(self) -> None:
         index = self.mode.findData(self.state.profile.injection.merge_mode)
         if index >= 0 and index != self.mode.currentIndex():
             self.mode.blockSignals(True)
             self.mode.setCurrentIndex(index)
             self.mode.blockSignals(False)
+        retention = self.state.profile.injection.backup_retention
+        if self.backup_retention.value() != retention:
+            self.backup_retention.blockSignals(True)
+            self.backup_retention.setValue(retention)
+            self.backup_retention.blockSignals(False)
         overwrite = self.state.profile.injection.merge_mode is MergeMode.OVERWRITE
         self.stock_container.setVisible(overwrite)
         self.stock_edit.setEnabled(overwrite)
@@ -490,6 +532,7 @@ class ApplyTab(QWidget):
                 expected_fingerprint=result.target_fingerprint,
                 operation_plan=result,
                 journal=self._journal(),
+                backup_retention=self.state.profile.injection.backup_retention,
             )
         except (ValidationFailedError, TargetChangedError, OSError, ValueError) as exc:
             QMessageBox.critical(
@@ -558,11 +601,14 @@ class ApplyTab(QWidget):
         target = self.state.target
         if target is None:
             return
-        pattern = f"{target.stem}.*{target.suffix}"
         directory = self._backup_directory()
-        if not directory.is_dir():
+        try:
+            backups = safe_backups(directory, target)
+        except (OSError, BackupSafetyError) as exc:
+            self.recovery_notice.set_tone(Tone.DANGER)
+            self.recovery_notice.setText(f"Backup location is unsafe: {exc}")
             return
-        for path in sorted(directory.glob(pattern), reverse=True):
+        for path in backups:
             scoped = self._scoped_backup(path)
             if scoped is None:
                 continue
@@ -695,38 +741,18 @@ class ApplyTab(QWidget):
         ) != QMessageBox.StandardButton.Yes:
             return
 
-        journal = self._journal()
-        rollback_id = bytes_sha256(
-            f"rollback\0{target.resolve()}\0{before.sha256}\0{backup_fingerprint.sha256}".encode(
-                "utf-8"
-            )
-        )
         try:
-            journal.begin(
-                operation="rollback",
-                plan_id=rollback_id,
-                target=target,
-                before=before,
-                after_sha256=backup_fingerprint.sha256,
-            )
-            recovery_backup = create_backup(target, self._backup_directory())
-            journal.record_backup(recovery_backup)
-            if fingerprint(target) != before:
-                raise TargetChangedError(
-                    "target changed while the recovery backup was being created"
-                )
-            restore(
+            result = rollback(
                 backup_path,
                 target,
+                confirmed=True,
+                backup_dir=self._backup_directory(),
                 expected_backup_fingerprint=backup_fingerprint,
                 expected_target_fingerprint=before,
+                journal=self._journal(),
+                backup_retention=self.state.profile.injection.backup_retention,
             )
-            journal.record_replaced()
-            final = fingerprint(target)
-            if final.sha256 != backup_fingerprint.sha256:
-                raise OSError("restored target fingerprint does not match the reviewed backup")
-            journal.complete(final=final)
-        except (TargetChangedError, OSError, ValueError) as exc:
+        except (BackupSafetyError, TargetChangedError, OSError, ValueError) as exc:
             QMessageBox.critical(
                 self,
                 "Restore stopped safely",
@@ -741,5 +767,5 @@ class ApplyTab(QWidget):
             self,
             "Backup restored and verified",
             f"The selected backup now matches the target.\n\n"
-            f"Recovery backup: {recovery_backup}",
+            f"Recovery backup: {result.recovery_backup}",
         )

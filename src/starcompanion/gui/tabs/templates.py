@@ -202,6 +202,12 @@ class TemplatesTab(QWidget):
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
         # Use the shell width, not this page's current size hint: the wide
         # splitter itself can otherwise keep a narrow viewport artificially wide.
+        self.sync_splitter_orientation()
+        super().resizeEvent(event)
+
+    def sync_splitter_orientation(self) -> None:
+        """Set responsive orientation before a saved ratio is restored."""
+
         wide = self.window().width() >= 1180
         orientation = (
             Qt.Orientation.Horizontal if wide else Qt.Orientation.Vertical
@@ -209,8 +215,16 @@ class TemplatesTab(QWidget):
         if self.splitter.orientation() != orientation:
             self.splitter.setOrientation(orientation)
             self.splitter.setMinimumHeight(300 if wide else 640)
-            self.splitter.setSizes([480, 520] if wide else [320, 320])
-        super().resizeEvent(event)
+            self.splitter.setSizes(list(self.default_splitter_sizes()))
+
+    def default_splitter_sizes(self) -> tuple[int, int]:
+        if self.splitter.orientation() is Qt.Orientation.Horizontal:
+            return (480, 520)
+        return (320, 320)
+
+    def reset_splitter_layout(self) -> None:
+        self.sync_splitter_orientation()
+        self.splitter.setSizes(list(self.default_splitter_sizes()))
 
     # --- org list ------------------------------------------------------------
 

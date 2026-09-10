@@ -114,6 +114,73 @@ def test_finds_a_direct_channel_root(tmp_path):
     assert install.find_installs(roots=[game])[0].channel == "EPTU"
 
 
+def test_same_channel_prefers_freshest_archive_and_explains_selection(tmp_path):
+    older = make_install(tmp_path / "older")
+    newer = make_install(tmp_path / "newer")
+    older_archive = older / install.ARCHIVE_NAME
+    newer_archive = newer / install.ARCHIVE_NAME
+    older_archive.write_bytes(b"old")
+    newer_archive.write_bytes(b"new and larger")
+    older_archive.touch()
+    newer_archive.touch()
+    import os
+
+    os.utime(older_archive, ns=(1_700_000_000_000_000_000,) * 2)
+    os.utime(newer_archive, ns=(1_800_000_000_000_000_000,) * 2)
+
+    found = install.find_installs(roots=[older, newer])
+
+    assert [item.root for item in found] == [newer, older]
+    assert found[0].archive_size == len(b"new and larger")
+    assert "Data.p4k updated" in found[0].freshness_evidence
+    assert "bytes" in found[0].freshness_evidence
+
+
+def test_selection_evidence_distinguishes_automatic_winner_and_explicit_choice():
+    older = install.GameInstall(
+        Path("C:/RSI-old/StarCitizen/LIVE"),
+        "LIVE",
+        archive_mtime_ns=1_700_000_000_000_000_000,
+        archive_size=10,
+    )
+    newer = install.GameInstall(
+        Path("C:/RSI-new/StarCitizen/LIVE"),
+        "LIVE",
+        archive_mtime_ns=1_800_000_000_000_000_000,
+        archive_size=5,
+    )
+
+    automatic = install.selection_evidence(newer, [older, newer])
+    explicit = install.selection_evidence(older, [older, newer])
+
+    assert "freshest of 2 LIVE candidates" in automatic
+    assert "modified time" in automatic and "size" in automatic
+    assert "Selected explicitly" in explicit
+
+
+def test_empty_archive_is_not_a_valid_install_candidate(tmp_path):
+    game = make_install(tmp_path)
+    (game / install.ARCHIVE_NAME).write_bytes(b"")
+
+    assert install.identify(game) is None
+    assert install.find_installs(roots=[game]) == []
+
+
+def test_linked_archive_is_not_a_valid_install_candidate(tmp_path):
+    game = make_install(tmp_path)
+    archive = game / install.ARCHIVE_NAME
+    source = tmp_path / "outside.p4k"
+    source.write_bytes(b"outside archive")
+    archive.unlink()
+    try:
+        archive.symlink_to(source)
+    except OSError as exc:
+        pytest.skip(f"file symlinks are unavailable: {exc}")
+
+    assert install.identify(game) is None
+    assert install.find_installs(roots=[game]) == []
+
+
 def test_no_installs_found_is_not_an_error(tmp_path):
     assert install.find_installs(roots=[tmp_path / "nothing"]) == []
 

@@ -10,6 +10,8 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QDialog,
+    QFileDialog,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -20,16 +22,37 @@ from PySide6.QtWidgets import (
     QSplitter,
     QTabWidget,
     QTableView,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
 
+from ...config import Profile
 from ...install import normalize_channel, normalize_language
-from ...user_edits import EditCommand, EditSession, UserEditError, UserEditStore
+from ...portability import load_language_pack
+from ...sharing import (
+    DeltaPackDocument,
+    DeltaPackError,
+    DeltaPackExportPlan,
+    load_delta_pack,
+    plan_delta_pack,
+    write_delta_pack,
+)
+from ...user_edits import (
+    EditCommand,
+    EditSession,
+    KeyResolution,
+    UserEditError,
+    UserEditStore,
+    plan_import,
+)
 from ..components import EmptyState, MetricTile, NoticeBanner, SectionCard, Tone
 from ..jobs import QtOperationJob
+from ..localization_preview import render_localization_preview
+from ..reconciliation import ReconciliationDialog
 from ..state import AppState
 from ..string_editor import (
+    COLUMN_FILTER_KEYS,
     StringEditorDocument,
     StringFilterProxyModel,
     StringRecord,
@@ -46,10 +69,35 @@ class PersistentEditorSnapshot:
     history_recovered: bool
     undo_count: int
     redo_count: int
+    storage_warning: str | None = None
+
+
+@dataclass(frozen=True)
+class UserImportPreview:
+    channel: str
+    language: str
+    source: Path
+    current: dict[str, str]
+    incoming: dict[str, str]
+    source_kind: str = "user.ini"
+    source_scope: str | None = None
+    profile_name: str | None = None
+    archive_sha256: str | None = None
+
+
+@dataclass(frozen=True)
+class DeltaPackExportPreview:
+    plan: DeltaPackExportPlan
+    destination: Path
+    overwrite: bool
+    profile_name: str
 
 
 class AdvancedStringEditorTab(QWidget):
     """Thousands-of-rows model/view editor with explicit background persistence."""
+
+    DEFAULT_COLUMN_WIDTHS = (240, 90, 220, 220, 240, 170, 100)
+    DEFAULT_SPLITTER_SIZES = (680, 360)
 
     def __init__(self, state: AppState, parent: QWidget | None = None):
         super().__init__(parent)
@@ -132,6 +180,20 @@ class AdvancedStringEditorTab(QWidget):
         filters.addWidget(self.source_filter, 1, 1)
         filters.addWidget(self.category_filter, 1, 2)
         filters.addWidget(self.provider_filter, 1, 3)
+        self.column_filters: dict[str, QLineEdit] = {}
+        for index, (key, heading) in enumerate(
+            zip(COLUMN_FILTER_KEYS, StringTableModel.HEADERS)
+        ):
+            field = QLineEdit()
+            field.setPlaceholderText(f"Filter {heading.lower()}")
+            field.setClearButtonEnabled(True)
+            field.setAccessibleName(f"Filter {heading} column")
+            field.setAccessibleDescription(
+                f"Case-insensitive substring filter for only the {heading} column."
+            )
+            field.textChanged.connect(self._queue_column_filters)
+            filters.addWidget(field, 2 + index // 4, index % 4)
+            self.column_filters[key] = field
         self.filter_section = SectionCard(
             "Find and filter",
             "Filters operate on the in-memory model and never reopen the archive or game files.",
@@ -151,13 +213,8 @@ class AdvancedStringEditorTab(QWidget):
             "Select multiple rows for one safe reset command."
         )
         self.table.horizontalHeader().setStretchLastSection(False)
-        self.table.setColumnWidth(StringTableModel.KEY, 240)
-        self.table.setColumnWidth(StringTableModel.CATEGORY, 90)
-        self.table.setColumnWidth(StringTableModel.STOCK, 220)
-        self.table.setColumnWidth(StringTableModel.RENDERED, 220)
-        self.table.setColumnWidth(StringTableModel.MERGED, 240)
-        self.table.setColumnWidth(StringTableModel.SOURCE, 170)
-        self.table.setColumnWidth(StringTableModel.OUTCOME, 100)
+        for column, width in enumerate(self.DEFAULT_COLUMN_WIDTHS):
+            self.table.setColumnWidth(column, width)
         self.table.selectionModel().selectionChanged.connect(self._selection_changed)
 
         table_section = SectionCard(
@@ -182,6 +239,22 @@ class AdvancedStringEditorTab(QWidget):
         )
         self.merged_editor.textChanged.connect(self._queue_value_edit)
         self.provenance_view = self._text_view("Source and evidence provenance", read_only=True)
+        self.preview_view = QTextBrowser()
+        self.preview_view.setOpenExternalLinks(False)
+        self.preview_view.setOpenLinks(False)
+        self.preview_view.setAccessibleName("Safe visual localization preview")
+        self.preview_view.setAccessibleDescription(
+            "Bounded visual interpretation of balanced allowlisted CIG formatting. "
+            "Links and external resources are disabled."
+        )
+        self.preview_note = NoticeBanner(
+            "Select one string to build a safe visual preview.", tone=Tone.INFO
+        )
+        preview_panel = QWidget()
+        preview_layout = QVBoxLayout(preview_panel)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        preview_layout.addWidget(self.preview_view, 1)
+        preview_layout.addWidget(self.preview_note)
         self.inspector_tabs = QTabWidget()
         self.inspector_tabs.setAccessibleName("String value and provenance views")
         self.inspector_tabs.setAccessibleDescription(
@@ -192,11 +265,15 @@ class AdvancedStringEditorTab(QWidget):
         self.inspector_tabs.addTab(self.stock_view, "Stock")
         self.inspector_tabs.addTab(self.rendered_view, "Rendered")
         self.inspector_tabs.addTab(self.provenance_view, "Provenance")
+        self.inspector_tabs.addTab(preview_panel, "Visual preview")
         self.validation = NoticeBanner("Select one string to inspect it.", tone=Tone.INFO)
 
         self.undo_button = QPushButton("Undo")
         self.redo_button = QPushButton("Redo")
         self.reset_button = QPushButton("Reset selected to source…")
+        self.import_button = QPushButton("Import user.ini…")
+        self.import_pack_button = QPushButton("Import authored pack…")
+        self.export_pack_button = QPushButton("Export authored pack…")
         self.save_button = QPushButton("Save user edits")
         self.reload_button = QPushButton("Reload saved edits")
         self.save_button.setProperty("role", "primary")
@@ -207,6 +284,24 @@ class AdvancedStringEditorTab(QWidget):
                 self.reset_button,
                 "Reset selected strings to source",
                 "Remove user overrides for selected rows as one undoable in-memory command.",
+            ),
+            (
+                self.import_button,
+                "Import user.ini with conflict review",
+                "Load a bounded localization file in the background and explicitly "
+                "resolve every conflicting key before saving.",
+            ),
+            (
+                self.import_pack_button,
+                "Import verified user-authored delta pack",
+                "Validate a bounded authored-only ZIP in the background, then explicitly "
+                "reconcile every conflicting key.",
+            ),
+            (
+                self.export_pack_button,
+                "Export user-authored delta pack",
+                "Preview and export only digest-verified authored values, the active "
+                "profile, and offline rebuild instructions.",
             ),
             (
                 self.save_button,
@@ -224,6 +319,9 @@ class AdvancedStringEditorTab(QWidget):
         self.undo_button.clicked.connect(self.undo)
         self.redo_button.clicked.connect(self.redo)
         self.reset_button.clicked.connect(self.reset_selected)
+        self.import_button.clicked.connect(self.import_user_ini)
+        self.import_pack_button.clicked.connect(self.import_delta_pack)
+        self.export_pack_button.clicked.connect(self.export_delta_pack)
         self.save_button.clicked.connect(self.save_user_edits)
         self.reload_button.clicked.connect(lambda: self.load_user_edits(explicit=True))
 
@@ -232,6 +330,9 @@ class AdvancedStringEditorTab(QWidget):
         history_actions.addWidget(self.redo_button)
         history_actions.addWidget(self.reset_button)
         history_actions.addStretch(1)
+        history_actions.addWidget(self.import_button)
+        history_actions.addWidget(self.import_pack_button)
+        history_actions.addWidget(self.export_pack_button)
         history_actions.addWidget(self.reload_button)
         history_actions.addWidget(self.save_button)
 
@@ -254,7 +355,7 @@ class AdvancedStringEditorTab(QWidget):
         self.workspace.setChildrenCollapsible(False)
         self.workspace.addWidget(table_section)
         self.workspace.addWidget(detail)
-        self.workspace.setSizes([680, 360])
+        self.workspace.setSizes(list(self.DEFAULT_SPLITTER_SIZES))
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.status)
@@ -268,6 +369,10 @@ class AdvancedStringEditorTab(QWidget):
         self.search_timer.setSingleShot(True)
         self.search_timer.setInterval(120)
         self.search_timer.timeout.connect(self._apply_search)
+        self.column_filter_timer = QTimer(self)
+        self.column_filter_timer.setSingleShot(True)
+        self.column_filter_timer.setInterval(120)
+        self.column_filter_timer.timeout.connect(self._apply_column_filters)
         self.edit_timer = QTimer(self)
         self.edit_timer.setSingleShot(True)
         self.edit_timer.setInterval(250)
@@ -289,12 +394,17 @@ class AdvancedStringEditorTab(QWidget):
             self.source_filter,
             self.category_filter,
             self.provider_filter,
+            *self.column_filters.values(),
             self.table,
             self.merged_editor,
             self.provenance_view,
+            self.preview_view,
             self.undo_button,
             self.redo_button,
             self.reset_button,
+            self.import_button,
+            self.import_pack_button,
+            self.export_pack_button,
             self.reload_button,
             self.save_button,
         ]
@@ -303,9 +413,17 @@ class AdvancedStringEditorTab(QWidget):
 
         state.contractsChanged.connect(self._schedule_rebuild)
         state.profileChanged.connect(self._schedule_rebuild)
+        state.ownershipChanged.connect(self._schedule_rebuild)
         state.pathsChanged.connect(self._scope_changed)
         self._scope_changed()
         self.rebuild()
+
+    def reset_layout(self) -> None:
+        """Restore only machine-local editor splitter and column defaults."""
+
+        self.workspace.setSizes(list(self.DEFAULT_SPLITTER_SIZES))
+        for column, width in enumerate(self.DEFAULT_COLUMN_WIDTHS):
+            self.table.setColumnWidth(column, width)
 
     # --- model and filters ----------------------------------------------
 
@@ -403,6 +521,16 @@ class AdvancedStringEditorTab(QWidget):
         self.proxy.set_query(self.search.text())
         self._update_metrics()
 
+    def _queue_column_filters(self, *_args) -> None:
+        if not self._shutting_down:
+            self.column_filter_timer.start()
+
+    def _apply_column_filters(self) -> None:
+        self.proxy.set_column_filters(
+            {key: field.text() for key, field in self.column_filters.items()}
+        )
+        self._update_metrics()
+
     def _apply_combo_filter(self, kind: str) -> None:
         combo = getattr(self, f"{kind}_filter")
         getattr(self.proxy, f"set_{kind}_filter")(combo.currentData() or "all")
@@ -483,6 +611,11 @@ class AdvancedStringEditorTab(QWidget):
                     self.provenance_view,
                 ):
                     widget.clear()
+                self.preview_view.clear()
+                self.preview_note.set_tone(Tone.INFO)
+                self.preview_note.setText(
+                    "Select exactly one string to build a safe visual preview."
+                )
                 self.merged_editor.setEnabled(False)
                 self.validation.set_tone(Tone.INFO)
                 self.validation.setText("Select exactly one string to edit its merged value.")
@@ -520,6 +653,16 @@ class AdvancedStringEditorTab(QWidget):
                 for item in record.evidence
             )
         self.provenance_view.setPlainText("\n".join(lines))
+        preview = render_localization_preview(record.merged)
+        self.preview_view.setHtml(preview.html)
+        if preview.truncated:
+            self.preview_note.set_tone(Tone.WARNING)
+            self.preview_note.setText(preview.message)
+        else:
+            self.preview_note.set_tone(Tone.SUCCESS)
+            self.preview_note.setText(
+                "Only balanced allowlisted CIG formatting is interpreted; unknown markup stays literal."
+            )
         if record.invalid:
             self.validation.set_tone(Tone.DANGER)
         elif record.issues:
@@ -626,6 +769,24 @@ class AdvancedStringEditorTab(QWidget):
             and not snapshot.invalid_count
             and not self._jobs
         )
+        self.import_button.setEnabled(
+            scope is not None
+            and scope == self._scope_key
+            and not self.document.dirty
+            and not self._jobs
+        )
+        self.import_pack_button.setEnabled(
+            scope is not None
+            and scope == self._scope_key
+            and not self.document.dirty
+            and not self._jobs
+        )
+        self.export_pack_button.setEnabled(
+            scope is not None
+            and scope == self._scope_key
+            and not self.document.dirty
+            and not self._jobs
+        )
         self.reload_button.setEnabled(scope is not None and not self._jobs)
 
     # --- background C3 persistence -------------------------------------
@@ -722,9 +883,350 @@ class AdvancedStringEditorTab(QWidget):
             if snapshot.history_recovered
             else "history reset because it did not match user.ini"
         )
-        self.status.set_tone(Tone.SUCCESS if snapshot.history_recovered else Tone.WARNING)
+        warning = snapshot.storage_warning
+        self.status.set_tone(
+            Tone.SUCCESS if snapshot.history_recovered and not warning else Tone.WARNING
+        )
         self.status.setText(
             f"Loaded {len(snapshot.values):,} saved user edits from {snapshot.path}. {history}."
+            + (f" {warning}" if warning else "")
+        )
+
+    @staticmethod
+    def _load_import_preview(
+        channel: str,
+        language: str,
+        source: Path,
+    ) -> UserImportPreview:
+        session = EditSession(UserEditStore(channel, language))
+        incoming = load_language_pack(source)
+        # Validate and classify the complete import away from the GUI thread.
+        plan_import(session.values, incoming)
+        return UserImportPreview(
+            channel,
+            language,
+            source,
+            dict(session.values),
+            incoming,
+        )
+
+    def import_user_ini(self) -> None:
+        scope = self._scope()
+        if scope is None or self._jobs:
+            return
+        if self.document.dirty:
+            QMessageBox.warning(
+                self,
+                "Save or undo editor changes first",
+                "Import starts from the exact saved user.ini baseline. Save or undo the "
+                "current in-memory edits before importing another file.",
+            )
+            return
+        source, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import user localization",
+            "",
+            "Localization INI (*.ini);;All files (*)",
+        )
+        if not source:
+            return
+        channel, language = scope
+        path = Path(source)
+        self.status.set_tone(Tone.INFO)
+        self.status.setText(
+            f"Loading and validating {path.name} for {channel}/{language} in the background…"
+        )
+        self._start_job(
+            lambda token, _reporter: (
+                token.checkpoint(),
+                self._load_import_preview(channel, language, path),
+                token.checkpoint(),
+            )[1],
+            on_success=self._import_preview_loaded,
+        )
+
+    @staticmethod
+    def _load_delta_import_preview(
+        channel: str,
+        language: str,
+        source: Path,
+    ) -> UserImportPreview:
+        document: DeltaPackDocument = load_delta_pack(source)
+        session = EditSession(UserEditStore(channel, language))
+        plan_import(session.values, document.values)
+        return UserImportPreview(
+            channel,
+            language,
+            document.archive,
+            dict(session.values),
+            dict(document.values),
+            source_kind="authored delta pack",
+            source_scope=f"{document.source_channel}/{document.language}",
+            profile_name=document.profile.name,
+            archive_sha256=document.archive_sha256,
+        )
+
+    def import_delta_pack(self) -> None:
+        scope = self._scope()
+        if scope is None or self._jobs:
+            return
+        if self.document.dirty:
+            QMessageBox.warning(
+                self,
+                "Save or undo editor changes first",
+                "Delta-pack import starts from the exact saved user.ini baseline. "
+                "Save or undo the current in-memory edits before importing.",
+            )
+            return
+        source, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import user-authored delta pack",
+            "",
+            "StarCompanion delta pack (*.zip)",
+        )
+        if not source:
+            return
+        channel, language = scope
+        path = Path(source)
+        self.status.set_tone(Tone.INFO)
+        self.status.setText(
+            f"Verifying {path.name} for {channel}/{language} in the background…"
+        )
+        self._start_job(
+            lambda token, _reporter: (
+                token.checkpoint(),
+                self._load_delta_import_preview(channel, language, path),
+                token.checkpoint(),
+            )[1],
+            on_success=self._import_preview_loaded,
+        )
+
+    def _import_preview_loaded(self, preview: UserImportPreview) -> None:
+        if (preview.channel, preview.language) != self._scope():
+            self.status.set_tone(Tone.WARNING)
+            self.status.setText(
+                "The selected channel or language changed while the import was loading. "
+                "Nothing was saved."
+            )
+            return
+        if self.document.dirty or self.document.baseline_values != preview.current:
+            self.status.set_tone(Tone.WARNING)
+            self.status.setText(
+                "The editor baseline changed while the import was loading. Reload and "
+                "review the import again."
+            )
+            return
+
+        dialog = ReconciliationDialog(preview.current, preview.incoming, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            self.status.set_tone(Tone.INFO)
+            self.status.setText("Import review cancelled. Nothing was saved.")
+            return
+        resolutions = dialog.resolutions()
+        if resolutions is None:
+            self.status.set_tone(Tone.DANGER)
+            self.status.setText(
+                "Import review was incomplete. Every conflict must have an explicit choice."
+            )
+            return
+        plan = plan_import(
+            preview.current,
+            preview.incoming,
+            resolutions=resolutions,
+        )
+        if not plan.changes:
+            self.status.set_tone(Tone.SUCCESS)
+            self.status.setText(
+                f"Reviewed {preview.source.name}: {plan.summary()}. Nothing needs to be saved."
+            )
+            return
+        source_details = ""
+        if preview.archive_sha256 is not None:
+            source_details = (
+                f"Archive SHA-256: {preview.archive_sha256}\n"
+                f"Source scope (advisory): {preview.source_scope}\n"
+                f"Included profile: {preview.profile_name} (not activated)\n"
+            )
+        if QMessageBox.question(
+            self,
+            f"Save reviewed {preview.source_kind} import?",
+            f"Source: {preview.source.name}\n"
+            f"Source type: {preview.source_kind}\n"
+            f"Target scope: {preview.channel}/{preview.language}\n"
+            f"{source_details}"
+            f"Plan: {plan.summary()}\n\n"
+            "This saves one undoable command to the channel-scoped user store. "
+            "No game file is changed.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        ) != QMessageBox.StandardButton.Yes:
+            self.status.set_tone(Tone.INFO)
+            self.status.setText("Reviewed import was not saved.")
+            return
+
+        self.status.set_tone(Tone.INFO)
+        self.status.setText(
+            f"Saving the reviewed {preview.channel}/{preview.language} import in the background…"
+        )
+        self._start_job(
+            lambda token, _reporter: self._apply_import_preview(
+                token,
+                preview,
+                resolutions,
+            ),
+            on_success=self._user_import_saved,
+        )
+
+    @staticmethod
+    def _apply_import_preview(
+        token,
+        preview: UserImportPreview,
+        resolutions: dict[str, KeyResolution],
+    ) -> PersistentEditorSnapshot:
+        token.checkpoint()
+        session = EditSession(UserEditStore(preview.channel, preview.language))
+        if session.values != preview.current:
+            raise UserEditError(
+                "saved user.ini changed after import review; reload before saving"
+            )
+        reviewed = plan_import(
+            session.values,
+            preview.incoming,
+            resolutions=resolutions,
+        )
+        session.import_plan(reviewed)
+        token.checkpoint()
+        snapshot = AdvancedStringEditorTab._load_snapshot(
+            preview.channel,
+            preview.language,
+        )
+        storage_warning = getattr(
+            getattr(session, "store", None),
+            "last_snapshot_warning",
+            None,
+        )
+        if storage_warning:
+            snapshot = PersistentEditorSnapshot(
+                snapshot.channel,
+                snapshot.language,
+                snapshot.path,
+                snapshot.values,
+                snapshot.history_recovered,
+                snapshot.undo_count,
+                snapshot.redo_count,
+                storage_warning,
+            )
+        return snapshot
+
+    def _user_import_saved(self, snapshot: PersistentEditorSnapshot) -> None:
+        self._loaded(snapshot)
+        self.status.set_tone(Tone.SUCCESS)
+        self.status.setText(
+            f"Imported {len(snapshot.values):,} user-layer values as one undoable C3 command. "
+            "No game file was changed."
+        )
+
+    @staticmethod
+    def _plan_delta_export(
+        channel: str,
+        language: str,
+        profile: Profile,
+        destination: Path,
+    ) -> DeltaPackExportPreview:
+        if destination.suffix.casefold() != ".zip":
+            raise DeltaPackError("delta-pack destination must be a .zip file")
+        plan = plan_delta_pack(UserEditStore(channel, language), profile)
+        return DeltaPackExportPreview(
+            plan,
+            destination,
+            destination.exists(),
+            profile.name,
+        )
+
+    def export_delta_pack(self) -> None:
+        scope = self._scope()
+        if scope is None or self._jobs:
+            return
+        if self.document.dirty:
+            QMessageBox.warning(
+                self,
+                "Save or undo editor changes first",
+                "The authored pack is generated from the exact saved user.ini and "
+                "digest-bound authorship metadata. Save or undo in-memory edits first.",
+            )
+            return
+        destination, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export user-authored delta pack",
+            "starcompanion-authored-deltas.zip",
+            "ZIP archive (*.zip)",
+        )
+        if not destination:
+            return
+        path = Path(destination)
+        if not path.suffix:
+            path = path.with_suffix(".zip")
+        channel, language = scope
+        # Freeze the portable profile before the worker starts so presentation
+        # controls cannot mutate an object being serialized on another thread.
+        profile = Profile.loads(self.state.profile.dumps())
+        self.status.set_tone(Tone.INFO)
+        self.status.setText(
+            f"Selecting verified authored values for {channel}/{language} in the background…"
+        )
+        self._start_job(
+            lambda token, _reporter: (
+                token.checkpoint(),
+                self._plan_delta_export(channel, language, profile, path),
+                token.checkpoint(),
+            )[1],
+            on_success=self._delta_export_planned,
+        )
+
+    def _delta_export_planned(self, preview: DeltaPackExportPreview) -> None:
+        plan = preview.plan
+        overwrite = "Yes — the selected file already exists" if preview.overwrite else "No"
+        if QMessageBox.question(
+            self,
+            "Write reviewed authored delta pack?",
+            f"Destination: {preview.destination}\n"
+            f"Scope: {plan.channel}/{plan.language}\n"
+            f"Profile: {preview.profile_name}\n"
+            f"Authored values: {len(plan.authored_values):,}\n"
+            f"Excluded imported/derived/unknown values: {plan.excluded_values:,}\n"
+            f"Overwrite existing file: {overwrite}\n\n"
+            "The archive contains no CIG stock localization or game data. The backend "
+            "will recheck the user-value and authorship digests before writing.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        ) != QMessageBox.StandardButton.Yes:
+            self.status.set_tone(Tone.INFO)
+            self.status.setText("Authored delta-pack export cancelled. Nothing was written.")
+            return
+
+        self.status.set_tone(Tone.INFO)
+        self.status.setText("Writing the reviewed authored delta pack in the background…")
+        self._start_job(
+            lambda token, _reporter: self._write_delta_export(token, preview),
+            on_success=self._delta_export_written,
+        )
+
+    @staticmethod
+    def _write_delta_export(token, preview: DeltaPackExportPreview) -> Path:
+        token.checkpoint()
+        write_delta_pack(
+            preview.plan,
+            preview.destination,
+            overwrite=preview.overwrite,
+        )
+        token.checkpoint()
+        return preview.destination
+
+    def _delta_export_written(self, destination: Path) -> None:
+        self.status.set_tone(Tone.SUCCESS)
+        self.status.setText(
+            f"Wrote verified user-authored deltas to {destination}. "
+            "No CIG stock or game data was included."
         )
 
     def save_user_edits(self) -> None:
@@ -752,7 +1254,24 @@ class AdvancedStringEditorTab(QWidget):
                 )
             session.execute(command, allow_empty=True)
             token.checkpoint()
-            return self._load_snapshot(channel, language)
+            snapshot = self._load_snapshot(channel, language)
+            storage_warning = getattr(
+                getattr(session, "store", None),
+                "last_snapshot_warning",
+                None,
+            )
+            if storage_warning:
+                snapshot = PersistentEditorSnapshot(
+                    snapshot.channel,
+                    snapshot.language,
+                    snapshot.path,
+                    snapshot.values,
+                    snapshot.history_recovered,
+                    snapshot.undo_count,
+                    snapshot.redo_count,
+                    storage_warning,
+                )
+            return snapshot
 
         self.status.set_tone(Tone.INFO)
         self.status.setText(
@@ -795,6 +1314,7 @@ class AdvancedStringEditorTab(QWidget):
         self._shutting_down = True
         self.scope_timer.stop()
         self.search_timer.stop()
+        self.column_filter_timer.stop()
         self.edit_timer.stop()
         self.rebuild_timer.stop()
         for job in tuple(self._jobs):
@@ -802,4 +1322,9 @@ class AdvancedStringEditorTab(QWidget):
         self._jobs.clear()
 
 
-__all__ = ["AdvancedStringEditorTab", "PersistentEditorSnapshot"]
+__all__ = [
+    "AdvancedStringEditorTab",
+    "DeltaPackExportPreview",
+    "PersistentEditorSnapshot",
+    "UserImportPreview",
+]

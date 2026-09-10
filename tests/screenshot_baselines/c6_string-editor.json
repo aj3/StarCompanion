@@ -8,10 +8,10 @@
     "header": [244, 0, 1036, 98],
     "stack": [244, 98, 1036, 672],
     "status": [244, 770, 1036, 30],
-    "filter_section": [277, 250, 970, 149],
-    "table_section": [277, 405, 609, 288],
-    "detail_section": [890, 405, 357, 288],
-    "table": [294, 501, 575, 175]
+    "filter_section": [277, 250, 970, 219],
+    "table_section": [277, 475, 609, 219],
+    "detail_section": [890, 475, 357, 219],
+    "table": [294, 571, 575, 106]
   },
   "minimum_colour_samples": {
     "#0b0f14": 500,

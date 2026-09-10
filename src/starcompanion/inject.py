@@ -10,8 +10,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
+import stat as stat_module
 import tempfile
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -32,6 +36,9 @@ from .validate import Issue, Severity, validate_value
 # scratch copy. Matched case-insensitively against directory entries.
 GAME_MARKERS = ("data.p4k", "bin64", "usergame.cfg")
 MAX_OPERATION_PLAN_BYTES = 64 * 1024 * 1024
+DEFAULT_BACKUP_RETENTION = 20
+MAX_BACKUP_RETENTION = 200
+BACKUP_LOCK_TIMEOUT_SECONDS = 10.0
 
 
 def looks_like_game_install(target: Path) -> Path | None:
@@ -65,6 +72,23 @@ class ValidationFailedError(RuntimeError):
     def __init__(self, failures: list[tuple[str, Issue]]):
         super().__init__(f"{len(failures)} value(s) failed validation")
         self.failures = failures
+
+
+class BackupSafetyError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class BackupPruneResult:
+    deleted: tuple[Path, ...]
+    skipped: tuple[Path, ...] = ()
+
+
+@dataclass(frozen=True)
+class RollbackResult:
+    recovery_backup: Path | None
+    final_fingerprint: FileFingerprint
+    diagnostics: tuple[str, ...] = ()
 
 
 @dataclass
@@ -401,11 +425,181 @@ def build_operation_plan(
     return result, desired.dumps().encode("utf-8")
 
 
-def backup(path: Path, backup_dir: Path) -> Path:
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    destination = _backup_destination(path, backup_dir)
-    shutil.copy2(path, destination)
-    return destination
+def _linked_or_reparse(metadata: os.stat_result) -> bool:
+    attributes = getattr(metadata, "st_file_attributes", 0)
+    reparse_flag = getattr(stat_module, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    return stat_module.S_ISLNK(metadata.st_mode) or bool(attributes & reparse_flag)
+
+
+def _identity(metadata: os.stat_result) -> tuple[int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+    )
+
+
+def _ordinary_file_stat(path: Path, label: str) -> os.stat_result:
+    try:
+        metadata = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise BackupSafetyError(f"{label} could not be inspected: {exc}") from exc
+    if _linked_or_reparse(metadata) or not stat_module.S_ISREG(metadata.st_mode):
+        raise BackupSafetyError(f"{label} must be an ordinary local file")
+    return metadata
+
+
+def _safe_backup_directory(path: Path, *, create: bool) -> os.stat_result | None:
+    try:
+        metadata = os.stat(path, follow_symlinks=False)
+    except FileNotFoundError:
+        if not create:
+            return None
+        path.mkdir(parents=True, exist_ok=True)
+        metadata = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise BackupSafetyError(f"backup directory could not be inspected: {exc}") from exc
+    if _linked_or_reparse(metadata) or not stat_module.S_ISDIR(metadata.st_mode):
+        raise BackupSafetyError("backup directory must be an ordinary local directory")
+    return metadata
+
+
+def _backup_pattern(target: Path) -> re.Pattern[str]:
+    return re.compile(
+        rf"{re.escape(target.stem)}\."
+        rf"(?P<stamp>\d{{8}}-\d{{6}})"
+        rf"(?:-(?P<fraction>\d{{6}}))?"
+        rf"(?:-(?P<counter>\d+))?"
+        rf"{re.escape(target.suffix)}\Z"
+    )
+
+
+def _backup_entries(
+    backup_dir: Path,
+    target: Path,
+) -> list[tuple[Path, tuple[int, int, int, int]]]:
+    if _safe_backup_directory(backup_dir, create=False) is None:
+        return []
+    pattern = _backup_pattern(target)
+    result: list[tuple[Path, tuple[int, int, int, int]]] = []
+    try:
+        entries = list(os.scandir(backup_dir))
+    except OSError as exc:
+        raise BackupSafetyError(f"backup directory could not be read: {exc}") from exc
+    for entry in entries:
+        if not pattern.fullmatch(entry.name):
+            continue
+        try:
+            # Windows DirEntry.stat() may report zero device/inode values even
+            # when os.stat(path) exposes the stable file identity.
+            metadata = os.stat(entry.path, follow_symlinks=False)
+        except OSError:
+            continue
+        if _linked_or_reparse(metadata) or not stat_module.S_ISREG(metadata.st_mode):
+            continue
+        result.append((Path(entry.path), _identity(metadata)))
+    def newest_first(item: tuple[Path, tuple[int, int, int, int]]):
+        match = pattern.fullmatch(item[0].name)
+        assert match is not None
+        return (
+            match.group("stamp"),
+            int(match.group("fraction") or -1),
+            int(match.group("counter") or 0),
+        )
+
+    result.sort(key=newest_first, reverse=True)
+    return result
+
+
+def safe_backups(backup_dir: Path, target: Path) -> tuple[Path, ...]:
+    """List only timestamped, ordinary files directly in one backup scope."""
+
+    return tuple(path for path, _metadata in _backup_entries(Path(backup_dir), target))
+
+
+def _validate_retention(keep: int) -> int:
+    if type(keep) is not int or not 1 <= keep <= MAX_BACKUP_RETENTION:
+        raise ValueError(
+            f"backup retention must be between 1 and {MAX_BACKUP_RETENTION}"
+        )
+    return keep
+
+
+@contextmanager
+def _backup_scope_lock(backup_dir: Path, target: Path):
+    """Serialize target backup, replace, journal, and retention operations."""
+
+    _safe_backup_directory(backup_dir, create=True)
+    lock_id = hashlib.sha256(
+        f"{backup_dir.resolve()}\0{target.resolve(strict=False)}".encode("utf-8")
+    ).hexdigest()[:16]
+    lock_path = backup_dir.parent / f".starcompanion-backup-{lock_id}.lock"
+    try:
+        existing = os.stat(lock_path, follow_symlinks=False)
+    except FileNotFoundError:
+        existing = None
+    if existing is not None and (
+        _linked_or_reparse(existing) or not stat_module.S_ISREG(existing.st_mode)
+    ):
+        raise BackupSafetyError("backup operation lock is not an ordinary file")
+    flags = os.O_CREAT | os.O_RDWR
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(lock_path, flags, 0o600)
+    except OSError as exc:
+        raise BackupSafetyError(f"backup operation lock could not be opened: {exc}") from exc
+    stream = os.fdopen(descriptor, "r+b", buffering=0)
+    locked = False
+    try:
+        opened = os.fstat(stream.fileno())
+        linked = os.stat(lock_path, follow_symlinks=False)
+        if (
+            _linked_or_reparse(linked)
+            or not stat_module.S_ISREG(linked.st_mode)
+            or opened.st_dev != linked.st_dev
+            or opened.st_ino != linked.st_ino
+        ):
+            raise BackupSafetyError("backup operation lock changed while opening")
+        if opened.st_size == 0:
+            stream.write(b"0")
+            stream.flush()
+        deadline = time.monotonic() + BACKUP_LOCK_TIMEOUT_SECONDS
+        while not locked:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    stream.seek(0)
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise BackupSafetyError(
+                        "backup scope is busy; another operation is still running"
+                    )
+                time.sleep(0.05)
+        yield
+    finally:
+        if locked:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    stream.seek(0)
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        stream.close()
 
 
 def _backup_destination(path: Path, backup_dir: Path) -> Path:
@@ -416,6 +610,98 @@ def _backup_destination(path: Path, backup_dir: Path) -> Path:
         destination = backup_dir / f"{path.stem}.{stamp}-{counter}{path.suffix}"
         counter += 1
     return destination
+
+
+def _copy_backup_unlocked(path: Path, backup_dir: Path) -> Path:
+    before = _ordinary_file_stat(path, "backup source")
+    destination = _backup_destination(path, backup_dir)
+    with path.open("rb") as source:
+        opened = os.fstat(source.fileno())
+        if opened.st_dev != before.st_dev or opened.st_ino != before.st_ino:
+            raise BackupSafetyError("backup source changed while opening")
+        data = source.read()
+    after = _ordinary_file_stat(path, "backup source")
+    if _identity(after) != _identity(before):
+        raise BackupSafetyError("backup source changed while it was being copied")
+    _atomic_write(destination, data, expected_resolved=destination.resolve(strict=False))
+    try:
+        os.chmod(destination, stat_module.S_IMODE(before.st_mode))
+    except OSError:
+        pass
+    return destination
+
+
+def _bytes_backup_unlocked(path: Path, backup_dir: Path, data: bytes) -> Path:
+    destination = _backup_destination(path, backup_dir)
+    _atomic_write(destination, data, expected_resolved=destination.resolve(strict=False))
+    return destination
+
+
+def backup(path: Path, backup_dir: Path) -> Path:
+    path = Path(path)
+    backup_dir = Path(backup_dir)
+    with _backup_scope_lock(backup_dir, path):
+        return _copy_backup_unlocked(path, backup_dir)
+
+
+def _prune_backups_unlocked(
+    backup_dir: Path,
+    target: Path,
+    keep: int,
+    *,
+    protected: tuple[Path, ...] = (),
+) -> BackupPruneResult:
+    keep = _validate_retention(keep)
+    entries = _backup_entries(backup_dir, target)
+    protected_resolved = {path.resolve(strict=False) for path in protected}
+    ordered = [
+        item for item in entries if item[0].resolve(strict=False) in protected_resolved
+    ] + [
+        item for item in entries if item[0].resolve(strict=False) not in protected_resolved
+    ]
+    retained = {path for path, _metadata in ordered[:keep]}
+    deleted: list[Path] = []
+    skipped: list[Path] = []
+    for path, identity in entries:
+        if path in retained:
+            continue
+        try:
+            current = os.stat(path, follow_symlinks=False)
+            if (
+                _linked_or_reparse(current)
+                or not stat_module.S_ISREG(current.st_mode)
+                or _identity(current) != identity
+            ):
+                skipped.append(path)
+                continue
+            path.unlink()
+            deleted.append(path)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            skipped.append(path)
+    return BackupPruneResult(tuple(deleted), tuple(skipped))
+
+
+def prune_backups(
+    backup_dir: Path,
+    target: Path,
+    keep: int = DEFAULT_BACKUP_RETENTION,
+    *,
+    protected: tuple[Path, ...] = (),
+) -> BackupPruneResult:
+    keep = _validate_retention(keep)
+    backup_dir = Path(backup_dir)
+    target = Path(target)
+    if _safe_backup_directory(backup_dir, create=False) is None:
+        return BackupPruneResult(())
+    with _backup_scope_lock(backup_dir, target):
+        return _prune_backups_unlocked(
+            backup_dir,
+            target,
+            keep,
+            protected=protected,
+        )
 
 
 def apply(
@@ -433,12 +719,14 @@ def apply(
     expected_fingerprint: FileFingerprint | None = None,
     operation_plan: InjectionPlan | None = None,
     journal: TransactionJournal | None = None,
+    backup_retention: int = DEFAULT_BACKUP_RETENTION,
 ) -> InjectionPlan:
     """Write `replacements` into the file at `target_path`.
 
     Raises unless `confirmed` is True, the plan validates, and OVERWRITE mode
     was given a pristine `stock_path` to rebuild from.
     """
+    backup_retention = _validate_retention(backup_retention)
     if not confirmed:
         raise UnconfirmedWriteError(
             "Refusing to write without explicit confirmation. Show plan() to the user first."
@@ -504,61 +792,87 @@ def apply(
         )
     active_plan = operation_plan or result
     active_plan.plan_id = active_plan.plan_id or active_plan.compute_id()
-    if journal is not None:
-        journal.begin(
-            operation="apply",
-            plan_id=active_plan.plan_id,
-            target=target_path,
-            before=current_fingerprint,
-            after_sha256=desired_sha256,
-        )
+    destination_dir = Path(backup_dir or target_path.parent / "backups")
+    with _backup_scope_lock(destination_dir, target_path):
+        if fingerprint(target_path) != current_fingerprint:
+            raise TargetChangedError(
+                "target changed while waiting for the backup scope; nothing was replaced"
+            )
+        if target_path.resolve(strict=False) != reviewed_target:
+            raise TargetChangedError(
+                "target path changed while waiting for the backup scope; nothing was replaced"
+            )
+        if journal is not None:
+            journal.begin(
+                operation="apply",
+                plan_id=active_plan.plan_id,
+                target=target_path,
+                before=current_fingerprint,
+                after_sha256=desired_sha256,
+            )
 
-    destination_dir = backup_dir or target_path.parent / "backups"
-    if target_path.exists():
-        backup_path = backup(target_path, destination_dir)
-    else:
-        # A first apply has no loose file to copy. Save the pristine prepared
-        # baseline so the same Undo action still removes all enhancements.
-        destination_dir.mkdir(parents=True, exist_ok=True)
-        backup_path = _backup_destination(target_path, destination_dir)
-        _atomic_write(
-            backup_path,
-            baseline_data,
-        )
-    active_plan.backup = str(backup_path.resolve())
-    if journal is not None:
-        journal.record_backup(backup_path)
+        if target_path.exists():
+            backup_path = _copy_backup_unlocked(target_path, destination_dir)
+        else:
+            # A first apply has no loose file to copy. Save the pristine prepared
+            # baseline so the same Undo action still removes all enhancements.
+            backup_path = _bytes_backup_unlocked(
+                target_path,
+                destination_dir,
+                baseline_data,
+            )
+        active_plan.backup = str(backup_path.resolve())
+        if journal is not None:
+            journal.record_backup(backup_path)
 
-    # Close the preview/write race as far as an atomic filesystem API permits:
-    # the exact target is fingerprinted again after backup and immediately
-    # before the sibling temporary file is replaced.
-    if fingerprint(target_path) != current_fingerprint:
-        raise TargetChangedError(
-            "target changed while the backup was being created; nothing was replaced"
-        )
-    if target_path.resolve(strict=False) != reviewed_target:
-        raise TargetChangedError(
-            "target path changed while the backup was being created; nothing was replaced"
-        )
+        if fingerprint(target_path) != current_fingerprint:
+            raise TargetChangedError(
+                "target changed while the backup was being created; nothing was replaced"
+            )
+        if target_path.resolve(strict=False) != reviewed_target:
+            raise TargetChangedError(
+                "target path changed while the backup was being created; nothing was replaced"
+            )
 
-    _atomic_save(
-        target,
-        target_path,
-        replacements,
-        [*result.updated, *result.added],
-        result.removed,
-        data=desired_data,
-        expected_resolved=reviewed_target,
-    )
-    if journal is not None:
-        journal.record_replaced()
-    final_fingerprint = fingerprint(target_path)
-    if final_fingerprint.sha256 != desired_sha256:
-        raise OSError("installed target fingerprint does not match the operation plan")
-    active_plan.transaction_status = "complete"
-    active_plan.diagnostics.append("target fingerprint verified after atomic replace")
-    if journal is not None:
-        journal.complete(final=final_fingerprint)
+        _atomic_save(
+            target,
+            target_path,
+            replacements,
+            [*result.updated, *result.added],
+            result.removed,
+            data=desired_data,
+            expected_resolved=reviewed_target,
+        )
+        if journal is not None:
+            journal.record_replaced()
+        final_fingerprint = fingerprint(target_path)
+        if final_fingerprint.sha256 != desired_sha256:
+            raise OSError("installed target fingerprint does not match the operation plan")
+        active_plan.transaction_status = "complete"
+        active_plan.diagnostics.append("target fingerprint verified after atomic replace")
+        if journal is not None:
+            journal.complete(final=final_fingerprint)
+        try:
+            pruned = _prune_backups_unlocked(
+                destination_dir,
+                target_path,
+                backup_retention,
+                protected=(backup_path,),
+            )
+        except (OSError, ValueError, BackupSafetyError) as exc:
+            active_plan.diagnostics.append(
+                f"backup retention cleanup skipped after verified write: {exc}"
+            )
+        else:
+            if pruned.deleted:
+                active_plan.diagnostics.append(
+                    f"pruned {len(pruned.deleted)} older backup(s); retained "
+                    f"the newest {backup_retention}"
+                )
+            if pruned.skipped:
+                active_plan.diagnostics.append(
+                    f"retention skipped {len(pruned.skipped)} backup(s) whose identity changed"
+                )
     result.backup = active_plan.backup
     result.transaction_status = active_plan.transaction_status
     result.diagnostics = list(active_plan.diagnostics)
@@ -572,6 +886,7 @@ def restore(
     expected_backup_fingerprint: FileFingerprint | None = None,
     expected_target_fingerprint: FileFingerprint | None = None,
 ) -> None:
+    _ordinary_file_stat(backup_path, "selected backup")
     reviewed_backup = backup_path.resolve(strict=False)
     reviewed_target = target_path.resolve(strict=False)
     if not backup_path.is_file():
@@ -598,6 +913,115 @@ def restore(
     ):
         raise TargetChangedError("target changed while rollback was being prepared")
     _atomic_write(target_path, data, expected_resolved=reviewed_target)
+
+
+def rollback(
+    backup_path: Path,
+    target_path: Path,
+    *,
+    confirmed: bool,
+    backup_dir: Path | None = None,
+    expected_backup_fingerprint: FileFingerprint | None = None,
+    expected_target_fingerprint: FileFingerprint | None = None,
+    journal: TransactionJournal | None = None,
+    backup_retention: int = DEFAULT_BACKUP_RETENTION,
+) -> RollbackResult:
+    """Restore one reviewed, target-scoped backup under the apply lock."""
+
+    backup_retention = _validate_retention(backup_retention)
+    if not confirmed:
+        raise UnconfirmedWriteError("refusing rollback without explicit confirmation")
+    backup_path = Path(backup_path)
+    target_path = Path(target_path)
+    directory = Path(backup_dir or target_path.parent / "backups")
+    reviewed_backup = backup_path.resolve(strict=False)
+    reviewed_target = target_path.resolve(strict=False)
+    if reviewed_backup.parent != directory.resolve(strict=False):
+        raise BackupSafetyError("selected backup is outside the active backup scope")
+    recognized = {path.resolve(strict=False) for path in safe_backups(directory, target_path)}
+    if reviewed_backup not in recognized:
+        raise BackupSafetyError(
+            "selected backup is not a recognized ordinary timestamped restore point"
+        )
+    backup_fingerprint = fingerprint(backup_path)
+    if (
+        expected_backup_fingerprint is not None
+        and backup_fingerprint != expected_backup_fingerprint
+    ):
+        raise TargetChangedError("selected backup changed before rollback")
+    before = fingerprint(target_path)
+    if expected_target_fingerprint is not None and before != expected_target_fingerprint:
+        raise TargetChangedError("target changed before rollback")
+    rollback_id = bytes_sha256(
+        f"rollback\0{reviewed_target}\0{before.sha256}\0{backup_fingerprint.sha256}".encode(
+            "utf-8"
+        )
+    )
+    diagnostics: list[str] = []
+    with _backup_scope_lock(directory, target_path):
+        if backup_path.resolve(strict=False) != reviewed_backup:
+            raise TargetChangedError("selected backup path changed before rollback")
+        if target_path.resolve(strict=False) != reviewed_target:
+            raise TargetChangedError("target path changed before rollback")
+        if fingerprint(backup_path) != backup_fingerprint:
+            raise TargetChangedError("selected backup changed before rollback")
+        if fingerprint(target_path) != before:
+            raise TargetChangedError("target changed while waiting for rollback")
+        if journal is not None:
+            journal.begin(
+                operation="rollback",
+                plan_id=rollback_id,
+                target=target_path,
+                before=before,
+                after_sha256=backup_fingerprint.sha256,
+            )
+        recovery_backup = (
+            _copy_backup_unlocked(target_path, directory) if before.exists else None
+        )
+        if journal is not None and recovery_backup is not None:
+            journal.record_backup(recovery_backup)
+        if fingerprint(backup_path) != backup_fingerprint:
+            raise TargetChangedError(
+                "selected backup changed while the recovery backup was created"
+            )
+        if fingerprint(target_path) != before:
+            raise TargetChangedError(
+                "target changed while the recovery backup was created"
+            )
+        restore(
+            backup_path,
+            target_path,
+            expected_backup_fingerprint=backup_fingerprint,
+            expected_target_fingerprint=before,
+        )
+        if journal is not None:
+            journal.record_replaced()
+        final = fingerprint(target_path)
+        if final.sha256 != backup_fingerprint.sha256:
+            raise OSError("restored target fingerprint does not match the reviewed backup")
+        if journal is not None:
+            journal.complete(final=final)
+        diagnostics.append("restored target fingerprint verified after atomic replace")
+        protected = (recovery_backup,) if recovery_backup is not None else (backup_path,)
+        try:
+            pruned = _prune_backups_unlocked(
+                directory,
+                target_path,
+                backup_retention,
+                protected=protected,
+            )
+        except (OSError, ValueError, BackupSafetyError) as exc:
+            diagnostics.append(
+                f"backup retention cleanup skipped after verified rollback: {exc}"
+            )
+        else:
+            if pruned.deleted:
+                diagnostics.append(f"pruned {len(pruned.deleted)} older backup(s)")
+            if pruned.skipped:
+                diagnostics.append(
+                    f"retention skipped {len(pruned.skipped)} backup(s) whose identity changed"
+                )
+    return RollbackResult(recovery_backup, final, tuple(diagnostics))
 
 
 def _source_summary(data: object) -> dict[str, object]:

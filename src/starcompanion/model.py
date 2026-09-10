@@ -138,6 +138,11 @@ class BlueprintPool:
     """
     item_categories: dict[str, str] = field(default_factory=dict)
     """Display name -> conservative category derived from the entity path."""
+    item_types: dict[str, str] = field(default_factory=dict)
+    item_classes: dict[str, str] = field(default_factory=dict)
+    item_sizes: dict[str, str] = field(default_factory=dict)
+    item_grades: dict[str, str] = field(default_factory=dict)
+    """Display name -> explicit local DataForge metadata when available."""
     gates: list[Gate] = field(default_factory=list)
     """All conditions that must hold. Real pools stack them -- 'BitZeros Only'
     *and* 'Neutral level variants' is one pool with two gates. Empty means

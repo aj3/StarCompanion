@@ -29,7 +29,7 @@ except ImportError as exc:  # pragma: no cover - depends on the machine
 from starcompanion.config import Profile, load_builtin  # noqa: E402
 from starcompanion.gui import AppState, MainWindow  # noqa: E402
 from starcompanion.ini import BOM, LocalizationFile  # noqa: E402
-from starcompanion.inject import MergeMode  # noqa: E402
+from starcompanion.inject import MergeMode, backup  # noqa: E402
 from starcompanion.model import StringKind  # noqa: E402
 from starcompanion.portability import PreferencesStore  # noqa: E402
 from starcompanion.sources import contracts_ini  # noqa: E402
@@ -86,6 +86,7 @@ def no_real_game(monkeypatch, tmp_path):
     from starcompanion import install as installs
 
     monkeypatch.setattr(installs, "find_default", lambda: None)
+    monkeypatch.setattr(installs, "find_installs", lambda **_kwargs: [])
     monkeypatch.setenv("STARCOMPANION_CACHE", str(tmp_path / "cache"))
     monkeypatch.setenv("STARCOMPANION_DATA", str(tmp_path / "data"))
 
@@ -100,6 +101,7 @@ def contracts(tmp_path):
 @pytest.fixture
 def window(qapp, contracts):
     w = MainWindow()
+    assert w.start.wait_for_jobs()
     w.state.set_contracts(contracts)
     # The production editor intentionally coalesces rapid state changes on a
     # timer.  Build the in-memory projection explicitly for deterministic GUI
@@ -1464,6 +1466,42 @@ def test_start_reports_a_found_game_in_plain_language(window, fake_game):
     assert "Found Star Citizen" in text and "LIVE" in text
 
 
+def test_start_prefers_freshest_same_channel_candidate_and_explains_why(
+    window,
+    monkeypatch,
+):
+    from PySide6.QtCore import Qt
+    from starcompanion.install import GameInstall
+
+    older = GameInstall(
+        Path("C:/RSI-old/StarCitizen/LIVE"),
+        "LIVE",
+        archive_mtime_ns=1_700_000_000_000_000_000,
+        archive_size=20,
+    )
+    newer = GameInstall(
+        Path("C:/RSI-new/StarCitizen/LIVE"),
+        "LIVE",
+        archive_mtime_ns=1_800_000_000_000_000_000,
+        archive_size=10,
+    )
+    monkeypatch.setattr(window.start, "_adopt_install", lambda: None)
+    window.start.install = None
+
+    window.start._set_installs([older, newer])
+
+    assert window.start.install == newer
+    assert window.start.channel_selector.itemData(0) == newer
+    assert "freshest of 2 LIVE candidates" in window.start.game_status_text()
+    assert "modified time" in window.start.channel_selector.itemData(
+        0, Qt.ItemDataRole.ToolTipRole
+    )
+
+    window.start.channel_selector.setCurrentIndex(1)
+    assert window.start.install == older
+    assert "Selected explicitly" in window.start.operation_status
+
+
 def test_choosing_a_game_derives_the_file_to_modify(window, fake_game):
     """The user never types a path to global.ini."""
     window.start.install = fake_game
@@ -1534,7 +1572,9 @@ def test_update_reads_the_game_when_contracts_are_missing(qapp, fake_game, monke
     assert warned and "Could not read" in warned[0][1]
 
 
-def test_guided_update_creates_clean_install_override(window, tmp_path, monkeypatch):
+def test_guided_update_creates_clean_install_override(
+    window, contracts, tmp_path, monkeypatch
+):
     """The normal install has stock strings in Data.p4k and no loose INI."""
     import p4kbuilder as B
     from starcompanion.install import GameInstall
@@ -1549,6 +1589,11 @@ def test_guided_update_creates_clean_install_override(window, tmp_path, monkeypa
     install = GameInstall(root=root, channel="LIVE", version="test")
     window.start.install = install
     window.start._adopt_install()
+    assert window.start.wait_for_jobs()
+    # The tiny P4K fixture contains localization but no DataCore mission facts.
+    # Publish the test contract set as if the channel-scoped cache had supplied it.
+    window.state.set_contracts(contracts)
+    window.start._contracts_install_key = window.start._install_key(install)
     _wait_until(
         QApplication.instance(),
         lambda: window.state.user_overrides_ready,
@@ -1571,9 +1616,14 @@ def test_guided_update_creates_clean_install_override(window, tmp_path, monkeypa
     window.start.update_game()
     assert window.start.wait_for_jobs()
 
+    assert install.localization().is_file()
     written = LocalizationFile.load(install.localization())
     assert written.get("Other") == "untouched"
     assert written.get("Org_x_title") != "Original"
+    last = window.start._journal().last_operation()
+    assert last["operation"] == "apply"
+    assert last["stage"] == "complete"
+    assert last["plan_id"]
 
 
 def test_undo_reports_when_there_is_nothing_to_undo(window, monkeypatch):
@@ -1583,6 +1633,25 @@ def test_undo_reports_when_there_is_nothing_to_undo(window, monkeypatch):
     window.start.undo_last()
 
     assert shown and "nothing" in shown[0][1].lower()
+
+
+def test_overview_undo_routes_to_guarded_recovery_without_restoring(
+    window, target, tmp_path
+):
+    directory = tmp_path / "backups"
+    selected = backup(target, directory)
+    target.write_bytes((BOM + "Foo=changed\n").encode("utf-8"))
+    before = target.read_bytes()
+    window.state.set_target(target)
+    window.state.backup_dir = directory
+    window.shell.set_current_key("overview")
+
+    window.start.undo_last()
+
+    assert window.shell.current_key() == "manual-apply"
+    assert target.read_bytes() == before
+    assert window.apply.backups.count() == 1
+    assert selected.name in window.apply.backups.item(0).text()
 
 
 def test_read_button_and_its_instruction_are_in_the_same_step(qapp, fake_game):
@@ -1884,6 +1953,45 @@ def test_g2_discovers_and_switches_installed_channels_off_the_gui_thread(
     window.start.channel_selector.setCurrentIndex(1)
     assert window.start.install.channel == "PTU"
     assert window.state.target == roots[1].localization()
+
+
+def test_close_does_not_start_cache_worker_from_queued_discovery_result(
+    qapp, tmp_path, monkeypatch
+):
+    import threading
+
+    from starcompanion.gui.app import MainWindow
+    from starcompanion.install import GameInstall
+
+    root = tmp_path / "StarCitizen" / "LIVE"
+    root.mkdir(parents=True)
+    (root / "Data.p4k").write_bytes(b"fixture")
+    found = GameInstall(root, "LIVE", "test")
+    discovered = threading.Event()
+
+    def discover(**_kwargs):
+        discovered.set()
+        return [found]
+
+    monkeypatch.setattr("starcompanion.install.find_installs", discover)
+
+    fresh = MainWindow()
+    fresh.start._discovery_timer.stop()
+    fresh.start.discover_channels()
+    jobs = tuple(fresh.start._jobs)
+    assert jobs
+    assert discovered.wait(2)
+    for job in jobs:
+        job._thread.quit()
+        assert job.wait(2000)
+
+    # The worker result is queued but not yet delivered to the GUI thread.
+    fresh.close()
+    qapp.processEvents()
+
+    assert fresh.start._shutting_down
+    assert not fresh.start._jobs
+    assert fresh.start._pending_cache_install is None
 
 
 def test_g2_blueprint_tracker_uses_c4_queries_and_background_log_scan(

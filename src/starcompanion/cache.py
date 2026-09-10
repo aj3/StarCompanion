@@ -47,6 +47,10 @@ def _pool_to_dict(pool: BlueprintPool) -> dict[str, Any]:
         "items": pool.items,
         "item_ids": pool.item_ids,
         "item_categories": pool.item_categories,
+        "item_types": pool.item_types,
+        "item_classes": pool.item_classes,
+        "item_sizes": pool.item_sizes,
+        "item_grades": pool.item_grades,
         "gates": [{"kind": g.kind.value, "label": g.label} for g in pool.gates],
         "label": pool.label,
         "example_locations": pool.example_locations,
@@ -64,6 +68,10 @@ def _pool_from_dict(data: dict[str, Any]) -> BlueprintPool:
         item_categories={
             str(k): str(v) for k, v in data.get("item_categories", {}).items()
         },
+        item_types={str(k): str(v) for k, v in data.get("item_types", {}).items()},
+        item_classes={str(k): str(v) for k, v in data.get("item_classes", {}).items()},
+        item_sizes={str(k): str(v) for k, v in data.get("item_sizes", {}).items()},
+        item_grades={str(k): str(v) for k, v in data.get("item_grades", {}).items()},
         gates=[Gate(GateKind(g["kind"]), g["label"]) for g in data.get("gates", ())],
         label=data.get("label"),
         example_locations=list(data.get("example_locations", ())),

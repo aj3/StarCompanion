@@ -113,6 +113,13 @@ before the atomic write. `channel rollback` previews and restores the newest
 backup by default, also requiring `--confirm`; use `--list` or `--backup` to
 select an older scoped backup.
 
+Verified apply and rollback retain the newest 20 target-scoped backups by
+default. Profiles and CLI `--backup-retention` can select 1–200, and the GUI
+exposes the same profile value. Cleanup runs only after a verified write and
+never removes unrelated, renamed, linked, or identity-changed files. Personal
+`user.ini` edits use a separate capped snapshot directory; changed saves create
+a collision-resistant snapshot, while no-op saves create none.
+
 The lower-level `plan`, `apply`, and `restore` commands remain available for
 explicit paths. Low-level `apply` additionally requires `--allow-game-folder`
 inside a detected install.
@@ -232,6 +239,12 @@ Sprint C5 discovers only supported launcher channels and reads installed
 languages directly from each channel's `Data.p4k`. Channel, language, cache,
 override, ownership, backup, and transaction scopes are normalized before any
 path is created.
+
+When multiple folders contain the same channel, discovery ignores inaccessible,
+empty, and non-regular archives and automatically prefers the newest captured
+`Data.p4k` modification time. Archive size and then folder path provide stable
+tie-breaks. The Overview screen shows that rationale and clearly identifies an
+explicit older selection instead of silently switching sources.
 
 ```bash
 starcompanion channels list

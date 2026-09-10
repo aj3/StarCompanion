@@ -14,14 +14,17 @@ from starcompanion.model import BlueprintPool, Contract, ContractSet, Org, Rewar
 from starcompanion.ownership import (
     Acquisition,
     OwnershipError,
+    OwnershipDecision,
     OwnershipConflictError,
     OwnershipRecoveryAvailable,
+    OwnershipRecord,
     OwnershipState,
     OwnershipStore,
     ScanCancelled,
     ScanDiagnostic,
     UnresolvedAcquisition,
     apply_import,
+    apply_manual_ownership,
     apply_resolution,
     discover_log_files,
     discover_logs,
@@ -30,6 +33,7 @@ from starcompanion.ownership import (
     ownership_path,
     ownership_scope,
     plan_import,
+    plan_manual_ownership,
     plan_resolution,
     scan_logs,
     write_export,
@@ -126,6 +130,68 @@ def test_store_round_trip_is_atomic_and_rejects_cross_scope(tmp_path):
     assert store.load() == state
     with pytest.raises(OwnershipError):
         store.save(OwnershipState("PTU"))
+
+
+def test_manual_multiselect_plan_is_previewed_revision_bound_and_reversible(tmp_path):
+    blueprint_catalog = catalog()
+    target = OwnershipStore("LIVE", root=tmp_path)
+    state = target.load()
+    plan = plan_manual_ownership(
+        blueprint_catalog,
+        state,
+        [f"cig:{UUID_A}", f"cig:{UUID_B}", f"cig:{UUID_A}"],
+        OwnershipDecision.OWNED,
+        now="2026-09-09T12:00:00Z",
+    )
+    assert len(plan.changes) == 2
+    assert not target.path.exists(), "preview must not persist"
+
+    updated = apply_manual_ownership(plan, state)
+    target.save(updated)
+    assert set(target.load().records) == {f"cig:{UUID_A}", f"cig:{UUID_B}"}
+    assert {
+        item.source
+        for record in updated.records.values()
+        for item in record.acquisitions
+    } == {"manual"}
+
+    removal = plan_manual_ownership(
+        blueprint_catalog,
+        updated,
+        [f"cig:{UUID_A}"],
+        OwnershipDecision.UNOWNED,
+        now="2026-09-09T12:01:00Z",
+    )
+    removed = apply_manual_ownership(removal, updated)
+    target.save(removed)
+    assert set(target.load().records) == {f"cig:{UUID_B}"}
+
+
+def test_manual_plan_rejects_unknown_ids_revision_drift_and_before_state_drift():
+    blueprint_catalog = catalog()
+    state = OwnershipState("LIVE")
+    with pytest.raises(OwnershipError, match="not present"):
+        plan_manual_ownership(
+            blueprint_catalog, state, ["cig:not-known"], OwnershipDecision.OWNED
+        )
+
+    plan = plan_manual_ownership(
+        blueprint_catalog,
+        state,
+        [f"cig:{UUID_A}"],
+        OwnershipDecision.OWNED,
+    )
+    newer = copy.deepcopy(state)
+    newer.revision += 1
+    with pytest.raises(OwnershipConflictError, match="changed after preview"):
+        apply_manual_ownership(plan, newer)
+
+    changed = copy.deepcopy(state)
+    changed.records[f"cig:{UUID_A}"] = OwnershipRecord(
+        f"cig:{UUID_A}", "Coda Pistol"
+    )
+    with pytest.raises(OwnershipConflictError, match="changed after preview"):
+        apply_manual_ownership(plan, changed)
 
 
 def test_store_inspection_error_redacts_its_absolute_path(monkeypatch, tmp_path):
@@ -398,6 +464,10 @@ def test_ambiguous_acquisition_has_explicit_exact_candidate_resolution(tmp_path)
     assert not resolved.unresolved
     with pytest.raises(OwnershipError, match="exact-name candidate"):
         plan_resolution(state, catalog(), acquisition[:8], "cig:" + UUID_A.replace("1", "2"))
+
+    state.revision += 1
+    with pytest.raises(OwnershipError, match="changed after preview"):
+        apply_resolution(plan, state)
 
 
 def test_cancellation_never_mutates_input_state(tmp_path):
@@ -703,6 +773,21 @@ def test_import_preview_scmdb_json_apply_and_round_trip_exports(tmp_path):
     assert len(state.records) == 1
     assert json.loads(export_json(state, catalog()))["blueprints"][0]["completed"] is True
     assert b"blueprint_id,name,category,acquired_at,source" in export_csv(state, catalog())
+
+
+def test_import_preview_is_scope_and_revision_bound(tmp_path):
+    source = tmp_path / "scmdb.json"
+    source.write_text(
+        json.dumps({"blueprints": [{"name": "Coda Pistol", "completed": True}]}),
+        encoding="utf-8",
+    )
+    original = OwnershipState("LIVE", revision=4)
+    plan = plan_import(source, catalog(), original)
+
+    with pytest.raises(OwnershipError, match="changed after preview"):
+        apply_import(plan, OwnershipState("LIVE", revision=5))
+    with pytest.raises(OwnershipError, match="changed after preview"):
+        apply_import(plan, OwnershipState("PTU", revision=4))
 
 
 def test_import_limits_shapes_and_export_overwrite_guard(tmp_path):

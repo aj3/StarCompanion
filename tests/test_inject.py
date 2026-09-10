@@ -2,6 +2,8 @@ import pytest
 
 from starcompanion.ini import BOM, LocalizationFile
 from starcompanion.inject import (
+    BackupSafetyError,
+    DEFAULT_BACKUP_RETENTION,
     InjectionPlan,
     MergeMode,
     UnconfirmedWriteError,
@@ -10,7 +12,10 @@ from starcompanion.inject import (
     backup,
     build_operation_plan,
     plan,
+    prune_backups,
     restore,
+    rollback,
+    safe_backups,
 )
 from starcompanion.transactions import (
     TargetChangedError,
@@ -429,3 +434,205 @@ def test_failed_atomic_replace_leaves_original_intact(target, tmp_path, monkeypa
 
     assert target.read_bytes() == before
     assert not list(target.parent.glob(f".{target.name}.*.tmp"))
+
+
+def test_apply_caps_timestamped_backups_at_default_retention(target, tmp_path):
+    backups = tmp_path / "backups"
+    for index in range(DEFAULT_BACKUP_RETENTION + 5):
+        apply(
+            target,
+            {"Foo": f"value {index}"},
+            confirmed=True,
+            backup_dir=backups,
+        )
+
+    retained = safe_backups(backups, target)
+    assert len(retained) == DEFAULT_BACKUP_RETENTION
+    assert LocalizationFile.load(retained[0]).get("Foo") == (
+        f"value {DEFAULT_BACKUP_RETENTION + 3}"
+    )
+
+
+def test_custom_retention_one_keeps_the_just_created_restorable_backup(
+    target, tmp_path
+):
+    backups = tmp_path / "backups"
+    for index in range(4):
+        apply(
+            target,
+            {"Foo": f"value {index}"},
+            confirmed=True,
+            backup_dir=backups,
+            backup_retention=1,
+        )
+    retained = safe_backups(backups, target)
+    assert len(retained) == 1
+    assert LocalizationFile.load(retained[0]).get("Foo") == "value 2"
+
+
+@pytest.mark.parametrize("retention", [0, -1, 201, True, 1.5])
+def test_invalid_retention_is_rejected_before_any_write(target, tmp_path, retention):
+    before = target.read_bytes()
+    backups = tmp_path / "backups"
+    with pytest.raises(ValueError, match="backup retention"):
+        apply(
+            target,
+            {"Foo": "changed"},
+            confirmed=True,
+            backup_dir=backups,
+            backup_retention=retention,
+        )
+    assert target.read_bytes() == before
+    assert not backups.exists()
+
+
+def test_noop_apply_never_prunes_existing_backups(target, tmp_path):
+    backups = tmp_path / "backups"
+    for _index in range(3):
+        backup(target, backups)
+    before = safe_backups(backups, target)
+    apply(
+        target,
+        {"Foo": "original"},
+        confirmed=True,
+        backup_dir=backups,
+        backup_retention=1,
+    )
+    assert safe_backups(backups, target) == before
+
+
+def test_pruning_ignores_unrelated_malformed_and_linked_entries(target, tmp_path):
+    backups = tmp_path / "backups"
+    first = backup(target, backups)
+    second = backup(target, backups)
+    unrelated = backups / "notes.ini"
+    malformed = backups / "global.not-a-timestamp.ini"
+    directory = backups / "global.20260909-120000-000000.ini"
+    unrelated.write_text("keep", encoding="utf-8")
+    malformed.write_text("keep", encoding="utf-8")
+    directory.mkdir()
+    linked = backups / "global.20260909-120001-000000.ini"
+    try:
+        linked.symlink_to(first)
+    except OSError:
+        linked = None
+
+    result = prune_backups(backups, target, keep=1, protected=(second,))
+
+    assert safe_backups(backups, target) == (second,)
+    assert first in result.deleted
+    assert unrelated.read_text(encoding="utf-8") == "keep"
+    assert malformed.read_text(encoding="utf-8") == "keep"
+    assert directory.is_dir()
+    if linked is not None:
+        assert linked.is_symlink()
+
+
+def test_linked_backup_root_is_rejected_without_touching_target(target, tmp_path):
+    real = tmp_path / "real-backups"
+    real.mkdir()
+    linked = tmp_path / "backups"
+    try:
+        linked.symlink_to(real, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory links unavailable: {exc}")
+    before = target.read_bytes()
+
+    with pytest.raises(BackupSafetyError, match="ordinary local directory"):
+        apply(target, {"Foo": "changed"}, confirmed=True, backup_dir=linked)
+
+    assert target.read_bytes() == before
+    assert not list(real.iterdir())
+
+
+def test_retention_failure_after_verified_commit_is_diagnostic_not_false_failure(
+    target, tmp_path, monkeypatch
+):
+    import starcompanion.inject as injection
+
+    def fail_retention(*_args, **_kwargs):
+        raise BackupSafetyError("simulated cleanup race")
+
+    monkeypatch.setattr(injection, "_prune_backups_unlocked", fail_retention)
+    result = apply(
+        target,
+        {"Foo": "changed"},
+        confirmed=True,
+        backup_dir=tmp_path / "backups",
+    )
+
+    assert LocalizationFile.load(target).get("Foo") == "changed"
+    assert result.transaction_status == "complete"
+    assert any("cleanup skipped" in item for item in result.diagnostics)
+
+
+def test_journal_completion_failure_does_not_prune_prior_backups(
+    target, tmp_path, monkeypatch
+):
+    backups = tmp_path / "backups"
+    for _index in range(3):
+        backup(target, backups)
+    state = TransactionJournal(tmp_path / "journal.json", tmp_path / "last.json")
+    before = safe_backups(backups, target)
+
+    def fail_complete(*, final):
+        raise OSError("simulated journal durability failure")
+
+    monkeypatch.setattr(state, "complete", fail_complete)
+    with pytest.raises(OSError, match="journal durability"):
+        apply(
+            target,
+            {"Foo": "changed"},
+            confirmed=True,
+            backup_dir=backups,
+            backup_retention=1,
+            journal=state,
+        )
+    assert set(safe_backups(backups, target)).issuperset(before)
+
+
+def test_guarded_rollback_is_scoped_journaled_verified_and_retained(target, tmp_path):
+    backups = tmp_path / "backups"
+    selected = backup(target, backups)
+    apply(target, {"Foo": "changed"}, confirmed=True, backup_dir=backups)
+    before = fingerprint(target)
+    selected_fingerprint = fingerprint(selected)
+    journal = TransactionJournal(tmp_path / "journal.json", tmp_path / "last.json")
+
+    result = rollback(
+        selected,
+        target,
+        confirmed=True,
+        backup_dir=backups,
+        expected_backup_fingerprint=selected_fingerprint,
+        expected_target_fingerprint=before,
+        journal=journal,
+        backup_retention=1,
+    )
+
+    assert target.read_bytes() == STOCK.encode("utf-8")
+    assert result.final_fingerprint.sha256 == selected_fingerprint.sha256
+    assert result.recovery_backup in safe_backups(backups, target)
+    assert len(safe_backups(backups, target)) == 1
+    assert journal.last_operation()["operation"] == "rollback"
+    assert not journal.journal_path.exists()
+
+
+def test_guarded_rollback_rejects_unscoped_or_renamed_backup(target, tmp_path):
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    outside = tmp_path / "outside.ini"
+    outside.write_bytes(STOCK.encode("utf-8"))
+    renamed = backups / "manual-copy.ini"
+    renamed.write_bytes(STOCK.encode("utf-8"))
+    before = target.read_bytes()
+
+    for selected in (outside, renamed):
+        with pytest.raises(BackupSafetyError):
+            rollback(
+                selected,
+                target,
+                confirmed=True,
+                backup_dir=backups,
+            )
+    assert target.read_bytes() == before

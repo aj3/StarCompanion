@@ -316,6 +316,26 @@ class Renderer:
                         for item in pool.items[: self.options.max_pool_items]
                         if item in pool.item_categories
                     },
+                    item_types={
+                        item: pool.item_types[item]
+                        for item in pool.items[: self.options.max_pool_items]
+                        if item in pool.item_types
+                    },
+                    item_classes={
+                        item: pool.item_classes[item]
+                        for item in pool.items[: self.options.max_pool_items]
+                        if item in pool.item_classes
+                    },
+                    item_sizes={
+                        item: pool.item_sizes[item]
+                        for item in pool.items[: self.options.max_pool_items]
+                        if item in pool.item_sizes
+                    },
+                    item_grades={
+                        item: pool.item_grades[item]
+                        for item in pool.items[: self.options.max_pool_items]
+                        if item in pool.item_grades
+                    },
                     gates=pool.gates,
                     label=pool.label,
                     example_locations=pool.example_locations,

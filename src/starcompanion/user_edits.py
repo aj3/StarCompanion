@@ -12,8 +12,10 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Mapping
@@ -30,6 +32,10 @@ MAX_KEY_LENGTH = 512
 MAX_VALUE_LENGTH = 1024 * 1024
 MAX_HISTORY = 100
 MAX_HISTORY_FILE_BYTES = 64 * 1024 * 1024
+ORIGIN_SCHEMA = 1
+SNAPSHOT_RETENTION_DEFAULT = 20
+SNAPSHOT_RETENTION_MAX = 200
+ORIGIN_KINDS = frozenset({"authored", "imported", "derived", "unknown"})
 _SCOPE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._()\-]{0,63}\Z")
 
 
@@ -53,6 +59,33 @@ class ConflictChoice(Enum):
     ERROR = "error"
     KEEP = "keep"
     INCOMING = "incoming"
+
+
+class ReconciliationChoice(Enum):
+    KEEP = "keep"
+    IMPORT = "import"
+    APPEND = "append"
+    PREPEND = "prepend"
+    CUSTOM = "custom"
+
+
+@dataclass(frozen=True)
+class KeyResolution:
+    choice: ReconciliationChoice
+    custom_value: str | None = None
+
+    def resolved_value(self, current: str, incoming: str) -> str | None:
+        if self.choice is ReconciliationChoice.KEEP:
+            return None
+        if self.choice is ReconciliationChoice.IMPORT:
+            return incoming
+        if self.choice is ReconciliationChoice.APPEND:
+            return current + incoming
+        if self.choice is ReconciliationChoice.PREPEND:
+            return incoming + current
+        if self.custom_value is None:
+            raise UserEditError("custom reconciliation requires an explicit value")
+        return self.custom_value
 
 
 def data_dir() -> Path:
@@ -167,6 +200,19 @@ class UserEditStore:
     channel: str
     language: str = "english"
     root: Path | None = None
+    snapshot_retention: int = SNAPSHOT_RETENTION_DEFAULT
+    last_snapshot_warning: str | None = field(
+        default=None,
+        init=False,
+        compare=False,
+        repr=False,
+    )
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.snapshot_retention <= SNAPSHOT_RETENTION_MAX:
+            raise UserEditError(
+                f"snapshot retention must be between 0 and {SNAPSHOT_RETENTION_MAX}"
+            )
 
     @property
     def path(self) -> Path:
@@ -176,10 +222,25 @@ class UserEditStore:
     def history_path(self) -> Path:
         return self.path.with_name("history.json")
 
+    @property
+    def origins_path(self) -> Path:
+        return self.path.with_name("origins.json")
+
+    @property
+    def snapshot_dir(self) -> Path:
+        return self.path.parent / "user-snapshots"
+
     def load(self) -> dict[str, str]:
         return load_ini(self.path)
 
-    def save(self, values: Mapping[str, str], *, allow_empty: bool = False) -> None:
+    def save(
+        self,
+        values: Mapping[str, str],
+        *,
+        allow_empty: bool = False,
+        origins: Mapping[str, str] | None = None,
+    ) -> None:
+        object.__setattr__(self, "last_snapshot_warning", None)
         materialized = dict(values)
         _validate_values(materialized)
         if len(materialized) > MAX_ENTRIES:
@@ -191,15 +252,148 @@ class UserEditStore:
             raise UserEditError(
                 f"user.ini exceeds the {MAX_FILE_BYTES:,}-byte storage limit"
             )
-        if not materialized and self.path.is_file() and self.load() and not allow_empty:
+        current = self.load() if self.path.is_file() else {}
+        if not materialized and current and not allow_empty:
             raise EmptyUserModelError(
                 "refusing to replace populated user.ini with an empty model"
             )
+        if materialized == current and self.path.is_file():
+            if origins is not None:
+                self._save_origins(materialized, origins)
+            return
+        if self.path.is_file():
+            self._snapshot_current()
+        # Stage digest-bound metadata first. If this write fails, the user's
+        # current INI remains untouched; if the INI write fails afterwards,
+        # the mismatched digest makes the staged metadata inert.
+        if origins is not None:
+            self._save_origins(materialized, origins)
         _atomic_write(self.path, serialized)
+        try:
+            self._prune_snapshots()
+        except OSError as exc:
+            detail = exc.strerror or exc.__class__.__name__
+            object.__setattr__(
+                self,
+                "last_snapshot_warning",
+                "user.ini was saved, but older snapshot cleanup was skipped: "
+                f"{detail}",
+            )
 
     def export(self, destination: Path) -> None:
         values = self.load()
         _atomic_write(destination, _serialize(values))
+
+    def load_origins(self, values: Mapping[str, str] | None = None) -> dict[str, str]:
+        """Load digest-bound authorship metadata, failing closed to unknown."""
+
+        current = dict(self.load() if values is None else values)
+        try:
+            if self.origins_path.stat().st_size > MAX_FILE_BYTES:
+                return {}
+            data = json.loads(
+                self.origins_path.read_text(encoding="utf-8"),
+                object_pairs_hook=_strict_json_object,
+            )
+            raw = data.get("origins")
+            if (
+                data.get("schema_version") != ORIGIN_SCHEMA
+                or data.get("user_ini_sha256") != _digest(current)
+                or not isinstance(raw, dict)
+            ):
+                return {}
+            result: dict[str, str] = {}
+            for key, origin in raw.items():
+                if key not in current or origin not in ORIGIN_KINDS:
+                    return {}
+                result[key] = origin
+            return result
+        except (
+            FileNotFoundError,
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            UserEditError,
+            AttributeError,
+        ):
+            return {}
+
+    def snapshots(self) -> tuple[Path, ...]:
+        if _is_link_like(self.snapshot_dir) or not self.snapshot_dir.is_dir():
+            return ()
+        prefix = f"{self.path.stem}."
+        return tuple(
+            sorted(
+                (
+                    path
+                    for path in self.snapshot_dir.iterdir()
+                    if path.is_file()
+                    and not path.is_symlink()
+                    and path.name.startswith(prefix)
+                    and path.suffix == self.path.suffix
+                ),
+                key=lambda path: path.name,
+                reverse=True,
+            )
+        )
+
+    def _save_origins(
+        self,
+        values: Mapping[str, str],
+        origins: Mapping[str, str],
+    ) -> None:
+        clean: dict[str, str] = {}
+        for key in values:
+            origin = origins.get(key, "unknown")
+            if origin not in ORIGIN_KINDS:
+                raise UserEditError(f"invalid authorship origin for {key!r}")
+            clean[key] = origin
+        payload = json.dumps(
+            {
+                "schema_version": ORIGIN_SCHEMA,
+                "user_ini_sha256": _digest(values),
+                "origins": clean,
+            },
+            indent=2,
+            sort_keys=True,
+        ) + "\n"
+        if len(payload.encode("utf-8")) > MAX_FILE_BYTES:
+            raise UserEditError("user-edit authorship metadata exceeds its size limit")
+        _atomic_write(self.origins_path, payload)
+
+    def _snapshot_current(self) -> None:
+        if self.snapshot_retention == 0:
+            return
+        if _is_link_like(self.snapshot_dir):
+            raise UserEditError("user snapshot directory must not be a link or junction")
+        values = self.load()
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
+        nonce = secrets.token_hex(16)
+        destination = (
+            self.snapshot_dir
+            / f"{self.path.stem}.{stamp}-{nonce}{self.path.suffix}"
+        )
+        _atomic_write(destination, _serialize(values))
+
+    def _prune_snapshots(self) -> None:
+        for path in self.snapshots()[self.snapshot_retention :]:
+            path.unlink(missing_ok=True)
+
+
+def _strict_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise UserEditError(f"duplicate JSON key {key!r}")
+        result[key] = value
+    return result
+
+
+def _is_link_like(path: Path) -> bool:
+    try:
+        return path.is_symlink() or bool(getattr(path, "is_junction", lambda: False)())
+    except OSError:
+        return True
 
 
 @dataclass(frozen=True)
@@ -262,6 +456,8 @@ class ImportPlan:
     conflicts: tuple[str, ...]
     unchanged: tuple[str, ...]
     choice: ConflictChoice
+    resolutions: Mapping[str, KeyResolution]
+    unresolved_conflicts: tuple[str, ...]
 
     @property
     def added(self) -> tuple[str, ...]:
@@ -274,8 +470,22 @@ class ImportPlan:
     def summary(self) -> str:
         return (
             f"{len(self.added)} add, {len(self.changed)} change, "
-            f"{len(self.unchanged)} unchanged, {len(self.conflicts)} conflict"
+            f"{len(self.unchanged)} unchanged, {len(self.conflicts)} conflict, "
+            f"{len(self.unresolved_conflicts)} unresolved"
         )
+
+    def origin_for(self, key: str) -> str:
+        resolution = self.resolutions.get(key)
+        if resolution is None or resolution.choice is ReconciliationChoice.IMPORT:
+            return "imported"
+        if resolution.choice is ReconciliationChoice.CUSTOM:
+            return "authored"
+        if resolution.choice in {
+            ReconciliationChoice.APPEND,
+            ReconciliationChoice.PREPEND,
+        }:
+            return "derived"
+        return "unknown"
 
 
 def plan_import(
@@ -283,11 +493,15 @@ def plan_import(
     incoming: Mapping[str, str],
     *,
     choice: ConflictChoice = ConflictChoice.ERROR,
+    resolutions: Mapping[str, KeyResolution] | None = None,
 ) -> ImportPlan:
     _validate_values(incoming)
     changes: list[Change] = []
     conflicts: list[str] = []
     unchanged: list[str] = []
+    selected = dict(resolutions or {})
+    applied_resolutions: dict[str, KeyResolution] = {}
+    unresolved: list[str] = []
     for key in sorted(incoming):
         value = incoming[key]
         if key not in current:
@@ -296,14 +510,37 @@ def plan_import(
             unchanged.append(key)
         else:
             conflicts.append(key)
-            if choice is ConflictChoice.INCOMING:
-                changes.append(Change(key, current[key], value))
+            resolution = selected.get(key)
+            if resolution is None and choice is ConflictChoice.KEEP:
+                resolution = KeyResolution(ReconciliationChoice.KEEP)
+            elif resolution is None and choice is ConflictChoice.INCOMING:
+                resolution = KeyResolution(ReconciliationChoice.IMPORT)
+            if resolution is None:
+                unresolved.append(key)
+                continue
+            if not isinstance(resolution, KeyResolution):
+                raise UserEditError(f"invalid reconciliation choice for {key!r}")
+            applied_resolutions[key] = resolution
+            resolved = resolution.resolved_value(current[key], value)
+            if resolved is not None:
+                _validate_values({key: resolved})
+                if resolved == current[key]:
+                    unchanged.append(key)
+                else:
+                    changes.append(Change(key, current[key], resolved))
+    unknown = sorted(set(selected) - set(conflicts))
+    if unknown:
+        raise UserEditError(
+            "reconciliation refers to non-conflicting keys: " + ", ".join(unknown[:10])
+        )
     return ImportPlan(
         incoming=dict(incoming),
         changes=tuple(changes),
         conflicts=tuple(conflicts),
         unchanged=tuple(unchanged),
         choice=choice,
+        resolutions=applied_resolutions,
+        unresolved_conflicts=tuple(unresolved),
     )
 
 
@@ -353,6 +590,13 @@ class EditSession:
     def __init__(self, store: UserEditStore):
         self.store = store
         self.values = store.load()
+        loaded_origins = store.load_origins(self.values)
+        self.authorship_recovered = not self.values or len(loaded_origins) == len(
+            self.values
+        )
+        self.origins = {
+            key: loaded_origins.get(key, "unknown") for key in self.values
+        }
         self.commands: list[EditCommand] = []
         self.cursor = 0
         self.history_recovered = True
@@ -366,28 +610,64 @@ class EditSession:
     def can_redo(self) -> bool:
         return self.cursor < len(self.commands)
 
-    def execute(self, command: EditCommand, *, allow_empty: bool = False) -> None:
+    def execute(
+        self,
+        command: EditCommand,
+        *,
+        allow_empty: bool = False,
+        origin: str = "authored",
+        origin_by_key: Mapping[str, str] | None = None,
+    ) -> None:
+        if origin not in ORIGIN_KINDS:
+            raise UserEditError(f"invalid edit origin {origin!r}")
         updated = command.apply(self.values)
+        updated_origins = dict(self.origins)
+        selected_origins = dict(origin_by_key or {})
+        for change in command.changes:
+            if change.after is None:
+                updated_origins.pop(change.key, None)
+            else:
+                chosen = selected_origins.get(change.key, origin)
+                if chosen not in ORIGIN_KINDS:
+                    raise UserEditError(f"invalid edit origin for {change.key!r}")
+                updated_origins[change.key] = chosen
         commands = self.commands[: self.cursor] + [command]
         if len(commands) > MAX_HISTORY:
             commands = commands[-MAX_HISTORY:]
-        self._commit(updated, commands, len(commands), allow_empty=allow_empty)
+        self._commit(
+            updated,
+            updated_origins,
+            commands,
+            len(commands),
+            allow_empty=allow_empty,
+        )
 
     def import_plan(self, plan: ImportPlan) -> None:
-        if plan.conflicts and plan.choice is ConflictChoice.ERROR:
+        if plan.unresolved_conflicts:
             raise UserEditError(
-                "import has unresolved conflicts: " + ", ".join(plan.conflicts[:10])
+                "import has unresolved conflicts: "
+                + ", ".join(plan.unresolved_conflicts[:10])
             )
         if not plan.changes:
             return
-        self.execute(EditCommand("import user.ini", plan.changes))
+        self.execute(
+            EditCommand("import user.ini", plan.changes),
+            origin="imported",
+            origin_by_key={change.key: plan.origin_for(change.key) for change in plan.changes},
+        )
 
     def undo(self) -> EditCommand:
         if not self.can_undo:
             raise NothingToUndoError("nothing to undo")
         command = self.commands[self.cursor - 1]
         updated = command.undo(self.values)
-        self._commit(updated, self.commands, self.cursor - 1, allow_empty=True)
+        origins = dict(self.origins)
+        for change in command.changes:
+            if change.before is None:
+                origins.pop(change.key, None)
+            else:
+                origins[change.key] = "unknown"
+        self._commit(updated, origins, self.commands, self.cursor - 1, allow_empty=True)
         return command
 
     def redo(self) -> EditCommand:
@@ -395,12 +675,19 @@ class EditSession:
             raise NothingToRedoError("nothing to redo")
         command = self.commands[self.cursor]
         updated = command.apply(self.values)
-        self._commit(updated, self.commands, self.cursor + 1, allow_empty=True)
+        origins = dict(self.origins)
+        for change in command.changes:
+            if change.after is None:
+                origins.pop(change.key, None)
+            else:
+                origins[change.key] = "unknown"
+        self._commit(updated, origins, self.commands, self.cursor + 1, allow_empty=True)
         return command
 
     def _commit(
         self,
         values: Mapping[str, str],
+        origins: Mapping[str, str],
         commands: list[EditCommand],
         cursor: int,
         *,
@@ -412,7 +699,7 @@ class EditSession:
             raise UserEditError(
                 "user.ini changed outside this edit session; reload before saving"
             )
-        self.store.save(values, allow_empty=allow_empty)
+        self.store.save(values, allow_empty=allow_empty, origins=origins)
         kept_commands = list(commands)
         kept_cursor = cursor
         while True:
@@ -441,11 +728,13 @@ class EditSession:
             # make the old, now-mismatched history inert before reporting the
             # journal failure to the caller.
             self.values = dict(values)
+            self.origins = dict(origins)
             self.commands = []
             self.cursor = 0
             self.history_recovered = False
             raise
         self.values = dict(values)
+        self.origins = dict(origins)
         self.commands = kept_commands
         self.cursor = kept_cursor
 
@@ -500,8 +789,13 @@ __all__ = [
     "EditSession",
     "EmptyUserModelError",
     "ImportPlan",
+    "KeyResolution",
     "NothingToRedoError",
     "NothingToUndoError",
+    "ORIGIN_KINDS",
+    "ReconciliationChoice",
+    "SNAPSHOT_RETENTION_DEFAULT",
+    "SNAPSHOT_RETENTION_MAX",
     "UserEditError",
     "UserEditStore",
     "data_dir",

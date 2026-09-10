@@ -884,13 +884,17 @@ the GUI and includes the production LIVE/HOTFIX log workflow described under
 C4. The complete core, GUI, screenshot, security, adversarial-log, packaging,
 and Windows/Ubuntu CI gates passed together on the G3 implementation commit.
 
-### Planned G4–G7 parity closure
+### G4 completion and planned G5–G7 parity closure
 
-- **G4** completes ownership/editor operations, per-key INI reconciliation
+- **G4 — complete (2026-09-10):** ownership/editor operations, per-key INI reconciliation
   (`keep`, `import`, `append`, `prepend`, or `custom`), capped localization
   backup retention, separate rotating `user.ini` snapshots, and a safe
   shareable Loc-Pack equivalent containing only user-authored deltas, a
   profile, and instructions to rebuild from the recipient's own `Data.p4k`.
+  The completed pass also adds safe markup previews, cached per-column filters,
+  bounded local-only layout persistence, and visible deterministic selection of
+  the freshest valid same-channel archive. The final Windows local gate passed
+  978 tests with 14 environment-dependent skips and no failures.
 - **G5** extracts independently evidenced mission type/difficulty,
   friendly/hostile spawn, ace-pilot, turret, and engagement facts alongside
   the planned entity providers. Shared-description ambiguity suppresses an
