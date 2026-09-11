@@ -96,6 +96,24 @@ def test_absent_provider_is_unavailable_without_affecting_peer():
     assert vehicle.capability.status is CapabilityStatus.AVAILABLE
 
 
+def test_component_provider_excludes_records_owned_by_specialized_peers():
+    source = entity_fixture()
+    source.entries.append(
+        (
+            "Weapon.Test",
+            "Data/Libs/Foundry/Records/Entities/SCItem/Weapons/Test/weapon.xml",
+            "10000000-0000-0000-0000-000000000003",
+            {"displayName": "@weapon_name_test", "itemSize": 2},
+        )
+    )
+    source.__post_init__()
+
+    component = baseline_entity_providers()[0].extract(DataForgeIndex(source))
+
+    assert component.capability.records_examined == 1
+    assert {fact.entity_id for fact in component.facts} == {COMPONENT_ID}
+
+
 def test_build_scoped_correction_preserves_original_and_source_evidence():
     correction = BuildCorrection(
         "vehicle-test-mass-42",

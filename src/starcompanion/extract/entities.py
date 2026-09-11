@@ -58,6 +58,7 @@ class ProviderSpec:
     kind: EntityKind
     path_fragments: tuple[str, ...]
     fields: tuple[FieldSpec, ...]
+    excluded_path_fragments: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.provider or not self.version or not self.path_fragments:
@@ -177,6 +178,10 @@ class LocalEntityProvider:
             node
             for node in index.nodes
             if any(fragment.casefold() in node.normalized_path for fragment in self.spec.path_fragments)
+            and not any(
+                fragment.casefold() in node.normalized_path
+                for fragment in self.spec.excluded_path_fragments
+            )
         )
         if not nodes:
             diagnostic = Diagnostic(
@@ -374,7 +379,7 @@ VEHICLE_PROVIDER = ProviderSpec(
     "local-dataforge-vehicles",
     "1",
     EntityKind.VEHICLE,
-    ("/entities/spaceships/", "/vehicles/"),
+    ("/entities/spaceships/", "/entities/vehicles/"),
     (
         FieldSpec("name", ("displayName", "vehicleName"), ScalarKind.LOCALE_KEY, True),
         FieldSpec("mass", ("mass",), ScalarKind.FLOAT),
@@ -395,6 +400,7 @@ COMPONENT_PROVIDER = ProviderSpec(
         FieldSpec("grade", ("grade",), ScalarKind.STRING),
         FieldSpec("class", ("class", "itemClass"), ScalarKind.STRING),
     ),
+    ("/weapons/", "/medical/", "/commodities/"),
 )
 
 
