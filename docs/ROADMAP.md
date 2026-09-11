@@ -37,8 +37,12 @@ that phase's **Resume prompt**.
 | | 9b. Mission XML layer | ✅ Done — reader shipped, premise disproved |
 | 4 · Ship | 10. Packaging & release | ✅ Done — 292 tests |
 
-The catch-up program has completed C0–C6 and G1–G4. **Sprint G4 — Ownership
-and Editor Completion** is complete: revision-bound manual ownership, complete
+The catch-up program has completed C0–C6 and G1–G4. **Sprint G5 — Local Entity
+Providers** is active. Its first synthetic-first foundation now provides typed
+vehicle and component extraction, per-value source evidence, independent
+capability/drift reports, and exact-build corrections that fail closed while
+preserving the original value. **Sprint G4 — Ownership and Editor Completion**
+is complete: revision-bound manual ownership, complete
 tracker operations, exact foreign-name repair, ownership-aware rendering,
 per-key conflict reconciliation, authored-only delta packs, independent column
 filters, bounded rich previews, backup/user-edit retention, local-only layout

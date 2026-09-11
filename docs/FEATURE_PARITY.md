@@ -61,13 +61,13 @@ does not execute or silently download either project's code or generated data.
 | Turret counts and engagement details | **Planned** | G5 extracts typed, per-value evidence; G6 adds independently controlled formatting. |
 | Hauling/delivery/courier routes and title shortening | **Planned** | G6 presentation provider and Tag Builder. |
 | Battaglia/asteroid resource-signature tags | **Planned** | G6 mission/mining provider. |
-| Ship statistics and component summaries | **Planned** | G5 vehicle provider. |
-| Ship-component and ship-weapon statistics | **Planned** | G5 item providers. |
+| Ship statistics and component summaries | **Partial** | G5 typed vehicle provider foundation is synthetic-tested; schema-specific fact expansion and live-build validation remain. |
+| Ship-component and ship-weapon statistics | **Partial** | G5 typed component provider foundation is synthetic-tested; specialized ship-weapon facts remain. |
 | FPS-weapon statistics | **Planned** | G5 item providers. |
 | Medical-consumable effects | **Planned** | G5 medical provider. |
 | Commodity and crafting cross-references | **Planned** | G5 commodity/crafting provider. |
 | Journal/discovery enhancements and mining compendium | **Planned** | G5 facts plus G6 presentation pack. |
-| Provider capability, drift, and per-value evidence | **Partial** | Complete for the current mission reward facts; every new G5 fact/provider must fail independently and meet the existing evidence contract. |
+| Provider capability, drift, and per-value evidence | **Partial** | Complete for mission rewards and the initial G5 vehicle/component providers, including fail-closed exact-build corrections; remaining providers must meet the same contract. |
 
 ## Editor, presentation, and ownership
 
