@@ -38,9 +38,10 @@ that phase's **Resume prompt**.
 | 4 · Ship | 10. Packaging & release | ✅ Done — 292 tests |
 
 The catch-up program has completed C0–C6 and G1–G4. **Sprint G5 — Local Entity
-Providers** is active. Its first synthetic-first foundation now provides typed
-vehicle and component extraction, per-value source evidence, independent
-capability/drift reports, and exact-build corrections that fail closed while
+Providers** is active. Its synthetic-first catalog now provides typed vehicle,
+component, ship/FPS weapon, medical, commodity, crafting, and journal
+extraction; per-value source evidence; independent capability/drift reports;
+overlap suppression; and exact-build corrections that fail closed while
 preserving the original value. **Sprint G4 — Ownership and Editor Completion**
 is complete: revision-bound manual ownership, complete
 tracker operations, exact foreign-name repair, ownership-aware rendering,

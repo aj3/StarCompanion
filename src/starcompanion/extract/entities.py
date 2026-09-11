@@ -49,6 +49,9 @@ class FieldSpec:
     def __post_init__(self) -> None:
         if not self.name or not self.source_names or any(not item for item in self.source_names):
             raise ValueError("field specs require non-empty names")
+        normalized = [item.casefold() for item in self.source_names]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("field source names must be unique")
 
 
 @dataclass(frozen=True)
@@ -61,8 +64,15 @@ class ProviderSpec:
     excluded_path_fragments: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if not self.provider or not self.version or not self.path_fragments:
+        if not self.provider.strip() or not self.version.strip() or not self.path_fragments:
             raise ValueError("provider specs require identity and path fragments")
+        if any(not item.strip() for item in (*self.path_fragments, *self.excluded_path_fragments)):
+            raise ValueError("provider path fragments must not be empty")
+        normalized_paths = [item.casefold() for item in self.path_fragments]
+        if len(normalized_paths) != len(set(normalized_paths)):
+            raise ValueError("provider path fragments must be unique")
+        if not self.fields:
+            raise ValueError("provider specs require fields")
         names = [item.name.casefold() for item in self.fields]
         if len(names) != len(set(names)):
             raise ValueError("provider fact names must be unique")
@@ -101,6 +111,53 @@ class EntityExtractionResult:
 
 
 @dataclass(frozen=True)
+class EntityCatalogResult:
+    """Independent provider results over one shared DataForge index."""
+
+    provider_results: tuple[EntityExtractionResult, ...]
+
+    @property
+    def capabilities(self) -> tuple[CapabilityReport, ...]:
+        return tuple(item.capability for item in self.provider_results)
+
+    @property
+    def facts(self) -> tuple[EntityFact, ...]:
+        return tuple(fact for item in self.provider_results for fact in item.facts)
+
+    @property
+    def evidence_links(self) -> int:
+        return sum(len(fact.values) for fact in self.facts)
+
+    @property
+    def corrections_applied(self) -> tuple[str, ...]:
+        return tuple(
+            dict.fromkeys(
+                correction
+                for item in self.provider_results
+                for correction in item.corrections_applied
+            )
+        )
+
+    @property
+    def status_counts(self) -> tuple[tuple[CapabilityStatus, int], ...]:
+        return tuple(
+            (status, sum(item.status is status for item in self.capabilities))
+            for status in CapabilityStatus
+        )
+
+    def for_provider(self, provider: str) -> EntityExtractionResult | None:
+        wanted = provider.casefold()
+        return next(
+            (
+                item
+                for item in self.provider_results
+                if item.capability.provider.casefold() == wanted
+            ),
+            None,
+        )
+
+
+@dataclass(frozen=True)
 class BuildCorrection:
     """Reviewed replacement that applies only to one exact game build and field."""
 
@@ -126,6 +183,8 @@ class BuildCorrection:
         )
         if any(not item.strip() for item in required):
             raise ValueError("build corrections require complete provenance")
+        if type(self.expected_value) is not type(self.replacement_value):
+            raise ValueError("correction values must have the same scalar type")
         if self.expected_value == self.replacement_value:
             raise ValueError("a correction must change the source value")
 
@@ -135,7 +194,7 @@ class CorrectionRegistry:
 
     def __init__(self, corrections: Iterable[BuildCorrection] = ()) -> None:
         items = tuple(corrections)
-        ids = [item.correction_id for item in items]
+        ids = [item.correction_id.casefold() for item in items]
         if len(ids) != len(set(ids)):
             raise ValueError("correction ids must be unique")
         targets: set[tuple[str, str, str, str]] = set()
@@ -172,16 +231,18 @@ class LocalEntityProvider:
         self.spec = spec
         self.corrections = corrections or CorrectionRegistry()
 
+    def matches(self, record_path: str) -> bool:
+        path = record_path.casefold()
+        return any(fragment.casefold() in path for fragment in self.spec.path_fragments) and not any(
+            fragment.casefold() in path for fragment in self.spec.excluded_path_fragments
+        )
+
     def extract(self, index: DataForgeIndex, *, build_version: str | None = None) -> EntityExtractionResult:
         build = str(index.source.version if build_version is None else build_version)
         nodes = tuple(
             node
             for node in index.nodes
-            if any(fragment.casefold() in node.normalized_path for fragment in self.spec.path_fragments)
-            and not any(
-                fragment.casefold() in node.normalized_path
-                for fragment in self.spec.excluded_path_fragments
-            )
+            if self.matches(node.normalized_path)
         )
         if not nodes:
             diagnostic = Diagnostic(
@@ -225,7 +286,16 @@ class LocalEntityProvider:
                     for found in matches
                 ]
                 diagnostics.extend(
-                    item.diagnostic for _found, item in converted if item.diagnostic is not None
+                    Diagnostic(
+                        f"{self.spec.kind.value}-field-conversion-schema-drift",
+                        f"Field {field_spec.name!r}: {item.diagnostic.message}",
+                        Severity.WARNING,
+                        node.id,
+                        node.normalized_path,
+                        found.path,
+                    )
+                    for found, item in converted
+                    if item.diagnostic is not None
                 )
                 valid = [(found, item.value) for found, item in converted if item.value is not None]
                 if field_spec.required and not valid:
@@ -375,6 +445,83 @@ def _apply_corrections(
     return EntityExtractionResult(tuple(facts), capability, tuple(applied))
 
 
+def extract_entity_catalog(
+    index: DataForgeIndex,
+    *,
+    build_version: str | None = None,
+    providers: Iterable[LocalEntityProvider] | None = None,
+    corrections: CorrectionRegistry | None = None,
+) -> EntityCatalogResult:
+    """Extract all providers and suppress records claimed by multiple peers."""
+
+    if providers is not None and corrections is not None:
+        raise ValueError("pass corrections through explicit providers or use the default catalog")
+    selected = tuple(providers) if providers is not None else entity_providers(corrections)
+    names = [item.spec.provider.casefold() for item in selected]
+    if len(names) != len(set(names)):
+        raise ValueError("entity provider ids must be unique")
+    results = [
+        provider.extract(index, build_version=build_version)
+        for provider in sorted(selected, key=lambda item: item.spec.provider)
+    ]
+    claims: dict[tuple[str, str], set[int]] = {}
+    for result_index, result in enumerate(results):
+        for fact in result.facts:
+            identity = (fact.entity_id.casefold(), fact.record_path.casefold())
+            claims.setdefault(identity, set()).add(result_index)
+    overlaps = {
+        identity: owners for identity, owners in claims.items() if len(owners) > 1
+    }
+    if not overlaps:
+        return EntityCatalogResult(tuple(results))
+
+    for result_index, result in enumerate(results):
+        affected = tuple(
+            identity for identity, owners in overlaps.items() if result_index in owners
+        )
+        if not affected:
+            continue
+        retained = tuple(
+            fact
+            for fact in result.facts
+            if (fact.entity_id.casefold(), fact.record_path.casefold()) not in affected
+        )
+        diagnostics = list(result.capability.diagnostics)
+        diagnostics.extend(
+            Diagnostic(
+                "provider-classification-overlap-schema-drift",
+                f"Record is claimed by multiple entity providers: {record_path}",
+                Severity.WARNING,
+                record_id,
+                record_path,
+            )
+            for record_id, record_path in affected
+        )
+        retained_corrections = tuple(
+            dict.fromkeys(
+                value.correction_id
+                for fact in retained
+                for value in fact.values
+                if value.correction_id is not None
+            )
+        )
+        results[result_index] = EntityExtractionResult(
+            retained,
+            replace(
+                result.capability,
+                status=(
+                    CapabilityStatus.DEGRADED
+                    if retained
+                    else CapabilityStatus.UNAVAILABLE
+                ),
+                facts_emitted=len(retained),
+                diagnostics=tuple(diagnostics),
+            ),
+            retained_corrections,
+        )
+    return EntityCatalogResult(tuple(results))
+
+
 VEHICLE_PROVIDER = ProviderSpec(
     "local-dataforge-vehicles",
     "1",
@@ -400,14 +547,116 @@ COMPONENT_PROVIDER = ProviderSpec(
         FieldSpec("grade", ("grade",), ScalarKind.STRING),
         FieldSpec("class", ("class", "itemClass"), ScalarKind.STRING),
     ),
-    ("/weapons/", "/medical/", "/commodities/"),
+    ("/weapons/", "/medical/", "/consumables/", "/commodities/", "/crafting/"),
 )
+
+SHIP_WEAPON_PROVIDER = ProviderSpec(
+    "local-dataforge-ship-weapons",
+    "1",
+    EntityKind.SHIP_WEAPON,
+    ("/entities/scitem/weapons/ship/", "/entities/scitem/weapons/vehicle/"),
+    (
+        FieldSpec("name", ("displayName",), ScalarKind.LOCALE_KEY, True),
+        FieldSpec("size", ("size", "itemSize"), ScalarKind.INTEGER),
+        FieldSpec("damage", ("damage", "damageTotal"), ScalarKind.FLOAT),
+        FieldSpec("rate-of-fire", ("rateOfFire", "roundsPerMinute"), ScalarKind.FLOAT),
+        FieldSpec("projectile-speed", ("projectileSpeed", "ammoSpeed"), ScalarKind.FLOAT),
+        FieldSpec("range", ("range", "effectiveRange"), ScalarKind.FLOAT),
+    ),
+)
+
+FPS_WEAPON_PROVIDER = ProviderSpec(
+    "local-dataforge-fps-weapons",
+    "1",
+    EntityKind.FPS_WEAPON,
+    ("/entities/scitem/weapons/fps/", "/entities/scitem/weapons/personal/"),
+    (
+        FieldSpec("name", ("displayName",), ScalarKind.LOCALE_KEY, True),
+        FieldSpec("damage", ("damage", "damageTotal"), ScalarKind.FLOAT),
+        FieldSpec("rate-of-fire", ("rateOfFire", "roundsPerMinute"), ScalarKind.FLOAT),
+        FieldSpec("magazine-capacity", ("magazineCapacity", "ammoCount"), ScalarKind.INTEGER),
+        FieldSpec("effective-range", ("effectiveRange",), ScalarKind.FLOAT),
+    ),
+)
+
+MEDICAL_PROVIDER = ProviderSpec(
+    "local-dataforge-medical",
+    "1",
+    EntityKind.MEDICAL,
+    ("/entities/scitem/medical/", "/entities/scitem/consumables/medical/"),
+    (
+        FieldSpec("name", ("displayName",), ScalarKind.LOCALE_KEY, True),
+        FieldSpec("health-restored", ("healthRestored", "healAmount"), ScalarKind.FLOAT),
+        FieldSpec("duration", ("duration", "effectDuration"), ScalarKind.FLOAT),
+        FieldSpec("overdose-threshold", ("overdoseThreshold",), ScalarKind.FLOAT),
+        FieldSpec("toxicity", ("toxicity",), ScalarKind.FLOAT),
+    ),
+)
+
+COMMODITY_PROVIDER = ProviderSpec(
+    "local-dataforge-commodities",
+    "1",
+    EntityKind.COMMODITY,
+    ("/entities/scitem/commodities/", "/commodities/tradable/"),
+    (
+        FieldSpec("name", ("displayName",), ScalarKind.LOCALE_KEY, True),
+        FieldSpec("base-price", ("basePrice", "price"), ScalarKind.FLOAT),
+        FieldSpec("shop-buy-price", ("buyPrice",), ScalarKind.FLOAT),
+        FieldSpec("shop-sell-price", ("sellPrice",), ScalarKind.FLOAT),
+    ),
+)
+
+CRAFTING_PROVIDER = ProviderSpec(
+    "local-dataforge-crafting",
+    "1",
+    EntityKind.CRAFTING,
+    ("/crafting/blueprints/", "/crafting/recipes/"),
+    (
+        FieldSpec("name", ("displayName", "blueprintName", "recipeName"), ScalarKind.LOCALE_KEY, True),
+        FieldSpec("craft-time", ("craftTime", "duration"), ScalarKind.FLOAT),
+        FieldSpec("output-count", ("outputCount", "quantity"), ScalarKind.INTEGER),
+        FieldSpec("required-rank", ("requiredRank",), ScalarKind.INTEGER),
+    ),
+)
+
+JOURNAL_PROVIDER = ProviderSpec(
+    "local-dataforge-journal",
+    "1",
+    EntityKind.JOURNAL,
+    ("/journal/entries/", "/journalentries/"),
+    (
+        FieldSpec("title", ("title", "displayName"), ScalarKind.LOCALE_KEY, True),
+        FieldSpec("body", ("body", "description", "text"), ScalarKind.LOCALE_KEY),
+        FieldSpec("category", ("category", "entryCategory"), ScalarKind.STRING),
+        FieldSpec("discovery-tag", ("discoveryTag",), ScalarKind.STRING),
+    ),
+)
+
+
+def entity_providers(
+    corrections: CorrectionRegistry | None = None,
+) -> tuple[LocalEntityProvider, ...]:
+    """Return the complete current provider catalog in stable order."""
+
+    return tuple(
+        LocalEntityProvider(spec, corrections=corrections)
+        for spec in (
+            COMMODITY_PROVIDER,
+            COMPONENT_PROVIDER,
+            CRAFTING_PROVIDER,
+            FPS_WEAPON_PROVIDER,
+            JOURNAL_PROVIDER,
+            MEDICAL_PROVIDER,
+            SHIP_WEAPON_PROVIDER,
+            VEHICLE_PROVIDER,
+        )
+    )
 
 
 def baseline_entity_providers(
     corrections: CorrectionRegistry | None = None,
 ) -> tuple[LocalEntityProvider, ...]:
-    """Return the initial G5 providers in deterministic order."""
+    """Return the two providers shipped in the initial G5 checkpoint."""
 
     return tuple(
         LocalEntityProvider(spec, corrections=corrections)

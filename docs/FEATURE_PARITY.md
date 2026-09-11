@@ -62,12 +62,12 @@ does not execute or silently download either project's code or generated data.
 | Hauling/delivery/courier routes and title shortening | **Planned** | G6 presentation provider and Tag Builder. |
 | Battaglia/asteroid resource-signature tags | **Planned** | G6 mission/mining provider. |
 | Ship statistics and component summaries | **Partial** | G5 typed vehicle provider foundation is synthetic-tested; schema-specific fact expansion and live-build validation remain. |
-| Ship-component and ship-weapon statistics | **Partial** | G5 typed component provider foundation is synthetic-tested; specialized ship-weapon facts remain. |
-| FPS-weapon statistics | **Planned** | G5 item providers. |
-| Medical-consumable effects | **Planned** | G5 medical provider. |
-| Commodity and crafting cross-references | **Planned** | G5 commodity/crafting provider. |
-| Journal/discovery enhancements and mining compendium | **Planned** | G5 facts plus G6 presentation pack. |
-| Provider capability, drift, and per-value evidence | **Partial** | Complete for mission rewards and the initial G5 vehicle/component providers, including fail-closed exact-build corrections; remaining providers must meet the same contract. |
+| Ship-component and ship-weapon statistics | **Partial** | G5 component and dedicated ship-weapon provider facts are synthetic-tested; live schema validation remains. |
+| FPS-weapon statistics | **Partial** | G5 dedicated FPS-weapon facts and isolation diagnostics are synthetic-tested; live schema validation remains. |
+| Medical-consumable effects | **Partial** | G5 medical fact extraction is synthetic-tested with typed conversion-drift handling; live schema validation remains. |
+| Commodity and crafting cross-references | **Partial** | Independent G5 commodity and crafting facts are synthetic-tested; reference-graph joins and live validation remain. |
+| Journal/discovery enhancements and mining compendium | **Partial** | G5 journal facts are synthetic-tested; cross-references, mining facts, and G6 presentation remain. |
+| Provider capability, drift, and per-value evidence | **Partial** | Complete for mission rewards and all eight current G5 entity providers, including overlap suppression and fail-closed exact-build corrections; mission-tactical providers and live validation remain. |
 
 ## Editor, presentation, and ownership
 

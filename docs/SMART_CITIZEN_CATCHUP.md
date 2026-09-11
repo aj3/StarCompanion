@@ -895,10 +895,11 @@ and Windows/Ubuntu CI gates passed together on the G3 implementation commit.
   bounded local-only layout persistence, and visible deterministic selection of
   the freshest valid same-channel archive. The final Windows local gate passed
   978 tests with 14 environment-dependent skips and no failures.
-- **G5 — active (2026-09-10):** the first synthetic-first slice adds reusable
-  typed vehicle/component providers, source evidence on every emitted value,
-  isolated capability and schema-drift reports, and reviewed exact-build data
-  corrections that retain the original source value and refuse stale targets.
+- **G5 — active (2026-09-11):** the synthetic-first catalog covers vehicle,
+  component, ship/FPS weapon, medical, commodity, crafting, and journal facts.
+  Every emitted value carries source evidence; provider capability and drift
+  stay isolated; overlapping classification is suppressed; and reviewed
+  exact-build corrections retain originals and refuse stale targets.
 - **G5** extracts independently evidenced mission type/difficulty,
   friendly/hostile spawn, ace-pilot, turret, and engagement facts alongside
   the planned entity providers. Shared-description ambiguity suppresses an
