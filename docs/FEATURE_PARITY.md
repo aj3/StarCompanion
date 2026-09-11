@@ -55,10 +55,10 @@ does not execute or silently download either project's code or generated data.
 | Mission reputation amounts and tracks | **Complete** | C1–C3 local mission provider with field evidence. |
 | Blueprint pools, chances, ranks, regional variants, caveats, and title tags | **Complete** | C1–G3 structured mission rendering. |
 | Direct mission item rewards and scenario points | **Complete** | C1–G3 structured mission rendering. |
-| Mission type and difficulty details | **Planned** | G5 extracts independently evidenced facts; G6 adds independent presentation toggles. Shared-description ambiguity must suppress uncertain output rather than copy it across missions. |
-| Friendly and hostile spawn summaries | **Planned** | G5 extracts per-value evidence; G6 controls concise presentation independently. |
-| Ace-pilot `[ACE]` and uncertain `[ACE?]` markers | **Planned** | G5 distinguishes direct evidence from uncertainty; G6 exposes an independent title-marker toggle. |
-| Turret counts and engagement details | **Planned** | G5 extracts typed, per-value evidence; G6 adds independently controlled formatting. |
+| Mission type and difficulty details | **Partial** | G5 synthetic classification facts carry field evidence; shared descriptions are suppressed. Live validation and G6 presentation remain. |
+| Friendly and hostile spawn summaries | **Partial** | G5 synthetic spawn facts retain contract-reference and target-field evidence with independent diagnostics. Live validation and G6 presentation remain. |
+| Ace-pilot `[ACE]` and uncertain `[ACE?]` markers | **Partial** | G5 distinguishes directly evidenced booleans from medium-confidence probabilities; G6 owns marker presentation. |
+| Turret counts and engagement details | **Partial** | G5 synthetic engagement facts cover turret count, distance, and style through bounded evidence-carrying joins. Live validation and G6 formatting remain. |
 | Hauling/delivery/courier routes and title shortening | **Planned** | G6 presentation provider and Tag Builder. |
 | Battaglia/asteroid resource-signature tags | **Planned** | G6 mission/mining provider. |
 | Ship statistics and component summaries | **Partial** | G5 typed vehicle provider foundation is synthetic-tested; schema-specific fact expansion and live-build validation remain. |

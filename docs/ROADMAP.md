@@ -42,7 +42,10 @@ Providers** is active. Its synthetic-first catalog now provides typed vehicle,
 component, ship/FPS weapon, medical, commodity, crafting, and journal
 extraction; per-value source evidence; independent capability/drift reports;
 overlap suppression; and exact-build corrections that fail closed while
-preserving the original value. **Sprint G4 — Ownership and Editor Completion**
+preserving the original value. Synthetic mission classification, spawn/ace,
+and engagement/turret providers now add bounded reference joins and suppress
+shared-description matching. [G5_LOCAL_PROVIDERS.md](G5_LOCAL_PROVIDERS.md)
+records the evidence and isolation contract. **Sprint G4 — Ownership and Editor Completion**
 is complete: revision-bound manual ownership, complete
 tracker operations, exact foreign-name repair, ownership-aware rendering,
 per-key conflict reconciliation, authored-only delta packs, independent column

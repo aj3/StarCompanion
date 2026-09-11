@@ -899,7 +899,10 @@ and Windows/Ubuntu CI gates passed together on the G3 implementation commit.
   component, ship/FPS weapon, medical, commodity, crafting, and journal facts.
   Every emitted value carries source evidence; provider capability and drift
   stay isolated; overlapping classification is suppressed; and reviewed
-  exact-build corrections retain originals and refuse stale targets.
+  exact-build corrections retain originals and refuse stale targets. Mission
+  type/difficulty, spawn/ace, and engagement/turret facts now use bounded
+  evidence-carrying reference joins and never match through a description
+  shared by multiple mission identities.
 - **G5** extracts independently evidenced mission type/difficulty,
   friendly/hostile spawn, ace-pilot, turret, and engagement facts alongside
   the planned entity providers. Shared-description ambiguity suppresses an

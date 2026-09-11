@@ -825,6 +825,10 @@ class _RecordScope:
     fields: tuple[FieldValue, ...]
 
 
+# Public read-only view used by independent mission providers.
+MissionRecordScope = _RecordScope
+
+
 def _make_scope(
     index: DataForgeIndex,
     node: RecordNode,
@@ -1090,6 +1094,26 @@ def _contract_localization(
                 Evidence(node.id, node.normalized_path, f"{found.path}.{value[0]}", key)
             )
     return titles, descriptions, evidence
+
+
+def mission_contract_scopes(
+    index: DataForgeIndex,
+    node: RecordNode,
+) -> tuple[MissionRecordScope, ...]:
+    """Expose bounded contract variants without duplicating schema traversal."""
+
+    return _contract_scopes(index, node)
+
+
+def mission_contract_localization(
+    index: DataForgeIndex,
+    node: RecordNode,
+    scope: MissionRecordScope,
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[Evidence, ...]]:
+    """Return localization keys and their exact field evidence for one variant."""
+
+    titles, descriptions, evidence = _contract_localization(index, node, scope)
+    return tuple(titles), tuple(descriptions), tuple(evidence)
 
 
 def _mission_reputation(
