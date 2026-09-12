@@ -20,6 +20,7 @@ from .dataforge import (
     ScalarKind,
     Severity,
     convert_scalar,
+    normalize_uuid,
 )
 
 Scalar = str | int | float | bool
@@ -45,6 +46,8 @@ class FieldSpec:
     source_names: tuple[str, ...]
     kind: ScalarKind
     required: bool = False
+    path_fragments: tuple[str, ...] = ()
+    follow_pointers: bool = True
 
     def __post_init__(self) -> None:
         if not self.name or not self.source_names or any(not item for item in self.source_names):
@@ -52,6 +55,25 @@ class FieldSpec:
         normalized = [item.casefold() for item in self.source_names]
         if len(normalized) != len(set(normalized)):
             raise ValueError("field source names must be unique")
+        if any(not item.strip() for item in self.path_fragments):
+            raise ValueError("field path fragments must not be empty")
+
+
+@dataclass(frozen=True)
+class RelationshipSpec:
+    """A reviewed reference edge exposed as a stable relationship."""
+
+    name: str
+    source_names: tuple[str, ...]
+    target_structs: tuple[str, ...]
+    path_fragments: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.name.strip() or not self.source_names or not self.target_structs:
+            raise ValueError("relationship specs require names and target structs")
+        for values in (self.source_names, self.target_structs, self.path_fragments):
+            if any(not item.strip() for item in values):
+                raise ValueError("relationship aliases must not be empty")
 
 
 @dataclass(frozen=True)
@@ -62,12 +84,19 @@ class ProviderSpec:
     path_fragments: tuple[str, ...]
     fields: tuple[FieldSpec, ...]
     excluded_path_fragments: tuple[str, ...] = ()
+    relationships: tuple[RelationshipSpec, ...] = ()
+    struct_names: tuple[str, ...] = ()
+    max_pointer_hops: int | None = None
 
     def __post_init__(self) -> None:
         if not self.provider.strip() or not self.version.strip() or not self.path_fragments:
             raise ValueError("provider specs require identity and path fragments")
         if any(not item.strip() for item in (*self.path_fragments, *self.excluded_path_fragments)):
             raise ValueError("provider path fragments must not be empty")
+        if any(not item.strip() for item in self.struct_names):
+            raise ValueError("provider struct names must not be empty")
+        if self.max_pointer_hops is not None and not 0 <= self.max_pointer_hops <= 64:
+            raise ValueError("provider pointer hops must be between 0 and 64")
         normalized_paths = [item.casefold() for item in self.path_fragments]
         if len(normalized_paths) != len(set(normalized_paths)):
             raise ValueError("provider path fragments must be unique")
@@ -76,6 +105,9 @@ class ProviderSpec:
         names = [item.name.casefold() for item in self.fields]
         if len(names) != len(set(names)):
             raise ValueError("provider fact names must be unique")
+        relationship_names = [item.name.casefold() for item in self.relationships]
+        if len(relationship_names) != len(set(relationship_names)):
+            raise ValueError("provider relationship names must be unique")
 
 
 @dataclass(frozen=True)
@@ -92,11 +124,25 @@ class EntityValue:
 
 
 @dataclass(frozen=True)
+class EntityRelationship:
+    name: str
+    target_id: str
+    target_record_path: str
+    target_struct: str
+    evidence: tuple[Evidence, ...]
+
+    def __post_init__(self) -> None:
+        if not self.name or not self.target_id or not self.evidence:
+            raise ValueError("entity relationships require identity and evidence")
+
+
+@dataclass(frozen=True)
 class EntityFact:
     entity_id: str
     kind: EntityKind
     record_path: str
     values: tuple[EntityValue, ...]
+    relationships: tuple[EntityRelationship, ...] = ()
 
     def get(self, name: str) -> EntityValue | None:
         wanted = name.casefold()
@@ -126,7 +172,10 @@ class EntityCatalogResult:
 
     @property
     def evidence_links(self) -> int:
-        return sum(len(fact.values) for fact in self.facts)
+        return sum(
+            len(fact.values) + sum(len(link.evidence) for link in fact.relationships)
+            for fact in self.facts
+        )
 
     @property
     def corrections_applied(self) -> tuple[str, ...]:
@@ -239,10 +288,16 @@ class LocalEntityProvider:
 
     def extract(self, index: DataForgeIndex, *, build_version: str | None = None) -> EntityExtractionResult:
         build = str(index.source.version if build_version is None else build_version)
+        struct_names = {item.casefold() for item in self.spec.struct_names}
         nodes = tuple(
             node
             for node in index.nodes
             if self.matches(node.normalized_path)
+            and (
+                not self.spec.struct_names
+                or not callable(getattr(index.source, "properties_of", None))
+                or node.struct_name.casefold() in struct_names
+            )
         )
         if not nodes:
             diagnostic = Diagnostic(
@@ -265,15 +320,46 @@ class LocalEntityProvider:
         facts: list[EntityFact] = []
         diagnostics: list[Diagnostic] = []
         for node in sorted(nodes, key=lambda item: (item.normalized_path, item.id)):
-            fields = tuple(index.iter_fields(node))
+            graph_names = tuple(
+                dict.fromkeys(
+                    name
+                    for field in self.spec.fields
+                    if field.follow_pointers
+                    for name in field.source_names
+                )
+            )
+            inline_names = tuple(
+                dict.fromkeys(
+                    name
+                    for field in self.spec.fields
+                    if not field.follow_pointers
+                    for name in field.source_names
+                )
+            )
+            fields = tuple(
+                index.iter_fields(node)
+                if self.spec.relationships
+                else (
+                    *index.iter_selected_fields(
+                        node,
+                        graph_names,
+                        max_pointer_hops=self.spec.max_pointer_hops,
+                    ),
+                    *index.iter_inline_fields(node, inline_names),
+                )
+            )
             values: list[EntityValue] = []
             for field_spec in self.spec.fields:
-                matches = _matching_scalars(fields, field_spec.source_names)
+                matches = _matching_scalars(
+                    fields,
+                    field_spec.source_names,
+                    field_spec.path_fragments,
+                )
                 if not matches:
                     if field_spec.required:
                         diagnostics.append(
                             Diagnostic(
-                                f"{self.spec.kind.value}-field-schema-drift",
+                                f"{self.spec.kind.value}-field-missing",
                                 f"Required field {field_spec.name!r} is absent",
                                 Severity.WARNING,
                                 node.id,
@@ -301,7 +387,7 @@ class LocalEntityProvider:
                 if field_spec.required and not valid:
                     diagnostics.append(
                         Diagnostic(
-                            f"{self.spec.kind.value}-field-schema-drift",
+                            f"{self.spec.kind.value}-field-missing",
                             f"Required field {field_spec.name!r} has no valid scalar value",
                             Severity.WARNING,
                             node.id,
@@ -332,21 +418,112 @@ class LocalEntityProvider:
                             Evidence(node.id, node.normalized_path, found.path, value),
                         )
                     )
-            if values:
-                facts.append(EntityFact(node.id, self.spec.kind, node.normalized_path, tuple(values)))
+            relationships, relationship_diagnostics = _extract_relationships(
+                index, node, fields, self.spec
+            )
+            diagnostics.extend(relationship_diagnostics)
+            if values or relationships:
+                facts.append(
+                    EntityFact(
+                        node.id,
+                        self.spec.kind,
+                        node.normalized_path,
+                        tuple(values),
+                        relationships,
+                    )
+                )
 
+        for required in (item for item in self.spec.fields if item.required):
+            if not any(fact.get(required.name) is not None for fact in facts):
+                diagnostics.append(
+                    Diagnostic(
+                        f"{self.spec.kind.value}-required-field-schema-drift",
+                        f"No matched record supplied required field {required.name!r}",
+                        Severity.WARNING,
+                    )
+                )
         result = EntityExtractionResult(tuple(facts), _capability(self.spec, build, len(nodes), facts, diagnostics))
         return _apply_corrections(result, self.spec.provider, build, self.corrections)
 
 
-def _matching_scalars(fields: tuple[FieldValue, ...], names: tuple[str, ...]) -> tuple[FieldValue, ...]:
+def _matching_scalars(
+    fields: tuple[FieldValue, ...],
+    names: tuple[str, ...],
+    path_fragments: tuple[str, ...] = (),
+) -> tuple[FieldValue, ...]:
     wanted = {name.casefold() for name in names}
+    paths = tuple(item.casefold() for item in path_fragments)
     return tuple(
         found
         for found in fields
         if found.path.rsplit(".", 1)[-1].split("[", 1)[0].casefold() in wanted
         and isinstance(found.value, (str, int, float, bool))
+        and (not paths or any(fragment in found.path.casefold() for fragment in paths))
     )
+
+
+def _extract_relationships(
+    index: DataForgeIndex,
+    node,
+    fields: tuple[FieldValue, ...],
+    provider: ProviderSpec,
+) -> tuple[tuple[EntityRelationship, ...], tuple[Diagnostic, ...]]:
+    relationships: list[EntityRelationship] = []
+    diagnostics: list[Diagnostic] = []
+    seen: set[tuple[str, str, str]] = set()
+    for spec in provider.relationships:
+        aliases = {item.casefold() for item in spec.source_names}
+        targets = {item.casefold() for item in spec.target_structs}
+        path_fragments = tuple(item.casefold() for item in spec.path_fragments)
+        for found in fields:
+            leaf = found.path.rsplit(".", 1)[-1].split("[", 1)[0].casefold()
+            if leaf not in aliases or (
+                path_fragments
+                and not any(fragment in found.path.casefold() for fragment in path_fragments)
+            ):
+                continue
+            reference = normalize_uuid(found.value)
+            if reference is None:
+                continue
+            resolved = index.resolve(found.value, source=node, field_path=found.path)
+            diagnostics.extend(resolved.diagnostics)
+            if resolved.target is None:
+                continue
+            target = resolved.target
+            if target.struct_name.casefold() not in targets:
+                diagnostics.append(
+                    Diagnostic(
+                        f"{provider.kind.value}-relationship-target-schema-drift",
+                        f"Relationship {spec.name!r} resolved to unexpected struct {target.struct_name!r}",
+                        Severity.WARNING,
+                        node.id,
+                        node.normalized_path,
+                        found.path,
+                    )
+                )
+                continue
+            identity = (spec.name.casefold(), target.id.casefold(), found.path.casefold())
+            if identity in seen:
+                continue
+            seen.add(identity)
+            relationships.append(
+                EntityRelationship(
+                    spec.name,
+                    target.id,
+                    target.normalized_path,
+                    target.struct_name,
+                    (
+                        Evidence(node.id, node.normalized_path, found.path, reference),
+                        Evidence(
+                            target.id,
+                            target.normalized_path,
+                            "$record.file_name",
+                            target.record.file_name,
+                        ),
+                    ),
+                )
+            )
+    return tuple(relationships), tuple(diagnostics)
 
 
 def _capability(
@@ -524,41 +701,104 @@ def extract_entity_catalog(
 
 VEHICLE_PROVIDER = ProviderSpec(
     "local-dataforge-vehicles",
-    "1",
+    "2",
     EntityKind.VEHICLE,
-    ("/entities/spaceships/", "/entities/vehicles/"),
+    ("/entities/spaceships/", "/entities/groundvehicles/", "/entities/vehicles/"),
     (
-        FieldSpec("name", ("displayName", "vehicleName"), ScalarKind.LOCALE_KEY, True),
-        FieldSpec("mass", ("mass",), ScalarKind.FLOAT),
-        FieldSpec("cargo-capacity", ("cargoCapacity",), ScalarKind.FLOAT),
-        FieldSpec("crew-min", ("minCrew",), ScalarKind.INTEGER),
-        FieldSpec("crew-max", ("maxCrew",), ScalarKind.INTEGER),
+        FieldSpec(
+            "name",
+            ("displayName", "vehicleName"),
+            ScalarKind.LOCALE_KEY,
+            True,
+            ("$.displayname", "$.vehiclename", "staticentityclassdata"),
+        ),
+        FieldSpec("mass", ("mass",), ScalarKind.FLOAT, follow_pointers=False),
+        FieldSpec(
+            "cargo-capacity",
+            ("cargoCapacity",),
+            ScalarKind.FLOAT,
+            follow_pointers=False,
+        ),
+        FieldSpec("crew-min", ("minCrew",), ScalarKind.INTEGER, follow_pointers=False),
+        FieldSpec(
+            "crew-max",
+            ("maxCrew", "crewSize"),
+            ScalarKind.INTEGER,
+            path_fragments=("$.maxcrew", "$.crewsize", "staticentityclassdata"),
+        ),
     ),
+    max_pointer_hops=4,
 )
 
 COMPONENT_PROVIDER = ProviderSpec(
     "local-dataforge-components",
-    "1",
+    "2",
     EntityKind.COMPONENT,
-    ("/entities/scitem/",),
     (
-        FieldSpec("name", ("displayName",), ScalarKind.LOCALE_KEY, True),
-        FieldSpec("size", ("size", "itemSize"), ScalarKind.INTEGER),
-        FieldSpec("grade", ("grade",), ScalarKind.STRING),
+        "/entities/scitem/ships/armor/",
+        "/entities/scitem/ships/cooler/",
+        "/entities/scitem/ships/fuel_intakes/",
+        "/entities/scitem/ships/fueltanks/",
+        "/entities/scitem/ships/jumpdrive/",
+        "/entities/scitem/ships/powerplant/",
+        "/entities/scitem/ships/quantumdrive/",
+        "/entities/scitem/ships/radar/",
+        "/entities/scitem/ships/shieldgenerator/",
+        "/entities/scitem/ships/thrusters/",
+    ),
+    (
+        FieldSpec(
+            "name",
+            ("displayName", "name"),
+            ScalarKind.LOCALE_KEY,
+            True,
+            ("$.displayname", "attachdef.localization.name"),
+        ),
+        FieldSpec(
+            "size",
+            ("size", "itemSize"),
+            ScalarKind.INTEGER,
+            path_fragments=("$.size", "$.itemsize", "attachdef.size"),
+        ),
+        FieldSpec(
+            "grade",
+            ("grade",),
+            ScalarKind.ENUM,
+            path_fragments=("attachdef.grade",),
+        ),
         FieldSpec("class", ("class", "itemClass"), ScalarKind.STRING),
     ),
-    ("/weapons/", "/medical/", "/consumables/", "/commodities/", "/crafting/"),
 )
 
 SHIP_WEAPON_PROVIDER = ProviderSpec(
     "local-dataforge-ship-weapons",
-    "1",
+    "2",
     EntityKind.SHIP_WEAPON,
-    ("/entities/scitem/weapons/ship/", "/entities/scitem/weapons/vehicle/"),
     (
-        FieldSpec("name", ("displayName",), ScalarKind.LOCALE_KEY, True),
-        FieldSpec("size", ("size", "itemSize"), ScalarKind.INTEGER),
-        FieldSpec("damage", ("damage", "damageTotal"), ScalarKind.FLOAT),
+        "/entities/scitem/ships/weapons/",
+        "/entities/scitem/weapons/ship/",
+        "/entities/scitem/weapons/vehicle/",
+    ),
+    (
+        FieldSpec(
+            "name",
+            ("displayName", "name"),
+            ScalarKind.LOCALE_KEY,
+            True,
+            ("$.displayname", "attachdef.localization.name"),
+        ),
+        FieldSpec(
+            "size",
+            ("size", "itemSize"),
+            ScalarKind.INTEGER,
+            path_fragments=("$.size", "$.itemsize", "attachdef.size"),
+        ),
+        FieldSpec(
+            "damage",
+            ("damage", "damageTotal"),
+            ScalarKind.FLOAT,
+            path_fragments=("$.damage", "$.damagetotal", "ammoparams"),
+        ),
         FieldSpec("rate-of-fire", ("rateOfFire", "roundsPerMinute"), ScalarKind.FLOAT),
         FieldSpec("projectile-speed", ("projectileSpeed", "ammoSpeed"), ScalarKind.FLOAT),
         FieldSpec("range", ("range", "effectiveRange"), ScalarKind.FLOAT),
@@ -567,63 +807,150 @@ SHIP_WEAPON_PROVIDER = ProviderSpec(
 
 FPS_WEAPON_PROVIDER = ProviderSpec(
     "local-dataforge-fps-weapons",
-    "1",
+    "2",
     EntityKind.FPS_WEAPON,
-    ("/entities/scitem/weapons/fps/", "/entities/scitem/weapons/personal/"),
     (
-        FieldSpec("name", ("displayName",), ScalarKind.LOCALE_KEY, True),
-        FieldSpec("damage", ("damage", "damageTotal"), ScalarKind.FLOAT),
+        "/entities/scitem/weapons/fps_weapons/",
+        "/entities/scitem/weapons/fps/",
+        "/entities/scitem/weapons/personal/",
+    ),
+    (
+        FieldSpec(
+            "name",
+            ("displayName", "name"),
+            ScalarKind.LOCALE_KEY,
+            True,
+            ("$.displayname", "attachdef.localization.name"),
+        ),
+        FieldSpec(
+            "damage",
+            ("damage", "damageTotal"),
+            ScalarKind.FLOAT,
+            path_fragments=("$.damage", "$.damagetotal", "ammoparams"),
+        ),
         FieldSpec("rate-of-fire", ("rateOfFire", "roundsPerMinute"), ScalarKind.FLOAT),
         FieldSpec("magazine-capacity", ("magazineCapacity", "ammoCount"), ScalarKind.INTEGER),
         FieldSpec("effective-range", ("effectiveRange",), ScalarKind.FLOAT),
     ),
+    ("medgun",),
 )
 
 MEDICAL_PROVIDER = ProviderSpec(
     "local-dataforge-medical",
-    "1",
+    "2",
     EntityKind.MEDICAL,
-    ("/entities/scitem/medical/", "/entities/scitem/consumables/medical/"),
     (
-        FieldSpec("name", ("displayName",), ScalarKind.LOCALE_KEY, True),
+        "/entities/scitem/medical/",
+        "/entities/scitem/consumables/medical/",
+        "medgun",
+        "medpen",
+    ),
+    (
+        FieldSpec(
+            "name",
+            ("displayName", "name"),
+            ScalarKind.LOCALE_KEY,
+            True,
+            ("$.displayname", "attachdef.localization.name"),
+        ),
         FieldSpec("health-restored", ("healthRestored", "healAmount"), ScalarKind.FLOAT),
-        FieldSpec("duration", ("duration", "effectDuration"), ScalarKind.FLOAT),
+        FieldSpec("max-health-repair-rate", ("maxHealthRepairRate",), ScalarKind.FLOAT),
+        FieldSpec("max-auto-dose", ("maxDoseForAutoAdjustment",), ScalarKind.FLOAT),
         FieldSpec("overdose-threshold", ("overdoseThreshold",), ScalarKind.FLOAT),
         FieldSpec("toxicity", ("toxicity",), ScalarKind.FLOAT),
     ),
+    struct_names=("EntityClassDefinition",),
 )
 
 COMMODITY_PROVIDER = ProviderSpec(
     "local-dataforge-commodities",
-    "1",
+    "2",
     EntityKind.COMMODITY,
-    ("/entities/scitem/commodities/", "/commodities/tradable/"),
     (
-        FieldSpec("name", ("displayName",), ScalarKind.LOCALE_KEY, True),
+        "/entities/commodities/",
+        "/entities/scitem/commodities/",
+        "/commodities/tradable/",
+    ),
+    (
+        FieldSpec(
+            "name",
+            ("displayName",),
+            ScalarKind.LOCALE_KEY,
+            True,
+            ("$.displayname", "staticentityclassdata"),
+        ),
         FieldSpec("base-price", ("basePrice", "price"), ScalarKind.FLOAT),
         FieldSpec("shop-buy-price", ("buyPrice",), ScalarKind.FLOAT),
         FieldSpec("shop-sell-price", ("sellPrice",), ScalarKind.FLOAT),
+    ),
+    relationships=(
+        RelationshipSpec(
+            "composed-of-resource",
+            ("entry",),
+            ("ResourceType",),
+            ("defaultComposition",),
+        ),
     ),
 )
 
 CRAFTING_PROVIDER = ProviderSpec(
     "local-dataforge-crafting",
-    "1",
+    "2",
     EntityKind.CRAFTING,
-    ("/crafting/blueprints/", "/crafting/recipes/"),
     (
-        FieldSpec("name", ("displayName", "blueprintName", "recipeName"), ScalarKind.LOCALE_KEY, True),
-        FieldSpec("craft-time", ("craftTime", "duration"), ScalarKind.FLOAT),
-        FieldSpec("output-count", ("outputCount", "quantity"), ScalarKind.INTEGER),
+        "/crafting/blueprints/",
+        "/crafting/legacy/recipes/",
+        "/crafting/recipes/",
+    ),
+    (
+        FieldSpec(
+            "name",
+            ("displayName", "blueprintName", "recipeName"),
+            ScalarKind.LOCALE_KEY,
+            True,
+            ("$.displayname", "blueprintname", "recipename"),
+        ),
+        FieldSpec("craft-time", ("craftTime", "duration", "timeSeconds"), ScalarKind.FLOAT),
+        FieldSpec("craft-seconds", ("seconds",), ScalarKind.INTEGER),
+        FieldSpec("craft-minutes", ("minutes",), ScalarKind.INTEGER),
+        FieldSpec("craft-hours", ("hours",), ScalarKind.INTEGER),
+        FieldSpec("craft-days", ("days",), ScalarKind.INTEGER),
+        FieldSpec("output-count", ("outputCount",), ScalarKind.INTEGER),
         FieldSpec("required-rank", ("requiredRank",), ScalarKind.INTEGER),
+    ),
+    ("/crafting/blueprints/dismantle",),
+    relationships=(
+        RelationshipSpec(
+            "requires-resource",
+            ("resource",),
+            ("ResourceType",),
+            ("costs", "mandatoryCost"),
+        ),
+        RelationshipSpec(
+            "produces-entity",
+            ("entityClass",),
+            ("EntityClassDefinition",),
+            ("processSpecificData", "outputs"),
+        ),
+        RelationshipSpec(
+            "requires-entity",
+            ("entityClass",),
+            ("EntityClassDefinition",),
+            ("mandatoryCost",),
+        ),
+        RelationshipSpec(
+            "blueprint-category",
+            ("category",),
+            ("BlueprintCategoryRecord",),
+        ),
     ),
 )
 
 JOURNAL_PROVIDER = ProviderSpec(
     "local-dataforge-journal",
-    "1",
+    "2",
     EntityKind.JOURNAL,
-    ("/journal/entries/", "/journalentries/"),
+    ("/journalentry/", "/journal/entries/", "/journalentries/"),
     (
         FieldSpec("title", ("title", "displayName"), ScalarKind.LOCALE_KEY, True),
         FieldSpec("body", ("body", "description", "text"), ScalarKind.LOCALE_KEY),

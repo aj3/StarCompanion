@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from starcompanion.extract.dataforge import CapabilityStatus, DataForgeIndex, ScalarKind
@@ -52,7 +54,7 @@ def entity_fixture(*, vehicle_payload=None, component_payload=None, version=42):
             ),
             (
                 "Component.Test",
-                "Data/Libs/Foundry/Records/Entities/SCItem/Test/component.xml",
+                "Data/Libs/Foundry/Records/Entities/SCItem/Ships/PowerPlant/Test/component.xml",
                 COMPONENT_ID,
                 component_payload
                 or {
@@ -194,6 +196,89 @@ def test_specialized_catalog_emits_typed_evidence_for_every_provider():
         assert fact_value.evidence.field_path.startswith("$.")
 
 
+def test_commodity_and_crafting_relationships_require_resolved_reviewed_targets():
+    resource_id = "10000000-0000-0000-0000-000000000021"
+    output_id = "10000000-0000-0000-0000-000000000022"
+    category_id = "10000000-0000-0000-0000-000000000023"
+    source = SyntheticDataCore(
+        [
+            (
+                "Commodity.Test",
+                "Data/Libs/Foundry/Records/Entities/Commodities/ore.xml",
+                SPECIALIZED_IDS["commodity"],
+                {"displayName": "@ore", "defaultComposition": [{"entry": resource_id}]},
+            ),
+            (
+                "Crafting.Test",
+                "Data/Libs/Foundry/Records/Crafting/Blueprints/Crafting/laser.xml",
+                SPECIALIZED_IDS["crafting"],
+                {
+                    "blueprintName": "@laser",
+                    "costs": [{"resource": resource_id}],
+                    "processSpecificData": {"entityClass": output_id},
+                    "category": category_id,
+                },
+            ),
+            ("ResourceType", "records/resources/ore.xml", resource_id, {"name": "ore"}),
+            ("EntityClassDefinition", "records/entities/output.xml", output_id, {"name": "laser"}),
+            ("BlueprintCategoryRecord", "records/crafting/category.xml", category_id, {"name": "weapon"}),
+        ]
+    )
+    providers = tuple(
+        LocalEntityProvider(
+            replace(
+                spec,
+                relationships=tuple(
+                    replace(link, target_structs=(*link.target_structs, "Synthetic"))
+                    for link in spec.relationships
+                ),
+            )
+        )
+        for spec in (COMMODITY_PROVIDER, CRAFTING_PROVIDER)
+    )
+    catalog = extract_entity_catalog(DataForgeIndex(source), providers=providers)
+
+    commodity = catalog.for_provider(COMMODITY_PROVIDER.provider).facts[0]
+    crafting = catalog.for_provider(CRAFTING_PROVIDER.provider).facts[0]
+    assert [item.name for item in commodity.relationships] == ["composed-of-resource"]
+    assert {item.name for item in crafting.relationships} == {
+        "requires-resource",
+        "produces-entity",
+        "blueprint-category",
+    }
+    assert all(
+        len(link.evidence) == 2
+        for fact in (commodity, crafting)
+        for link in fact.relationships
+    )
+    assert catalog.evidence_links == sum(
+        len(fact.values) + sum(len(link.evidence) for link in fact.relationships)
+        for fact in catalog.facts
+    )
+
+
+def test_relationship_target_type_drift_fails_closed():
+    target = "10000000-0000-0000-0000-000000000024"
+    source = SyntheticDataCore(
+        [
+            (
+                "Commodity.Test",
+                "Data/Libs/Foundry/Records/Entities/Commodities/ore.xml",
+                SPECIALIZED_IDS["commodity"],
+                {"displayName": "@ore", "defaultComposition": [{"entry": target}]},
+            ),
+            ("WrongTarget", "records/not-a-resource.xml", target, {"name": "wrong"}),
+        ]
+    )
+    result = LocalEntityProvider(COMMODITY_PROVIDER).extract(DataForgeIndex(source))
+
+    assert result.capability.status is CapabilityStatus.DEGRADED
+    assert not result.facts[0].relationships
+    assert result.capability.diagnostics[-1].code == (
+        "commodity-relationship-target-schema-drift"
+    )
+
+
 def test_specialized_schema_drift_does_not_contaminate_peer_capabilities():
     catalog = extract_entity_catalog(
         DataForgeIndex(specialized_fixture(medical_payload={"healAmount": 35}))
@@ -290,7 +375,8 @@ def test_schema_drift_is_reported_by_only_the_affected_provider():
     assert not component.capability.diagnostics
     assert vehicle.capability.status is CapabilityStatus.DEGRADED
     assert {item.code for item in vehicle.capability.diagnostics} == {
-        "vehicle-field-schema-drift"
+        "vehicle-field-missing",
+        "vehicle-required-field-schema-drift",
     }
 
 
@@ -300,7 +386,7 @@ def test_invalid_required_value_is_schema_drift_not_silent_data_loss():
     )
 
     assert result.capability.status is CapabilityStatus.DEGRADED
-    assert "vehicle-field-schema-drift" in {
+    assert "vehicle-required-field-schema-drift" in {
         item.code for item in result.capability.diagnostics
     }
 

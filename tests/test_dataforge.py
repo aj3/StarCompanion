@@ -181,6 +181,9 @@ def test_typed_scalar_conversion_rejects_lossy_values():
     assert convert_scalar(FieldValue("$.amount", "1000.0"), ScalarKind.INTEGER).value == 1000
     assert convert_scalar(FieldValue("$.amount", "1000.5"), ScalarKind.INTEGER).value is None
     assert convert_scalar(FieldValue("$.enabled", "false"), ScalarKind.BOOLEAN).value is False
+    assert convert_scalar(FieldValue("$.grade", "A"), ScalarKind.ENUM).value == "A"
+    assert convert_scalar(FieldValue("$.grade", 3), ScalarKind.ENUM).value == 3
+    assert convert_scalar(FieldValue("$.grade", True), ScalarKind.ENUM).value is None
     assert convert_scalar(FieldValue("$.key", "@Mission_Title"), ScalarKind.LOCALE_KEY).value == "Mission_Title"
     assert convert_scalar(FieldValue("$.ref", GUID["rep"]), ScalarKind.UUID).value == GUID["rep"]
 

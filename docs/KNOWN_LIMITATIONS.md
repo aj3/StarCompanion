@@ -1,6 +1,6 @@
 # StarCompanion known limitations
 
-**Review date:** 2026-08-05
+**Review date:** 2026-09-12
 
 - The v0.2.0 Windows artifacts are intentionally unsigned by explicit
   publication approval. Windows may display Microsoft Defender SmartScreen and
@@ -20,8 +20,13 @@
   existing files requires confirmation and `--replace-existing`.
 - Ownership depends on the documented CIG notification shape. Unmatched or
   ambiguous names remain unresolved instead of being guessed.
-- Tests use synthetic P4K, log, settings, and ownership fixtures. Optional
-  proprietary real-build checks skip when local fixtures are absent.
+- Tests use synthetic P4K, log, settings, and ownership fixtures. A reviewed
+  aggregate-only LIVE provider snapshot detects build drift, while optional
+  proprietary real-build checks skip when local fixtures are absent. HOTFIX has
+  not yet been validated against an installed real archive on the review host.
+- LIVE `1.0.191.55227` exposes no reviewed direct ace-pilot, turret-count, or
+  engagement fields. Those independent capabilities remain unavailable rather
+  than being guessed from record names or shared mission descriptions.
 - Frozen Windows and Ubuntu artifacts are built independently because native
   PyInstaller executables are not cross-platform. Ubuntu CI verifies its own
   artifact; desktop integration is not promised for every Linux distribution.

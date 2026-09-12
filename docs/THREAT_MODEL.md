@@ -1,7 +1,7 @@
 # StarCompanion core threat model
 
 **Version:** 2 (C6/G1/G2 GUI release)
-**Review date:** 2026-08-04
+**Review date:** 2026-09-12
 
 ## Security objectives
 
@@ -20,6 +20,7 @@ strings, usernames, and absolute paths must not enter diagnostics or releases.
 | Boundary | Assumption | Principal controls |
 |---|---|---|
 | `Data.p4k` | Large and possibly truncated/corrupt; not an authenticity root | Read-only handle, bounded processing, compression and exact-length validation, ZIP CRC enforcement, narrowly classified CIG method-100 warning |
+| Local provider validation | Proprietary graph data and paths must not enter source control or diagnostics | Exact `Data/Game2.dcb` filter, parent-owned temporary extraction, LIVE/HOTFIX allowlist, bounded/cycle-aware graph walks, aggregate-only snapshot schema, and a fail-closed UUID/path/localization redaction gate |
 | Local game install discovery | Several channel folders may be stale, inaccessible, empty, or non-regular | Cancellable background discovery, supported-channel validation, non-empty regular-file checks, captured modification-time ranking with deterministic size/path tie-breaks, and visible automatic/manual selection evidence |
 | Local INI/JSON/CSV imports | User-selected but potentially hostile | Size/count/depth/schema limits, duplicate rejection, exact scopes, value validation, no remote retrieval |
 | Settings ZIP | Fully untrusted portable input | No encrypted/path-traversing input, allowlisted paths/kinds/preferences, count/size/ratio limits, ZIP CRC plus manifest SHA-256, preview, conflict authorization, link/junction revalidation, crash journal and transactional rollback |

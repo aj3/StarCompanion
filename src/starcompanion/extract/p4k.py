@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import fnmatch
 import io
+import mmap
 import os
 import struct
 import tempfile
@@ -54,6 +55,9 @@ DATACORE_PATH = "Data/Game.dcb"
 
 _CHUNK = 1 << 20
 _PROGRESS_INTERVAL = 4096
+_MAX_EXACT_ENTRIES = 256
+_MAX_EXACT_NAME_BYTES = 4096
+_MAX_EXACT_ENTRY_CANDIDATES = 4096
 
 
 class P4KError(Exception):
@@ -115,6 +119,7 @@ class P4KArchive:
         entry_progress: Callable[[str, int, int], None] | None = None,
         checkpoint: Callable[[], None] | None = None,
         entry_filter: Callable[[P4KEntry], bool] | None = None,
+        exact_entries: Iterable[str] | None = None,
     ):
         self.path = Path(path)
         self.key = key
@@ -123,16 +128,31 @@ class P4KArchive:
         self._checkpoint = checkpoint
         self._cig_advisory_crc: set[str] = set()
         self.integrity_warnings: list[str] = []
+        if entry_filter is not None and exact_entries is not None:
+            raise ValueError("entry_filter and exact_entries are mutually exclusive")
+        exact: frozenset[str] | None = None
+        if exact_entries is not None:
+            requested = tuple(name.replace("\\", "/") for name in exact_entries)
+            if len(requested) > _MAX_EXACT_ENTRIES:
+                raise ValueError(
+                    f"exact_entries accepts at most {_MAX_EXACT_ENTRIES} paths"
+                )
+            if any(
+                not name or len(name.encode("utf-8")) > _MAX_EXACT_NAME_BYTES
+                for name in requested
+            ):
+                raise ValueError("exact entry paths must contain 1 to 4096 UTF-8 bytes")
+            exact = frozenset(requested)
         if self._checkpoint is not None:
             self._checkpoint()
         try:
-            self._fp: BinaryIO = self.path.open("rb")
+            self._fp: BinaryIO = self.path.open("rb", buffering=_CHUNK)
         except OSError as exc:
             raise P4KError(f"cannot open {self.path}: {exc}") from exc
 
         try:
             self._entries: dict[str, P4KEntry] = {}
-            for entry in self._read_central_directory():
+            for entry in self._read_central_directory(exact):
                 if entry_filter is not None and not entry_filter(entry):
                     continue
                 if entry.filename in self._entries:
@@ -368,59 +388,212 @@ class P4KArchive:
 
     # --- central directory ---------------------------------------------------
 
-    def _read_central_directory(self) -> Iterator[P4KEntry]:
-        offset, count = self._locate_central_directory()
+    def _read_central_directory(
+        self,
+        exact_entries: frozenset[str] | None = None,
+    ) -> Iterator[P4KEntry]:
+        offset, count, directory_size = self._locate_central_directory()
         self._central_directory_offset = offset
-        self._fp.seek(offset)
-
-        for index in range(count):
-            if index % _PROGRESS_INTERVAL == 0:
-                if self._checkpoint is not None:
-                    self._checkpoint()
-                if self._progress is not None:
-                    self._progress(index, count)
-            header = self._fp.read(CENTRAL_DIR_SIZE)
-            if len(header) < CENTRAL_DIR_SIZE:
-                raise CorruptArchiveError(
-                    f"{self.path.name}: central directory ends after {index} of {count} entries"
-                )
-
-            (
-                signature, _version, _needed, _flags, method, _time, _date, crc,
-                compress_size, file_size, name_len, extra_len, comment_len,
-                _disk, _internal, _external, header_offset,
-            ) = struct.unpack("<IHHHHHHIIIHHHHHII", header)
-
-            if signature != CENTRAL_DIR_SIGNATURE:
-                raise CorruptArchiveError(
-                    f"{self.path.name}: bad central directory signature "
-                    f"0x{signature:08X} at entry {index}"
-                )
-
-            filename = self._fp.read(name_len).decode("utf-8", errors="replace")
-            extra = self._fp.read(extra_len)
-            self._fp.seek(comment_len, 1)
-
-            compress_size, file_size, header_offset = _apply_zip64(
-                extra, compress_size, file_size, header_offset
+        archive_size = self.path.stat().st_size
+        if (
+            offset < 0
+            or directory_size < count * CENTRAL_DIR_SIZE
+            or offset + directory_size > archive_size
+        ):
+            raise CorruptArchiveError(
+                f"{self.path.name}: central directory bounds are invalid"
             )
-
-            yield P4KEntry(
-                filename=filename.replace("\\", "/"),
-                compress_type=method,
-                compress_size=compress_size,
-                file_size=file_size,
-                header_offset=header_offset,
-                is_encrypted=_is_encrypted(extra),
-                crc=crc,
+        if count == 0:
+            if self._progress is not None:
+                self._progress(0, 0)
+            return
+        exact_bytes = (
+            frozenset(name.encode("utf-8") for name in exact_entries)
+            if exact_entries is not None
+            else None
+        )
+        if exact_bytes is not None:
+            yield from self._read_exact_directory_entries(
+                offset,
+                directory_size,
+                exact_bytes,
             )
+            if self._checkpoint is not None:
+                self._checkpoint()
+            if self._progress is not None:
+                self._progress(count, count)
+            return
+        granularity = mmap.ALLOCATIONGRANULARITY
+        mapped_offset = offset - (offset % granularity)
+        mapped_delta = offset - mapped_offset
+        mapped_length = mapped_delta + directory_size
+        with mmap.mmap(
+            self._fp.fileno(),
+            length=mapped_length,
+            access=mmap.ACCESS_READ,
+            offset=mapped_offset,
+        ) as mapped:
+            position = mapped_delta
+            end = mapped_delta + directory_size
+            for index in range(count):
+                if index % _PROGRESS_INTERVAL == 0:
+                    if self._checkpoint is not None:
+                        self._checkpoint()
+                    if self._progress is not None:
+                        self._progress(index, count)
+                if position + CENTRAL_DIR_SIZE > end:
+                    raise CorruptArchiveError(
+                        f"{self.path.name}: central directory ends after {index} of {count} entries"
+                    )
+
+                (
+                    signature, _version, _needed, _flags, method, _time, _date, crc,
+                    compress_size, file_size, name_len, extra_len, comment_len,
+                    _disk, _internal, _external, header_offset,
+                ) = struct.unpack_from("<IHHHHHHIIIHHHHHII", mapped, position)
+                position += CENTRAL_DIR_SIZE
+                if signature != CENTRAL_DIR_SIGNATURE:
+                    raise CorruptArchiveError(
+                        f"{self.path.name}: bad central directory signature "
+                        f"0x{signature:08X} at entry {index}"
+                    )
+
+                record_end = position + name_len + extra_len + comment_len
+                if record_end > end:
+                    raise CorruptArchiveError(
+                        f"{self.path.name}: truncated metadata at entry {index}"
+                    )
+                filename_bytes = bytes(mapped[position : position + name_len])
+                extra_start = position + name_len
+                extra = bytes(mapped[extra_start : extra_start + extra_len])
+                filename = filename_bytes.decode("utf-8", errors="replace")
+                actual_compress_size, actual_file_size, actual_header_offset = _apply_zip64(
+                    extra, compress_size, file_size, header_offset
+                )
+                yield P4KEntry(
+                    filename=filename.replace("\\", "/"),
+                    compress_type=method,
+                    compress_size=actual_compress_size,
+                    file_size=actual_file_size,
+                    header_offset=actual_header_offset,
+                    is_encrypted=_is_encrypted(extra),
+                    crc=crc,
+                )
+                position = record_end
 
         if self._checkpoint is not None:
             self._checkpoint()
         if self._progress is not None:
             self._progress(count, count)
 
-    def _locate_central_directory(self) -> tuple[int, int]:
+    def _read_exact_directory_entries(
+        self,
+        directory_offset: int,
+        directory_size: int,
+        exact_entries: frozenset[bytes],
+    ) -> Iterator[P4KEntry]:
+        """Search bounded chunks, then fully validate matching records."""
+
+        if self._checkpoint is not None:
+            self._checkpoint()
+        if self._progress is not None:
+            self._progress(0, len(exact_entries))
+        if not exact_entries:
+            return
+        variants = {
+            variant: wanted
+            for wanted in exact_entries
+            for variant in {wanted, wanted.replace(b"/", b"\\")}
+        }
+        overlap_size = max(len(value) for value in variants) - 1
+        positions: set[tuple[int, bytes]] = set()
+        remaining = directory_size
+        cursor = directory_offset
+        overlap = b""
+        self._fp.seek(directory_offset)
+        while remaining:
+            if self._checkpoint is not None:
+                self._checkpoint()
+            chunk = self._fp.read(min(8 * _CHUNK, remaining))
+            if not chunk:
+                raise CorruptArchiveError(
+                    f"{self.path.name}: truncated central directory"
+                )
+            window = overlap + chunk
+            window_offset = cursor - len(overlap)
+            for pattern in variants:
+                position = 0
+                while True:
+                    position = window.find(pattern, position)
+                    if position < 0:
+                        break
+                    positions.add((window_offset + position, pattern))
+                    if len(positions) > _MAX_EXACT_ENTRY_CANDIDATES:
+                        raise CorruptArchiveError(
+                            f"{self.path.name}: excessive exact-entry candidates"
+                        )
+                    position += 1
+            cursor += len(chunk)
+            remaining -= len(chunk)
+            overlap = window[-overlap_size:] if overlap_size else b""
+
+        found: set[bytes] = set()
+        directory_end = directory_offset + directory_size
+        for name_start, pattern in sorted(positions):
+            header_start = name_start - CENTRAL_DIR_SIZE
+            if header_start < directory_offset:
+                continue
+            self._fp.seek(header_start)
+            header = self._fp.read(CENTRAL_DIR_SIZE)
+            if len(header) != CENTRAL_DIR_SIZE:
+                raise CorruptArchiveError(
+                    f"{self.path.name}: truncated exact-entry header"
+                )
+            (
+                signature, _version, _needed, _flags, method, _time, _date, crc,
+                compress_size, file_size, name_len, extra_len, comment_len,
+                _disk, _internal, _external, header_offset,
+            ) = struct.unpack("<IHHHHHHIIIHHHHHII", header)
+            if signature != CENTRAL_DIR_SIGNATURE or name_len != len(pattern):
+                continue
+            record_end = name_start + name_len + extra_len + comment_len
+            if record_end > directory_end:
+                raise CorruptArchiveError(
+                    f"{self.path.name}: truncated exact-entry metadata"
+                )
+            self._fp.seek(name_start)
+            filename_bytes = self._fp.read(name_len)
+            if filename_bytes != pattern:
+                continue
+            found.add(variants[pattern])
+            extra = self._fp.read(extra_len)
+            if len(extra) != extra_len:
+                raise CorruptArchiveError(
+                    f"{self.path.name}: truncated exact-entry extra data"
+                )
+            actual_compress_size, actual_file_size, actual_header_offset = _apply_zip64(
+                extra,
+                compress_size,
+                file_size,
+                header_offset,
+            )
+            yield P4KEntry(
+                filename=filename_bytes.decode("utf-8", errors="replace").replace(
+                    "\\", "/"
+                ),
+                compress_type=method,
+                compress_size=actual_compress_size,
+                file_size=actual_file_size,
+                header_offset=actual_header_offset,
+                is_encrypted=_is_encrypted(extra),
+                crc=crc,
+            )
+        if self._checkpoint is not None:
+            self._checkpoint()
+        if self._progress is not None:
+            self._progress(len(found), len(exact_entries))
+
+    def _locate_central_directory(self) -> tuple[int, int, int]:
         eocd_offset, eocd = self._find_eocd()
         (
             _sig, _disk, _start_disk, _entries_disk, total_entries,
@@ -432,7 +605,7 @@ class P4KArchive:
         )
         if needs_zip64:
             return self._read_zip64(eocd_offset)
-        return cd_offset, total_entries
+        return cd_offset, total_entries, _size
 
     def _find_eocd(self) -> tuple[int, bytes]:
         size = self.path.stat().st_size
@@ -455,7 +628,7 @@ class P4KArchive:
             f"not a .p4k/zip archive or truncated"
         )
 
-    def _read_zip64(self, eocd_offset: int) -> tuple[int, int]:
+    def _read_zip64(self, eocd_offset: int) -> tuple[int, int, int]:
         locator_offset = eocd_offset - EOCD64_LOCATOR_SIZE
         if locator_offset < 0:
             raise CorruptArchiveError(f"{self.path.name}: ZIP64 locator missing")
@@ -476,14 +649,14 @@ class P4KArchive:
 
         (
             signature, _size, _version, _needed, _disk, _start_disk,
-            _entries_disk, total_entries, _cd_size, cd_offset,
+            _entries_disk, total_entries, cd_size, cd_offset,
         ) = struct.unpack("<IQHHIIQQQQ", header)
 
         if signature != EOCD64_SIGNATURE:
             raise CorruptArchiveError(
                 f"{self.path.name}: bad ZIP64 record signature 0x{signature:08X}"
             )
-        return cd_offset, total_entries
+        return cd_offset, total_entries, cd_size
 
     # --- entry data ----------------------------------------------------------
 

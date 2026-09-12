@@ -123,8 +123,115 @@ def test_missing_spawn_reference_does_not_contaminate_peer_providers():
     assert spawn.capability.status is CapabilityStatus.UNAVAILABLE
     assert {item.code for item in spawn.capability.diagnostics} >= {
         "missing-reference-target",
-        f"{SPAWN_PROVIDER.provider}-schema-drift",
+        f"{SPAWN_PROVIDER.provider}-evidence-unavailable",
     }
+
+
+def test_live_shape_aliases_join_type_and_sum_role_scoped_spawn_limits():
+    mission_type = "20000000-0000-0000-0000-000000000010"
+    source = SyntheticDataCore(
+        [
+            (
+                "Contract.LiveShape",
+                "records/contracts/contractgenerator/live.xml",
+                ID["mission-a"],
+                {
+                    "title": "@Live_Title",
+                    "missionTypeOverride": mission_type,
+                    "contractResults": {
+                        "difficulty": {
+                            "riskOfLoss": "High",
+                            "gameKnowledge": "Medium",
+                            "mentalLoad": "Low",
+                            "mechanicalSkill": "VeryHigh",
+                        }
+                    },
+                    "spawnDescriptions": [
+                        {
+                            "options": [
+                                {
+                                    "autoSpawnSettings": {
+                                        "missionAlliedMarker": False,
+                                        "maxSpawns": 4,
+                                    }
+                                },
+                                {
+                                    "autoSpawnSettings": {
+                                        "missionAlliedMarker": True,
+                                        "maxSpawns": 2,
+                                    }
+                                },
+                            ]
+                        }
+                    ],
+                },
+            ),
+            (
+                "MissionType.Live",
+                "records/contracts/types/bounty.xml",
+                mission_type,
+                {"LocalisedTypeName": "@MissionType_Bounty"},
+            ),
+        ]
+    )
+    catalog = extract_mission_tactical_catalog(source)
+
+    classification = catalog.for_provider(CLASSIFICATION_PROVIDER.provider).facts[0]
+    spawn = catalog.for_provider(SPAWN_PROVIDER.provider).facts[0]
+    assert classification.get("mission-type").value == "MissionType_Bounty"
+    assert classification.get("difficulty-risk").value == "High"
+    assert spawn.get("friendly-spawns").value == 2
+    assert spawn.get("hostile-spawns").value == 4
+    assert len(spawn.get("friendly-spawns").evidence) == 2
+
+
+def test_spawn_totals_keep_identical_field_paths_from_distinct_records():
+    second_spawn = "20000000-0000-0000-0000-000000000011"
+    def spawn_payload(limit):
+        return {
+            "spawnDescriptions": [
+                {
+                    "autoSpawnSettings": {
+                        "missionAlliedMarker": False,
+                        "maxSpawns": limit,
+                    }
+                }
+            ]
+        }
+
+    source = SyntheticDataCore(
+        [
+            (
+                "Contract.MultiSpawn",
+                "records/contracts/contractgenerator/multi.xml",
+                ID["mission-a"],
+                {
+                    "title": "@Multi_Title",
+                    "spawnConfig": ID["spawn"],
+                    "spawnDefinition": second_spawn,
+                },
+            ),
+            (
+                "Spawn.First",
+                "records/missions/spawns/first.xml",
+                ID["spawn"],
+                spawn_payload(3),
+            ),
+            (
+                "Spawn.Second",
+                "records/missions/spawns/second.xml",
+                second_spawn,
+                spawn_payload(5),
+            ),
+        ]
+    )
+
+    spawn = extract_mission_tactical_catalog(source).for_provider(
+        SPAWN_PROVIDER.provider
+    ).facts[0]
+
+    assert spawn.get("hostile-spawns").value == 8
+    assert len(spawn.get("hostile-spawns").evidence) == 6
 
 
 def test_shared_description_is_suppressed_using_all_missions_not_only_emitted_facts():

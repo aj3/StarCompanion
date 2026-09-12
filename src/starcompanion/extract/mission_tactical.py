@@ -15,6 +15,7 @@ from .dataforge import (
     Evidence,
     FieldValue,
     MissionRecordScope,
+    NULL_UUID,
     RecordNode,
     RecordSource,
     ScalarKind,
@@ -58,6 +59,8 @@ class TacticalProviderSpec:
     fields: tuple[TacticalFieldSpec, ...]
     reference_names: tuple[str, ...] = ()
     max_reference_hops: int = 4
+    derive_spawn_totals: bool = False
+    absence_is_schema_drift: bool = True
 
     def __post_init__(self) -> None:
         if not self.provider.strip() or not self.version.strip() or not self.fields:
@@ -191,7 +194,15 @@ class MissionTacticalProvider:
         for view in views:
             candidates, graph_diagnostics = _provider_candidates(index, view, self.spec)
             values, value_diagnostics = _extract_values(candidates, self.spec)
-            fact_diagnostics = [*graph_diagnostics, *value_diagnostics]
+            derived_diagnostics: list[Diagnostic] = []
+            if self.spec.derive_spawn_totals:
+                derived, derived_diagnostics = _extract_spawn_totals(candidates, values)
+                values.extend(derived)
+            fact_diagnostics = [
+                *graph_diagnostics,
+                *value_diagnostics,
+                *derived_diagnostics,
+            ]
             diagnostics.extend(fact_diagnostics)
             if not values:
                 continue
@@ -236,17 +247,38 @@ class MissionTacticalProvider:
             )
 
         if not facts:
+            drift = self.spec.absence_is_schema_drift
             diagnostics.append(
                 Diagnostic(
-                    f"{self.spec.provider}-schema-drift",
-                    "Contract records exist but no supported tactical fields were found",
-                    Severity.ERROR,
+                    (
+                        f"{self.spec.provider}-schema-drift"
+                        if drift
+                        else f"{self.spec.provider}-evidence-unavailable"
+                    ),
+                    "Contract records exist but no reviewed tactical evidence was found",
+                    Severity.ERROR if drift else Severity.WARNING,
                 )
             )
             status = CapabilityStatus.UNAVAILABLE
-        elif any(item.degrades_capability for item in diagnostics):
-            status = CapabilityStatus.DEGRADED
         else:
+            emitted_names = {
+                value.name.casefold()
+                for fact in facts
+                for value in fact.values
+            }
+            if self.spec.derive_spawn_totals and not emitted_names.intersection(
+                {"ace-pilot", "ace-probability"}
+            ):
+                diagnostics.append(
+                    Diagnostic(
+                        "ace-pilot-evidence-unavailable",
+                        "Spawn evidence exists but no reviewed ace-pilot field was present",
+                        Severity.WARNING,
+                    )
+                )
+        if facts and any(item.degrades_capability for item in diagnostics):
+            status = CapabilityStatus.DEGRADED
+        elif facts:
             status = CapabilityStatus.AVAILABLE
         report = CapabilityReport(
             self.spec.provider,
@@ -306,6 +338,11 @@ def _provider_candidates(
     ) -> None:
         for field in fields:
             if _field_name(field.path).casefold() not in reference_names:
+                continue
+            if field.value is None or (
+                isinstance(field.value, str)
+                and field.value.casefold() == NULL_UUID
+            ):
                 continue
             resolution = index.resolve(
                 field.value,
@@ -466,6 +503,117 @@ def _extract_values(
     return values, diagnostics
 
 
+def _extract_spawn_totals(
+    candidates: tuple[_Candidate, ...],
+    existing: list[TacticalValue],
+) -> tuple[list[TacticalValue], list[Diagnostic]]:
+    """Sum reviewed LIVE spawn limits by their sibling allied marker."""
+
+    grouped: dict[tuple[str, str, str], dict[str, _Candidate]] = {}
+    for candidate in candidates:
+        leaf = _field_name(candidate.field.path).casefold()
+        if leaf not in {"maxspawns", "missionalliedmarker"}:
+            continue
+        parent = candidate.field.path.rsplit(".", 1)[0]
+        lowered = parent.casefold()
+        if "spawndescriptions" not in lowered or not lowered.endswith(".autospawnsettings"):
+            continue
+        group_key = (candidate.node.id, candidate.node.normalized_path, parent)
+        grouped.setdefault(group_key, {})[leaf] = candidate
+
+    totals = {True: 0, False: 0}
+    evidence: dict[bool, list[Evidence]] = {True: [], False: []}
+    diagnostics: list[Diagnostic] = []
+    for (_node_id, _record_path, parent), pair in grouped.items():
+        marker = pair.get("missionalliedmarker")
+        limit = pair.get("maxspawns")
+        if marker is None or limit is None:
+            diagnostics.append(
+                Diagnostic(
+                    "spawn-role-pair-incomplete",
+                    "Spawn limit and allied marker were not both present",
+                    Severity.WARNING,
+                    field_path=parent,
+                )
+            )
+            continue
+        if (
+            not isinstance(marker.field.value, bool)
+            or isinstance(limit.field.value, bool)
+            or not isinstance(limit.field.value, int)
+        ):
+            diagnostics.append(
+                Diagnostic(
+                    "mission-spawn-role-field-conversion-schema-drift",
+                    "Spawn limit or allied marker has an unexpected scalar type",
+                    Severity.WARNING,
+                    limit.node.id,
+                    limit.node.normalized_path,
+                    parent,
+                )
+            )
+            continue
+        if limit.field.value == -1:
+            diagnostics.append(
+                Diagnostic(
+                    "spawn-limit-unbounded",
+                    "Unbounded spawn sentinel was excluded from a finite total",
+                    Severity.WARNING,
+                    limit.node.id,
+                    limit.node.normalized_path,
+                    limit.field.path,
+                )
+            )
+            continue
+        if not 0 <= limit.field.value <= 100_000:
+            diagnostics.append(
+                Diagnostic(
+                    "mission-spawn-role-field-range-schema-drift",
+                    "Spawn limit is outside its reviewed range",
+                    Severity.WARNING,
+                    limit.node.id,
+                    limit.node.normalized_path,
+                    limit.field.path,
+                )
+            )
+            continue
+        role = marker.field.value
+        totals[role] += limit.field.value
+        evidence[role].extend(
+            (
+                *marker.reference_evidence,
+                Evidence(
+                    marker.node.id,
+                    marker.node.normalized_path,
+                    marker.field.path,
+                    role,
+                ),
+                *limit.reference_evidence,
+                Evidence(
+                    limit.node.id,
+                    limit.node.normalized_path,
+                    limit.field.path,
+                    limit.field.value,
+                ),
+            )
+        )
+
+    existing_names = {item.name.casefold() for item in existing}
+    values: list[TacticalValue] = []
+    for role, name in ((True, "friendly-spawns"), (False, "hostile-spawns")):
+        if name in existing_names or not evidence[role]:
+            continue
+        values.append(
+            TacticalValue(
+                name,
+                totals[role],
+                Confidence.HIGH,
+                tuple(dict.fromkeys(evidence[role])),
+            )
+        )
+    return values, diagnostics
+
+
 def _fact_confidence(
     values: list[TacticalValue],
     has_match_key: bool,
@@ -491,16 +639,25 @@ def _field_name(path: str) -> str:
 
 CLASSIFICATION_PROVIDER = TacticalProviderSpec(
     "local-dataforge-mission-classification",
-    "1",
+    "2",
     (
-        TacticalFieldSpec("mission-type", ("missionType", "contractType", "archetype"), ScalarKind.STRING),
+        TacticalFieldSpec(
+            "mission-type",
+            ("missionType", "contractType", "LocalisedTypeName"),
+            ScalarKind.LOCALE_KEY,
+        ),
         TacticalFieldSpec("difficulty", ("difficulty", "difficultyCode", "risk"), ScalarKind.STRING),
+        TacticalFieldSpec("difficulty-risk", ("riskOfLoss",), ScalarKind.STRING),
+        TacticalFieldSpec("difficulty-knowledge", ("gameKnowledge",), ScalarKind.STRING),
+        TacticalFieldSpec("difficulty-mental-load", ("mentalLoad",), ScalarKind.STRING),
+        TacticalFieldSpec("difficulty-mechanical-skill", ("mechanicalSkill",), ScalarKind.STRING),
     ),
+    ("missionTypeOverride", "missionTypeRecord"),
 )
 
 SPAWN_PROVIDER = TacticalProviderSpec(
     "local-dataforge-mission-spawns",
-    "1",
+    "2",
     (
         TacticalFieldSpec(
             "friendly-spawns",
@@ -527,11 +684,13 @@ SPAWN_PROVIDER = TacticalProviderSpec(
         ),
     ),
     ("spawnConfig", "spawnDefinition", "spawnProfile"),
+    derive_spawn_totals=True,
+    absence_is_schema_drift=False,
 )
 
 ENGAGEMENT_PROVIDER = TacticalProviderSpec(
     "local-dataforge-mission-engagement",
-    "1",
+    "2",
     (
         TacticalFieldSpec(
             "turret-count",
@@ -554,6 +713,7 @@ ENGAGEMENT_PROVIDER = TacticalProviderSpec(
         ),
     ),
     ("engagementConfig", "combatConfig", "encounterConfig"),
+    absence_is_schema_drift=False,
 )
 
 

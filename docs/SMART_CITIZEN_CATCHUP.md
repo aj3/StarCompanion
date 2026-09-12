@@ -903,6 +903,14 @@ and Windows/Ubuntu CI gates passed together on the G3 implementation commit.
   type/difficulty, spawn/ace, and engagement/turret facts now use bounded
   evidence-carrying reference joins and never match through a description
   shared by multiple mission identities.
+- **G5 LIVE validation (2026-09-11):** every entity provider and the independent
+  tactical providers ran read-only against LIVE `1.0.191.55227`. Evidence-backed
+  aliases removed UI/style false positives, all entity capabilities are
+  available, the commodity/crafting graph proves 7,719 relationships, and the
+  committed build regression contains aggregate counts and a schema hash only.
+  The build has no reviewed direct ace, turret, or engagement fields, so those
+  facts remain explicitly unavailable rather than inferred. No HOTFIX archive
+  was installed; that real-channel check remains gated on a local installation.
 - **G5** extracts independently evidenced mission type/difficulty,
   friendly/hostile spawn, ace-pilot, turret, and engagement facts alongside
   the planned entity providers. Shared-description ambiguity suppresses an

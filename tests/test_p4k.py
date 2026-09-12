@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import p4kbuilder as B
+import starcompanion.extract.p4k as p4k_module
 from starcompanion.extract.p4k import (
     CorruptArchiveError,
     NotAnArchiveError,
@@ -547,3 +548,55 @@ def test_entry_filter_scans_but_does_not_retain_unrelated_records(tmp_path):
         assert archive.languages() == ["english"]
 
     assert progress[-1] == (5001, 5001)
+
+
+def test_exact_entry_scan_skips_unrelated_metadata_and_reports_directory_count(tmp_path):
+    builder = B.Builder()
+    for index in range(5000):
+        builder.add(f"Data/filler/{index:05}.bin", b"")
+    builder.add("Data/Game2.dcb", b"wanted")
+    path = write(tmp_path, builder)
+    progress = []
+
+    with P4KArchive(
+        path,
+        exact_entries=("Data/Game2.dcb",),
+        progress=lambda current, total: progress.append((current, total)),
+    ) as archive:
+        assert archive.namelist() == ["Data/Game2.dcb"]
+        assert archive.read("Data/Game2.dcb") == b"wanted"
+
+    assert progress[-1] == (5001, 5001)
+
+
+def test_exact_entry_scan_rejects_duplicate_target_and_conflicting_filter(tmp_path):
+    path = write(
+        tmp_path,
+        B.Builder().add("Data/Game2.dcb", b"one").add("Data/Game2.dcb", b"two"),
+    )
+
+    with pytest.raises(CorruptArchiveError, match="duplicate archive entry"):
+        P4KArchive(path, exact_entries=("Data/Game2.dcb",))
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        P4KArchive(path, exact_entries=("Data/Game2.dcb",), entry_filter=lambda _entry: True)
+
+
+def test_exact_entry_scan_bounds_requested_paths_and_false_candidates(
+    tmp_path, monkeypatch
+):
+    path = write(
+        tmp_path,
+        B.Builder()
+        .add("prefix-1-Data/Game2.dcb", b"")
+        .add("prefix-2-Data/Game2.dcb", b"")
+        .add("prefix-3-Data/Game2.dcb", b""),
+    )
+
+    with pytest.raises(ValueError, match="at most"):
+        P4KArchive(path, exact_entries=(f"Data/{index}" for index in range(257)))
+    with pytest.raises(ValueError, match="1 to 4096"):
+        P4KArchive(path, exact_entries=("",))
+
+    monkeypatch.setattr(p4k_module, "_MAX_EXACT_ENTRY_CANDIDATES", 2)
+    with pytest.raises(CorruptArchiveError, match="excessive exact-entry candidates"):
+        P4KArchive(path, exact_entries=("Data/Game2.dcb",))
