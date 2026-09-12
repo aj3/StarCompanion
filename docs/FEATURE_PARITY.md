@@ -55,10 +55,10 @@ does not execute or silently download either project's code or generated data.
 | Mission reputation amounts and tracks | **Complete** | C1–C3 local mission provider with field evidence. |
 | Blueprint pools, chances, ranks, regional variants, caveats, and title tags | **Complete** | C1–G3 structured mission rendering. |
 | Direct mission item rewards and scenario points | **Complete** | C1–G3 structured mission rendering. |
-| Mission type and difficulty details | **Partial** | G5 synthetic classification facts carry field evidence; shared descriptions are suppressed. Live validation and G6 presentation remain. |
-| Friendly and hostile spawn summaries | **Partial** | G5 synthetic spawn facts retain contract-reference and target-field evidence with independent diagnostics. Live validation and G6 presentation remain. |
-| Ace-pilot `[ACE]` and uncertain `[ACE?]` markers | **Partial** | G5 distinguishes directly evidenced booleans from medium-confidence probabilities; G6 owns marker presentation. |
-| Turret counts and engagement details | **Partial** | G5 synthetic engagement facts cover turret count, distance, and style through bounded evidence-carrying joins. Live validation and G6 formatting remain. |
+| Mission type and difficulty details | **Complete** | Typed G5 facts now pass through cache schema 7 to independent G6 title/description controls with rendered-only evidence. LIVE aggregate validation is green. |
+| Friendly and hostile spawn summaries | **Complete** | Bounded graph joins, independent diagnostics, typed G6 controls, title tags, description details, and LIVE aggregate validation are complete. |
+| Ace-pilot `[ACE]` and uncertain `[ACE?]` markers | **Complete** | Direct booleans and probabilities have distinct typed markers and provenance. The current LIVE build exposes neither, so the control remains silent instead of guessing. |
+| Turret counts and engagement details | **Complete** | Typed controls and bounded presentation cover direct provider facts. The current LIVE build reports the provider unavailable because it has no reviewed fields. |
 | Hauling/delivery/courier routes and title shortening | **Planned** | G6 presentation provider and Tag Builder. |
 | Battaglia/asteroid resource-signature tags | **Planned** | G6 mission/mining provider. |
 | Ship statistics and component summaries | **Partial** | G5 typed vehicle provider foundation is synthetic-tested; schema-specific fact expansion and live-build validation remain. |
@@ -67,7 +67,7 @@ does not execute or silently download either project's code or generated data.
 | Medical-consumable effects | **Partial** | G5 medical fact extraction is synthetic-tested with typed conversion-drift handling; live schema validation remains. |
 | Commodity and crafting cross-references | **Partial** | Independent G5 commodity and crafting facts are synthetic-tested; reference-graph joins and live validation remain. |
 | Journal/discovery enhancements and mining compendium | **Partial** | G5 journal facts are synthetic-tested; cross-references, mining facts, and G6 presentation remain. |
-| Provider capability, drift, and per-value evidence | **Partial** | Complete for mission rewards and all eight current G5 entity providers, including overlap suppression and fail-closed exact-build corrections; mission-tactical providers and live validation remain. |
+| Provider capability, drift, and per-value evidence | **Complete** | Mission rewards, eight entity providers, and three tactical providers have isolated status/drift reporting, evidence-bearing values, LIVE aggregate checks, and fail-closed exact-build corrections. |
 
 ## Editor, presentation, and ownership
 
@@ -81,7 +81,7 @@ does not execute or silently download either project's code or generated data.
 | Configurable structured labels, ordering, numeric format, tags, and expert templates | **Complete** | G3 schema v2 exposes all nine labels; expert templates remain explicit and sandboxed. |
 | Category-level enhancement toggles | **Planned** | G7 exposes coarse, understandable enable/disable controls while retaining provider-specific capability reporting. |
 | Stat-block placement above or below stock text | **Planned** | G7 adds a typed placement choice; it does not permit arbitrary execution or bypass final validation. |
-| General Tag Builder for component, missile, weapon, commodity, and mission-title formats | **Planned** | G6 builds typed rules over provider facts; do not reintroduce template-first configuration. |
+| General Tag Builder for component, missile, weapon, commodity, and mission-title formats | **Partial** | Mission-title fields, order, placement, separator, and complete-tag length bounds are implemented; entity/item/commodity/missile rules remain. |
 | Blueprint catalog, owned/unowned search, reward source, category, and acquisition queries | **Complete** | Stable C4 identities and read-only backend queries. |
 | Incremental current/rotated log scan | **Complete** | Bounded, cancellable, rotation/truncation-aware scan with confirmation before cursor/evidence save. |
 | Review both LIVE and HOTFIX logs | **Complete** | New GUI preferences review both production siblings by default; the visible control can separate them, the CLI flag selects the shared scope explicitly, and test channels cannot enter linked discovery. |
@@ -141,13 +141,14 @@ localization key.
    ownership wiring, per-key INI reconciliation, safe shareable-pack export,
    per-column filters, safe markup preview, backup retention and user-edit
    snapshots, layout persistence, and freshest-install evidence.
-2. **G5 — Local entity providers:** ships, components, ship/FPS weapons,
+2. **G5 — Local entity providers (complete):** ships, components, ship/FPS weapons,
    medical, commodities/crafting, journal facts, mission type/difficulty,
    spawn/ace/turret/engagement facts, and declarative build-scoped data fixes.
    Synthetic fixtures come first; every value has evidence and every provider
    has independent capability and drift diagnostics.
-3. **G6 — Tag Builder and legacy presentation:** route-aware mission titles,
-   independently controlled mission detail presentation, configurable
+3. **G6 — Tag Builder and legacy presentation (active):** independently
+   controlled tactical mission presentation and mission Tag Builder are
+   complete. Continue with route-aware mission titles, configurable
    item/commodity/missile tags, favorites, mining/resource-signature features,
    and the remaining legacy wording pack under the strict boundary above.
 4. **G7 — Experience parity:** dedicated simple mode, clear-localization flow,

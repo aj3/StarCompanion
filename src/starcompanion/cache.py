@@ -20,8 +20,10 @@ from .model import (
     ContractSet,
     Difficulty,
     Evidence,
+    FactConfidence,
     Gate,
     GateKind,
+    MissionDetail,
     Org,
     ProviderCapability,
     ProviderStatus,
@@ -31,7 +33,7 @@ from .model import (
     UnresolvedLocalization,
 )
 
-CACHE_VERSION = 6
+CACHE_VERSION = 7
 
 
 class UnsupportedCacheVersion(ValueError):
@@ -127,6 +129,15 @@ def _contract_to_dict(
         "base_texts": base_text_delta,
         "reward": _reward_to_dict(contract.reward),
         "evidence_ids": [evidence_ids[item] for item in contract.evidence],
+        "mission_details": [
+            {
+                "name": item.name,
+                "value": item.value,
+                "confidence": item.confidence.value,
+                "evidence_ids": [evidence_ids[evidence] for evidence in item.evidence],
+            }
+            for item in contract.mission_details
+        ],
     }
 
 
@@ -222,6 +233,11 @@ def _evidence_table(
             if item not in ids:
                 ids[item] = len(table)
                 table.append(item)
+        for detail in contract.mission_details:
+            for item in detail.evidence:
+                if item not in ids:
+                    ids[item] = len(table)
+                    table.append(item)
     return table, ids
 
 
@@ -411,6 +427,32 @@ def _contract_from_dict(
         evidence = [evidence_table[index] for index in indices]
     except (IndexError, TypeError, ValueError) as exc:
         raise ValueError(f"contract {raw.get('id')!r} has an invalid evidence reference") from exc
+    mission_details = []
+    try:
+        for item in raw.get("mission_details", ()):
+            value = item["value"]
+            if isinstance(value, bool):
+                pass
+            elif not isinstance(value, (str, int, float)):
+                raise TypeError("mission detail value is not scalar")
+            detail_indices = [int(index) for index in item.get("evidence_ids", ())]
+            if any(index < 0 or index >= len(evidence_table) for index in detail_indices):
+                raise IndexError("mission detail evidence index is outside the cache table")
+            mission_details.append(
+                MissionDetail(
+                    name=str(item["name"]),
+                    value=value,
+                    confidence=FactConfidence(item["confidence"]),
+                    evidence=tuple(evidence_table[index] for index in detail_indices),
+                )
+            )
+    except (IndexError, KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            f"contract {raw.get('id')!r} has an invalid mission detail"
+        ) from exc
+    names = [item.name for item in mission_details]
+    if len(names) != len(set(names)):
+        raise ValueError(f"contract {raw.get('id')!r} has duplicate mission details")
     return Contract(
         id=raw["id"],
         org=orgs[raw["org"]],
@@ -421,6 +463,7 @@ def _contract_from_dict(
         base_texts=base_texts,
         reward=_reward_from_dict(raw.get("reward", {})),
         evidence=evidence,
+        mission_details=mission_details,
     )
 
 
@@ -439,6 +482,8 @@ def describe(path: Path) -> dict[str, Any]:
         "contracts": len(data.get("contracts", ())),
         "providers": len(data.get("capabilities", ())),
         "enhanced_contracts": sum(
-            1 for item in data.get("contracts", ()) if item.get("evidence_ids")
+            1
+            for item in data.get("contracts", ())
+            if item.get("evidence_ids") or item.get("mission_details")
         ),
     }

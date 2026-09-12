@@ -37,15 +37,18 @@ that phase's **Resume prompt**.
 | | 9b. Mission XML layer | ✅ Done — reader shipped, premise disproved |
 | 4 · Ship | 10. Packaging & release | ✅ Done — 292 tests |
 
-The catch-up program has completed C0–C6 and G1–G4. **Sprint G5 — Local Entity
-Providers** is active. Its synthetic-first catalog now provides typed vehicle,
+The catch-up program has completed C0–C6, G1–G4, and G5. **Sprint G6 — Tag
+Builder and Legacy Presentation** is active. G5's synthetic-first catalog provides typed vehicle,
 component, ship/FPS weapon, medical, commodity, crafting, and journal
 extraction; per-value source evidence; independent capability/drift reports;
 overlap suppression; and exact-build corrections that fail closed while
 preserving the original value. Synthetic mission classification, spawn/ace,
 and engagement/turret providers now add bounded reference joins and suppress
-shared-description matching. [G5_LOCAL_PROVIDERS.md](G5_LOCAL_PROVIDERS.md)
-records the evidence and isolation contract. **Sprint G4 — Ownership and Editor Completion**
+shared-description matching. G6's first completed slice carries the tactical
+facts through cache schema 7 into independent GUI controls, description
+details, bounded typed title tags, and rendered-only provenance.
+[G5_LOCAL_PROVIDERS.md](G5_LOCAL_PROVIDERS.md) and
+[G6_PRESENTATION.md](G6_PRESENTATION.md) record those contracts. **Sprint G4 — Ownership and Editor Completion**
 is complete: revision-bound manual ownership, complete
 tracker operations, exact foreign-name repair, ownership-aware rendering,
 per-key conflict reconciliation, authored-only delta packs, independent column
@@ -54,7 +57,7 @@ persistence, and visible freshest-install evidence.
 
 The project is not yet at complete Smart Citizen plus legacy StarStrings
 feature parity. [FEATURE_PARITY.md](FEATURE_PARITY.md) is the current baseline
-and defines the remaining G5–G7 work without weakening the verified C0–G4
+and defines the remaining G6–G7 work without weakening the verified C0–G5
 safety boundaries.
 
 ---

@@ -28,6 +28,9 @@ it to append information the game does not surface:
 - **Blueprint pools** — what a contract can drop, and at which reputation rank
 - **Scenario progress points** for event contracts
 - **MG Scrip**, regional pool variants, and data caveats
+- **Optional tactical details** — mission type, difficulty dimensions, spawn
+  counts, ace status, turrets, and engagement facts when the local build
+  provides direct evidence
 
 It only ever changes text. No memory patching, no UI injection — that is the
 line CIG's community-localization allowance draws, and staying on the right side
@@ -81,8 +84,11 @@ takes a backup, and there is an **Undo my last change** button beside it.
 It also warns if your `USER.cfg` is missing `g_language`, since without that
 setting the game ignores the override entirely and nothing appears to happen.
 
-*Presentation* changes style, generated labels, information order, and number
-formatting through validated controls. *Custom wording* is an explicit advanced
+*Contract Content* independently enables each locally evidenced mission fact.
+*Presentation* changes style, generated labels, information order, number
+formatting, description details, and bounded title tags through validated
+controls. New tactical controls default off during profile migration, and a
+missing provider value is never guessed. *Custom wording* is an explicit advanced
 mode for sandboxed templates, while the virtualized *String editor* handles
 individual reviewed values. *Blueprints* joins
 the local C4 catalog to channel-scoped ownership and incrementally scans local

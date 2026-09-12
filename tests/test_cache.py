@@ -13,9 +13,11 @@ from starcompanion.model import (
     ContractSet,
     Difficulty,
     Evidence,
+    FactConfidence,
     Gate,
     GateKind,
     Org,
+    MissionDetail,
     ProviderCapability,
     ProviderStatus,
     Reward,
@@ -106,6 +108,56 @@ def test_cache_interns_evidence_and_omits_duplicate_base_text():
     assert raw["contracts"][0]["base_texts"] == {}
 
 
+def test_mission_details_round_trip_through_shared_evidence_table():
+    original = sample_set()
+    evidence = original.contracts[0].evidence[0]
+    original.contracts[0].mission_details.append(
+        MissionDetail("hostile-spawns", 7, FactConfidence.HIGH, (evidence,))
+    )
+
+    encoded = json.loads(cache.dumps(original))
+    restored = cache.loads(json.dumps(encoded))
+
+    assert len(encoded["evidence"]) == 1
+    assert encoded["contracts"][0]["mission_details"][0]["evidence_ids"] == [0]
+    assert restored == original
+
+
+def test_cache_rejects_invalid_mission_detail_evidence_reference():
+    raw = json.loads(cache.dumps(sample_set()))
+    raw["contracts"][0]["mission_details"] = [
+        {
+            "name": "hostile-spawns",
+            "value": 7,
+            "confidence": "high",
+            "evidence_ids": [999],
+        }
+    ]
+
+    with pytest.raises(ValueError, match="invalid mission detail"):
+        cache.loads(json.dumps(raw))
+
+
+def test_cache_rejects_duplicate_or_out_of_range_mission_details():
+    raw = json.loads(cache.dumps(sample_set()))
+    raw["contracts"][0]["mission_details"] = [
+        {
+            "name": "hostile-spawns",
+            "value": value,
+            "confidence": "high",
+            "evidence_ids": [0],
+        }
+        for value in (7, 8)
+    ]
+    with pytest.raises(ValueError, match="duplicate mission details"):
+        cache.loads(json.dumps(raw))
+
+    raw["contracts"][0]["mission_details"][1:] = []
+    raw["contracts"][0]["mission_details"][0]["value"] = 1_000_000
+    with pytest.raises(ValueError, match="invalid mission detail"):
+        cache.loads(json.dumps(raw))
+
+
 def test_shared_evidence_is_interned_without_losing_per_contract_links():
     original = sample_set()
     second = copy.deepcopy(original.contracts[0])
@@ -153,6 +205,23 @@ def test_describe_reports_header(tmp_path):
     assert described["source"] == "contracts.ini:x"
     assert described["contracts"] == 1
     assert described["generated"]
+
+
+def test_describe_counts_tactical_only_contracts_as_enhanced(tmp_path):
+    contracts = sample_set()
+    contracts.contracts[0].evidence.clear()
+    contracts.contracts[0].mission_details.append(
+        MissionDetail(
+            "hostile-spawns",
+            7,
+            FactConfidence.HIGH,
+            (Evidence("tactical-test", "record", "path", "$.hostiles", 7),),
+        )
+    )
+    path = tmp_path / "cache.json"
+    cache.save(contracts, path)
+
+    assert cache.describe(path)["enhanced_contracts"] == 1
 
 
 def test_non_ascii_text_survives(tmp_path):

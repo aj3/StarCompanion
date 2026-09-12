@@ -12,6 +12,8 @@ from starcompanion.model import (
     ContractSet,
     Evidence,
     Org,
+    ProviderCapability,
+    ProviderStatus,
     Reward,
     StringKind,
 )
@@ -530,6 +532,27 @@ def test_inspect_reports_cache_header(workspace, capsys):
     chain(workspace)
     assert run("inspect", "--cache", workspace / "cache.json") == EXIT_OK
     assert "cache_version" in capsys.readouterr().out
+
+
+def test_inspect_labels_non_reward_provider_coverage_as_facts(workspace, capsys):
+    chain(workspace)
+    cached = cache.load(workspace / "cache.json")
+    cached.capabilities.append(
+        ProviderCapability(
+            "tactical-test",
+            "1",
+            ProviderStatus.AVAILABLE,
+            "test-build",
+            facts_seen=3,
+            matched_facts=2,
+        )
+    )
+    cache.save(cached, workspace / "cache.json")
+
+    assert run("inspect", "--cache", workspace / "cache.json") == EXIT_OK
+    output = capsys.readouterr().out
+    assert "2/3 facts matched" in output
+    assert "2/0 reward facts" not in output
 
 
 # --- plan is read-only -------------------------------------------------------

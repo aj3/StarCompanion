@@ -8,9 +8,10 @@
     "header": [244, 0, 1036, 98],
     "stack": [244, 98, 1036, 672],
     "status": [244, 770, 1036, 30],
-    "enabled_metric": [253, 107, 499, 64],
-    "coverage_metric": [764, 107, 499, 64],
-    "core_section": [253, 187, 1010, 278]
+    "enabled_metric": [253, 107, 325, 79],
+    "coverage_metric": [590, 107, 326, 79],
+    "tactical_metric": [928, 107, 325, 79],
+    "core_section": [253, 202, 1000, 278]
   },
   "minimum_colour_samples": {
     "#0b0f14": 500,

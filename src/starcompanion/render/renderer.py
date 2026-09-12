@@ -22,12 +22,60 @@ from jinja2 import (
 )
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
-from ..model import BlueprintPool, Contract, ContractSet, Evidence, GateKind, StringKind
+from ..model import (
+    BlueprintPool,
+    Contract,
+    ContractSet,
+    Evidence,
+    GateKind,
+    MissionDetail,
+    StringKind,
+)
 from ..validate import EMPHASIS_TAGS, Issue, Severity, validate_value
 
 TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
 
 _REAL_NEWLINE = re.compile(r"[ \t]*\r?\n")
+
+MISSION_FACT_GROUPS = (
+    "mission_type",
+    "difficulty",
+    "friendly_spawns",
+    "hostile_spawns",
+    "ace",
+    "turrets",
+    "engagement",
+)
+_GROUP_FACTS = {
+    "mission_type": ("mission-type",),
+    "difficulty": (
+        "difficulty",
+        "difficulty-risk",
+        "difficulty-knowledge",
+        "difficulty-mental-load",
+        "difficulty-mechanical-skill",
+    ),
+    "friendly_spawns": ("friendly-spawns",),
+    "hostile_spawns": ("hostile-spawns",),
+    "ace": ("ace-pilot", "ace-probability"),
+    "turrets": ("turret-count",),
+    "engagement": ("engagement-type", "engagement-distance"),
+}
+_DETAIL_LABELS = {
+    "mission-type": "Mission type",
+    "difficulty": "Difficulty",
+    "difficulty-risk": "Risk of loss",
+    "difficulty-knowledge": "Game knowledge",
+    "difficulty-mental-load": "Mental load",
+    "difficulty-mechanical-skill": "Mechanical skill",
+    "friendly-spawns": "Friendly spawns",
+    "hostile-spawns": "Hostile spawns",
+    "ace-pilot": "Ace pilot",
+    "ace-probability": "Ace probability",
+    "turret-count": "Turrets",
+    "engagement-distance": "Engagement distance",
+    "engagement-type": "Engagement type",
+}
 
 
 def validate_wording_label(value: str) -> str:
@@ -140,6 +188,13 @@ class RenderOptions:
     labels: RenderLabels = field(default_factory=RenderLabels)
     reputation_separator: str = " / "
     thousands_separator: bool = True
+    mission_fact_groups: frozenset[str] = frozenset()
+    show_mission_details: bool = False
+    tag_builder_enabled: bool = False
+    tag_builder_fields: tuple[str, ...] = MISSION_FACT_GROUPS
+    tag_builder_placement: str = "prefix"
+    tag_builder_separator: str = " "
+    tag_builder_max_characters: int = 72
 
     def __post_init__(self):
         for tag in (self.emphasis, *self.emphasis_by_field.values()):
@@ -162,6 +217,18 @@ class RenderOptions:
             )
         if self.reputation_separator not in {" / ", "/", " • "}:
             raise ValueError("unsupported reputation separator")
+        unknown_groups = set(self.mission_fact_groups) - set(MISSION_FACT_GROUPS)
+        unknown_tags = set(self.tag_builder_fields) - set(MISSION_FACT_GROUPS)
+        if unknown_groups or unknown_tags:
+            raise ValueError("unknown mission presentation group")
+        if len(self.tag_builder_fields) != len(set(self.tag_builder_fields)):
+            raise ValueError("tag builder fields must be unique")
+        if self.tag_builder_placement not in {"prefix", "suffix"}:
+            raise ValueError("unsupported tag builder placement")
+        if self.tag_builder_separator not in {" ", " • "}:
+            raise ValueError("unsupported tag builder separator")
+        if not 16 <= self.tag_builder_max_characters <= 160:
+            raise ValueError("tag builder length must be between 16 and 160")
 
     def emphasis_for(self, field_name: str | None) -> str:
         return self.emphasis_by_field.get(field_name or "", self.emphasis)
@@ -173,6 +240,141 @@ class RenderOptions:
         return self.reputation_separator.join(
             self.format_number(value) for value in values
         )
+
+    def visible_mission_details(self, contract: Contract) -> tuple[MissionDetail, ...]:
+        allowed = {
+            name
+            for group in self.mission_fact_groups
+            for name in _GROUP_FACTS[group]
+        }
+        return tuple(item for item in contract.mission_details if item.name in allowed)
+
+    def mission_detail_lines(self, contract: Contract) -> tuple[str, ...]:
+        if not self.show_mission_details:
+            return ()
+        details = self.visible_mission_details(contract)
+        order = {
+            name: index
+            for index, group in enumerate(MISSION_FACT_GROUPS)
+            for name in _GROUP_FACTS[group]
+        }
+        return tuple(
+            f"{_DETAIL_LABELS[item.name]}: {self._format_mission_value(item)}"
+            + (
+                f" (confidence: {item.confidence.value})"
+                if item.confidence.value not in {"high", "none"}
+                else ""
+            )
+            for item in sorted(details, key=lambda value: order[value.name])
+        )
+
+    def title_fact_tags(self, contract: Contract) -> str:
+        return self.tag_builder_separator.join(
+            text for text, _details in self._title_fact_parts(contract)
+        )
+
+    def mission_evidence(
+        self,
+        contract: Contract,
+        kind: StringKind,
+    ) -> tuple[Evidence, ...]:
+        if kind is StringKind.DESC and self.show_mission_details:
+            details = self.visible_mission_details(contract)
+        elif kind is StringKind.TITLE and self.tag_builder_enabled:
+            details = tuple(
+                detail
+                for _text, selected in self._title_fact_parts(contract)
+                for detail in selected
+            )
+        else:
+            details = ()
+        return tuple(
+            dict.fromkeys(
+                evidence for detail in details for evidence in detail.evidence
+            )
+        )
+
+    def _title_fact_parts(
+        self,
+        contract: Contract,
+    ) -> tuple[tuple[str, tuple[MissionDetail, ...]], ...]:
+        if not self.tag_builder_enabled:
+            return ()
+        enabled = set(self.mission_fact_groups)
+        parts: list[tuple[str, tuple[MissionDetail, ...]]] = []
+        current_length = 0
+        for group in self.tag_builder_fields:
+            if group not in enabled:
+                continue
+            selected = self._title_group_details(contract, group)
+            text = self._title_group_text(group, selected)
+            if not text:
+                continue
+            added = len(text) + (len(self.tag_builder_separator) if parts else 0)
+            if current_length + added > self.tag_builder_max_characters:
+                continue
+            parts.append((text, selected))
+            current_length += added
+        return tuple(parts)
+
+    @staticmethod
+    def _title_group_details(
+        contract: Contract,
+        group: str,
+    ) -> tuple[MissionDetail, ...]:
+        found = {
+            item.name: item
+            for item in contract.mission_details
+            if item.name in _GROUP_FACTS[group]
+        }
+        preferred = {
+            "difficulty": ("difficulty", "difficulty-risk"),
+            "ace": ("ace-pilot", "ace-probability"),
+            "engagement": ("engagement-type", "engagement-distance"),
+        }.get(group, _GROUP_FACTS[group])
+        return tuple(found[name] for name in preferred if name in found)[:1]
+
+    def _title_group_text(
+        self,
+        group: str,
+        details: tuple[MissionDetail, ...],
+    ) -> str:
+        if not details:
+            return ""
+        item = details[0]
+        value = self._format_mission_value(item, compact=True)
+        if group == "mission_type":
+            return f"[{value}]"
+        if group == "difficulty":
+            return f"[Difficulty {value}]"
+        if group == "friendly_spawns":
+            return f"[Allies {value}]"
+        if group == "hostile_spawns":
+            return f"[Hostiles {value}]"
+        if group == "ace":
+            if item.name == "ace-pilot":
+                return "[ACE]" if item.value is True else ""
+            return "[ACE?]" if isinstance(item.value, (int, float)) and item.value > 0 else ""
+        if group == "turrets":
+            return f"[Turrets {value}]"
+        return f"[{value}]"
+
+    def _format_mission_value(
+        self,
+        detail: MissionDetail,
+        *,
+        compact: bool = False,
+    ) -> str:
+        value = detail.value
+        if detail.name == "ace-probability" and isinstance(value, (int, float)):
+            return f"{value:.0%}"
+        if isinstance(value, bool):
+            return "Yes" if value else "No"
+        if isinstance(value, int):
+            return self.format_number(value)
+        if isinstance(value, float):
+            return f"{value:g}" if compact else f"{value:,.1f}"
+        return value
 
 
 @dataclass
@@ -286,7 +488,12 @@ class Renderer:
                     continue
 
                 result.values[key] = value
-                result.provenance[key] = tuple(contract.evidence)
+                kind = contract.kind_of(key) or StringKind.DESC
+                result.provenance[key] = tuple(
+                    dict.fromkeys(
+                        (*contract.evidence, *self.options.mission_evidence(contract, kind))
+                    )
+                )
                 result.warnings.extend((key, i) for i in issues)
 
         return result

@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...render.renderer import MISSION_FACT_GROUPS
 from ..components import MetricTile, NoticeBanner, SectionCard, Tone
 from ..labels import (
     FIELD_NAMES,
@@ -60,10 +61,12 @@ class FormattingTab(QWidget):
         self.style_metric = MetricTile("Text style")
         self.prefix_metric = MetricTile("Title prefix")
         self.length_metric = MetricTile("Blueprint list")
+        self.tag_metric = MetricTile("Mission tags")
         metrics.addWidget(self.style_metric, 0, 0)
         metrics.addWidget(self.prefix_metric, 0, 1)
         metrics.addWidget(self.length_metric, 0, 2)
-        for column in range(3):
+        metrics.addWidget(self.tag_metric, 0, 3)
+        for column in range(4):
             metrics.setColumnStretch(column, 1)
         layout.addLayout(metrics)
 
@@ -73,6 +76,8 @@ class FormattingTab(QWidget):
         self.title_section = self._build_title_box()
         sections.addWidget(self.style_section)
         sections.addWidget(self.title_section)
+        self.tag_builder_section = self._build_tag_builder_box()
+        sections.addWidget(self.tag_builder_section)
         self.wording_section = self._build_wording_box()
         sections.addWidget(self.wording_section)
         self.length_box = self._build_length_box()
@@ -87,6 +92,12 @@ class FormattingTab(QWidget):
             self.prefix,
             self.bracket_rep,
             self.bracket_bp,
+            self.mission_details,
+            self.tag_builder_enabled,
+            *self.tag_field_boxes.values(),
+            self.tag_placement,
+            self.tag_separator,
+            self.tag_max_characters,
             self.wording_order,
             self.reputation_separator,
             self.thousands_separator,
@@ -288,6 +299,130 @@ class FormattingTab(QWidget):
         setattr(self.state.profile.formatting.title, name, value)
         self.state.touch_profile()
 
+    # --- mission presentation -----------------------------------------------
+
+    def _build_tag_builder_box(self) -> SectionCard:
+        box = SectionCard(
+            "Mission Tag Builder",
+            "Build bounded title tags from cached G5 facts. Missing or disabled facts add nothing.",
+        )
+
+        self.mission_details = QCheckBox(
+            "Add enabled mission facts to contract descriptions"
+        )
+        self.mission_details.setAccessibleDescription(
+            "Adds a structured Mission Details block using only enabled local facts."
+        )
+        self.mission_details.toggled.connect(self._set_mission_details)
+        box.add_widget(self.mission_details)
+
+        self.tag_builder_enabled = QCheckBox(
+            "Add selected mission facts to contract titles"
+        )
+        self.tag_builder_enabled.setAccessibleDescription(
+            "Enables typed title tags; it does not enable advanced templates."
+        )
+        self.tag_builder_enabled.toggled.connect(self._set_tag_builder_enabled)
+        box.add_widget(self.tag_builder_enabled)
+
+        labels = {
+            "mission_type": "Mission type",
+            "difficulty": "Difficulty",
+            "friendly_spawns": "Friendly spawns",
+            "hostile_spawns": "Hostile spawns",
+            "ace": "Ace marker",
+            "turrets": "Turrets",
+            "engagement": "Engagement",
+        }
+        self.tag_field_boxes: dict[str, QCheckBox] = {}
+        fields = QWidget()
+        field_layout = QGridLayout(fields)
+        field_layout.setContentsMargins(24, 0, 0, 0)
+        for index, name in enumerate(MISSION_FACT_GROUPS):
+            check = QCheckBox(labels[name])
+            check.setAccessibleName(f"Use {labels[name].lower()} in mission title tags")
+            check.toggled.connect(
+                lambda _checked, field=name: self._set_tag_builder_fields(field)
+            )
+            self.tag_field_boxes[name] = check
+            field_layout.addWidget(check, index // 2, index % 2)
+        box.add_widget(fields)
+
+        self.tag_placement = QComboBox()
+        self.tag_placement.addItem("Before the original title", "prefix")
+        self.tag_placement.addItem("After the original title", "suffix")
+        self.tag_placement.setAccessibleName("Mission tag placement")
+        self.tag_placement.currentIndexChanged.connect(self._set_tag_placement)
+
+        self.tag_separator = QComboBox()
+        self.tag_separator.addItem("Spaces", " ")
+        self.tag_separator.addItem("Bullets", " • ")
+        self.tag_separator.setAccessibleName("Mission tag separator")
+        self.tag_separator.currentIndexChanged.connect(self._set_tag_separator)
+
+        self.tag_max_characters = QSpinBox()
+        self.tag_max_characters.setRange(16, 160)
+        self.tag_max_characters.setAccessibleName("Maximum mission tag characters")
+        self.tag_max_characters.setAccessibleDescription(
+            "Whole tags that exceed the cap are omitted; they are never truncated mid-value."
+        )
+        self.tag_max_characters.valueChanged.connect(self._set_tag_max_characters)
+
+        form = QFormLayout()
+        form.addRow("Placement", self.tag_placement)
+        form.addRow("Between tags", self.tag_separator)
+        form.addRow("Maximum tag characters", self.tag_max_characters)
+        box.add_layout(form)
+
+        self.tag_preview = QLabel("No evidenced mission facts are loaded for preview.")
+        self.tag_preview.setWordWrap(True)
+        self.tag_preview.setProperty("component", "preview")
+        self.tag_preview.setAccessibleName("Mission title tag preview")
+        box.add_widget(self.tag_preview)
+        return box
+
+    def _set_mission_details(self, checked: bool) -> None:
+        if self._loading:
+            return
+        self.state.profile.mission_presentation.description_details = checked
+        self.state.touch_profile()
+
+    def _set_tag_builder_enabled(self, checked: bool) -> None:
+        if self._loading:
+            return
+        self.state.profile.mission_presentation.tags.enabled = checked
+        self.state.touch_profile()
+
+    def _set_tag_builder_fields(self, _field: str) -> None:
+        if self._loading:
+            return
+        self.state.profile.mission_presentation.tags.fields = tuple(
+            name for name in MISSION_FACT_GROUPS if self.tag_field_boxes[name].isChecked()
+        )
+        self.state.touch_profile()
+
+    def _set_tag_placement(self, index: int) -> None:
+        if self._loading:
+            return
+        self.state.profile.mission_presentation.tags.placement = (
+            self.tag_placement.itemData(index)
+        )
+        self.state.touch_profile()
+
+    def _set_tag_separator(self, index: int) -> None:
+        if self._loading:
+            return
+        self.state.profile.mission_presentation.tags.separator = (
+            self.tag_separator.itemData(index)
+        )
+        self.state.touch_profile()
+
+    def _set_tag_max_characters(self, value: int) -> None:
+        if self._loading:
+            return
+        self.state.profile.mission_presentation.tags.max_characters = value
+        self.state.touch_profile()
+
     # --- structured wording -------------------------------------------------
 
     def _build_wording_box(self) -> SectionCard:
@@ -484,6 +619,19 @@ class FormattingTab(QWidget):
             self.bracket_rep.setChecked(formatting.title.bracket_rep)
             self.bracket_bp.setChecked(formatting.title.bracket_bp)
 
+            mission = self.state.profile.mission_presentation
+            self.mission_details.setChecked(mission.description_details)
+            self.tag_builder_enabled.setChecked(mission.tags.enabled)
+            for name, check in self.tag_field_boxes.items():
+                check.setChecked(name in mission.tags.fields)
+            self.tag_placement.setCurrentIndex(
+                max(0, self.tag_placement.findData(mission.tags.placement))
+            )
+            self.tag_separator.setCurrentIndex(
+                max(0, self.tag_separator.findData(mission.tags.separator))
+            )
+            self.tag_max_characters.setValue(mission.tags.max_characters)
+
             wording = self.state.profile.wording
             while self.wording_order.count() > len(WORDING_ORDERS):
                 self.wording_order.removeItem(self.wording_order.count() - 1)
@@ -519,7 +667,19 @@ class FormattingTab(QWidget):
         self.length_metric.set_value(
             str(self.max_items.value()) if self.max_items.value() else "All"
         )
+        self._refresh_tag_preview()
         self._update_reward_note()
+
+    def _refresh_tag_preview(self) -> None:
+        contract = self.state.sample_contract()
+        if contract is None:
+            preview = "No evidenced mission facts are loaded for preview."
+        else:
+            tags = self.state.profile.to_render_options().title_fact_tags(contract)
+            preview = tags or "No enabled title tags match this contract."
+        self.tag_preview.setText(preview)
+        enabled = self.state.profile.mission_presentation.tags.enabled
+        self.tag_metric.set_value("Enabled" if enabled else "Off", preview)
 
     def _update_reward_note(self) -> None:
         """Say when a setting cannot do anything yet, rather than letting it

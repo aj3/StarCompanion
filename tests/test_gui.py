@@ -416,11 +416,39 @@ def test_every_toggle_is_bound(community_rewards, window):
 
 
 def test_contract_content_uses_summary_metrics_and_toggle_rows(window):
-    assert window.fields.enabled_metric.value.text() == "3 / 3"
+    assert window.fields.enabled_metric.value.text() == "3 / 10"
     assert all(
         row.property("component") == "toggle-row"
         for row in window.fields.rows.values()
     )
+
+
+def test_mission_fact_controls_update_profile_rendering_and_tag_preview(window):
+    from starcompanion.model import Evidence, FactConfidence, MissionDetail
+
+    contract = window.state.contracts.contracts[0]
+    evidence = Evidence(
+        "local-dataforge-mission-spawns",
+        "record",
+        "missions/spawn.xml",
+        "$.hostileCount",
+        7,
+    )
+    contract.mission_details.append(
+        MissionDetail("hostile-spawns", 7, FactConfidence.HIGH, (evidence,))
+    )
+    window.state.set_contracts(window.state.contracts)
+
+    assert not window.fields.mission_boxes["hostile_spawns"].isChecked()
+    window.fields.mission_boxes["hostile_spawns"].setChecked(True)
+    window.formatting.mission_details.setChecked(True)
+
+    assert "Hostile spawns: 7" in window.state.render().values["Org_x_desc"]
+    assert window.source.evidence_metric.value.text() == "1"
+
+    window.formatting.tag_builder_enabled.setChecked(True)
+    assert "[Hostiles 7]" in window.state.render().values["Org_x_title"]
+    assert "[Hostiles 7]" in window.formatting.tag_preview.text()
 
 
 # --- formatting tab ----------------------------------------------------------

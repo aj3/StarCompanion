@@ -911,6 +911,15 @@ and Windows/Ubuntu CI gates passed together on the G3 implementation commit.
   The build has no reviewed direct ace, turret, or engagement fields, so those
   facts remain explicitly unavailable rather than inferred. No HOTFIX archive
   was installed; that real-channel check remains gated on a local installation.
+- **G6 active (2026-09-12):** tactical mission facts now cross the isolated
+  archive helper, shared bounded graph, typed domain, cache schema 7, profile
+  schema 3, and reusable GUI controls. Description details and title tags are
+  independently enabled, default off for migrated profiles, bounded, and
+  provenance-bearing only when rendered. Conflicting cross-record values are
+  suppressed instead of resolved by iteration order. LIVE `1.0.191.55227`
+  processed 1,851 contracts and retained 2,900 unambiguous typed details across
+  737 contracts; no extracted game data is committed. Route/mining/entity tag rules, favorites, and the
+  legacy wording pack remain in G6.
 - **G5** extracts independently evidenced mission type/difficulty,
   friendly/hostile spawn, ace-pilot, turret, and engagement facts alongside
   the planned entity providers. Shared-description ambiguity suppresses an

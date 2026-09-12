@@ -27,6 +27,12 @@
 - LIVE `1.0.191.55227` exposes no reviewed direct ace-pilot, turret-count, or
   engagement fields. Those independent capabilities remain unavailable rather
   than being guessed from record names or shared mission descriptions.
+- New G6 mission-detail and title-tag settings default off when profiles migrate
+  to schema 3. Only explicitly enabled fact groups render, and a selected group
+  remains silent when its independent provider has no evidence for the build.
+- Cache schema 7 is intentionally incompatible with older generated caches.
+  Re-import the selected local channel to rebuild; personal wording, ownership,
+  and settings remain in their separate stores.
 - Frozen Windows and Ubuntu artifacts are built independently because native
   PyInstaller executables are not cross-platform. Ubuntu CI verifies its own
   artifact; desktop integration is not promised for every Linux distribution.

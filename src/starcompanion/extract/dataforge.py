@@ -1618,14 +1618,21 @@ def _mission_items(
     return items, evidence, diagnostics
 
 
-def extract_mission_facts(source: RecordSource) -> MissionExtractionResult:
+def extract_mission_facts(
+    source: RecordSource,
+    *,
+    index: DataForgeIndex | None = None,
+) -> MissionExtractionResult:
     """Extract contract-generator rewards while isolating schema drift.
 
     A failed optional provider degrades this report only.  It never prevents
     callers from using the existing MissionBrokerEntry/string extraction path.
     """
 
-    index = DataForgeIndex(source)
+    if index is None:
+        index = DataForgeIndex(source)
+    elif index.source is not source:
+        raise ValueError("mission fact index belongs to a different source")
     diagnostics = list(index.diagnostics)
     contract_nodes = index.records_under("records/contracts/contractgenerator")
     if not contract_nodes:

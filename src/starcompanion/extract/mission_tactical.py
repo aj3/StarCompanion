@@ -489,7 +489,11 @@ def _extract_values(
                     candidate.node.id,
                     candidate.node.normalized_path,
                     candidate.field.path,
-                    value,
+                    (
+                        candidate.field.value
+                        if field_spec.kind is ScalarKind.LOCALE_KEY
+                        else value
+                    ),
                 ),
             )
             values.append(
@@ -729,6 +733,7 @@ def extract_mission_tactical_catalog(
     *,
     build_version: str | None = None,
     providers: Iterable[MissionTacticalProvider] | None = None,
+    index: DataForgeIndex | None = None,
 ) -> MissionTacticalCatalog:
     """Run independent tactical providers over one bounded record graph."""
 
@@ -736,9 +741,30 @@ def extract_mission_tactical_catalog(
     names = [item.spec.provider.casefold() for item in selected]
     if len(names) != len(set(names)):
         raise ValueError("mission tactical provider ids must be unique")
-    index = DataForgeIndex(source)
-    results = tuple(
-        provider.extract(index, build_version=build_version)
-        for provider in sorted(selected, key=lambda item: item.spec.provider)
-    )
-    return MissionTacticalCatalog(results)
+    if index is None:
+        index = DataForgeIndex(source)
+    elif index.source is not source:
+        raise ValueError("mission tactical index belongs to a different source")
+    results = []
+    for provider in sorted(selected, key=lambda item: item.spec.provider):
+        try:
+            result = provider.extract(index, build_version=build_version)
+        except Exception:
+            diagnostic = Diagnostic(
+                f"{provider.spec.provider}-provider-exception",
+                "The provider stopped safely because its implementation failed",
+                Severity.ERROR,
+            )
+            result = MissionTacticalResult(
+                (),
+                CapabilityReport(
+                    provider.spec.provider,
+                    CapabilityStatus.UNAVAILABLE,
+                    str(build_version or source.version),
+                    0,
+                    0,
+                    (diagnostic,),
+                ),
+            )
+        results.append(result)
+    return MissionTacticalCatalog(tuple(results))

@@ -411,3 +411,24 @@ def test_tactical_provider_declarations_and_catalog_ids_are_strict():
     duplicate = MissionTacticalProvider(CLASSIFICATION_PROVIDER)
     with pytest.raises(ValueError, match="provider ids"):
         extract_mission_tactical_catalog(tactical_fixture(), providers=(duplicate, duplicate))
+
+
+def test_provider_exception_is_isolated_from_healthy_capabilities(monkeypatch):
+    broken_spec = replace(ENGAGEMENT_PROVIDER, provider="mission-broken-v1")
+    broken = MissionTacticalProvider(broken_spec)
+
+    def fail_extract(*_args, **_kwargs):
+        raise RuntimeError("sensitive implementation detail")
+
+    monkeypatch.setattr(broken, "extract", fail_extract)
+    catalog = extract_mission_tactical_catalog(
+        tactical_fixture(),
+        providers=(MissionTacticalProvider(CLASSIFICATION_PROVIDER), broken),
+    )
+
+    healthy = catalog.for_provider(CLASSIFICATION_PROVIDER.provider)
+    failed = catalog.for_provider("mission-broken-v1")
+    assert healthy.capability.status is CapabilityStatus.AVAILABLE
+    assert failed.capability.status is CapabilityStatus.UNAVAILABLE
+    assert failed.capability.diagnostics[0].code == "mission-broken-v1-provider-exception"
+    assert "sensitive" not in failed.capability.diagnostics[0].message

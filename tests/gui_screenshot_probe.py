@@ -129,6 +129,7 @@ def main() -> int:
             {
                 "enabled_metric": window.fields.enabled_metric,
                 "coverage_metric": window.fields.coverage_metric,
+                "tactical_metric": window.fields.tactical_metric,
                 "core_section": window.fields.core_section,
             }
         )
@@ -136,8 +137,10 @@ def main() -> int:
         rect_widgets.update(
             {
                 "style_metric": window.formatting.style_metric,
+                "tag_metric": window.formatting.tag_metric,
                 "style_section": window.formatting.style_section,
                 "title_section": window.formatting.title_section,
+                "tag_builder_section": window.formatting.tag_builder_section,
             }
         )
     elif page == "presentation-wording":

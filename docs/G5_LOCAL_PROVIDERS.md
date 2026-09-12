@@ -76,5 +76,6 @@ evidence and refuse missing, ambiguous, stale, or type-changing targets.
 
 - Repeat the read-only aggregate against HOTFIX when a local HOTFIX archive is
   available; never substitute a LIVE result.
-- Wire the validated provider cache into CLI/GUI provenance views; G6, not G5,
-  owns user-facing tactical presentation and tag controls.
+- G6 now wires the tactical provider results into cache schema 7, CLI/GUI
+  provider health, independent presentation controls, and per-rendered-key
+  provenance. Remaining G6 work is tracked in `G6_PRESENTATION.md`.

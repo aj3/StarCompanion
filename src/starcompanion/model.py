@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import math
+import unicodedata
 
 
 class Difficulty(Enum):
@@ -76,6 +78,15 @@ class ProviderStatus(Enum):
     DISABLED = "disabled"
 
 
+class FactConfidence(Enum):
+    """Presentation confidence copied from one reviewed local provider fact."""
+
+    NONE = "none"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 @dataclass(frozen=True)
 class UnresolvedLocalization:
     """One provider fact that could not join because localization is absent."""
@@ -94,6 +105,89 @@ class Evidence:
     record_path: str
     field_path: str
     value: str | int | float | bool | None = None
+
+
+MISSION_DETAIL_NAMES = frozenset(
+    {
+        "mission-type",
+        "difficulty",
+        "difficulty-risk",
+        "difficulty-knowledge",
+        "difficulty-mental-load",
+        "difficulty-mechanical-skill",
+        "friendly-spawns",
+        "hostile-spawns",
+        "ace-pilot",
+        "ace-probability",
+        "turret-count",
+        "engagement-distance",
+        "engagement-type",
+    }
+)
+_TEXT_MISSION_DETAILS = MISSION_DETAIL_NAMES - {
+    "friendly-spawns",
+    "hostile-spawns",
+    "ace-pilot",
+    "ace-probability",
+    "turret-count",
+    "engagement-distance",
+}
+_COUNT_MISSION_DETAILS = frozenset(
+    {"friendly-spawns", "hostile-spawns", "turret-count"}
+)
+
+
+@dataclass(frozen=True)
+class MissionDetail:
+    """One safe, typed mission fact with its complete local evidence."""
+
+    name: str
+    value: str | int | float | bool
+    confidence: FactConfidence
+    evidence: tuple[Evidence, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or self.name not in MISSION_DETAIL_NAMES:
+            raise ValueError(f"unsupported mission detail {self.name!r}")
+        if not isinstance(self.confidence, FactConfidence):
+            raise ValueError("mission detail confidence must be typed")
+        if not self.evidence or any(
+            not isinstance(item, Evidence) for item in self.evidence
+        ):
+            raise ValueError("mission details require provenance evidence")
+        if self.name in _TEXT_MISSION_DETAILS:
+            if not isinstance(self.value, str):
+                raise ValueError("text mission details require text values")
+            if (
+                not self.value.strip()
+                or self.value != self.value.strip()
+                or len(self.value) > 256
+                or any(character in self.value for character in "<>\r\n\0")
+                or any(
+                    unicodedata.category(character) in {"Cc", "Cf", "Cs", "Zl", "Zp"}
+                    for character in self.value
+                )
+            ):
+                raise ValueError("mission detail text is empty, unsafe, or oversized")
+        elif self.name in _COUNT_MISSION_DETAILS:
+            if type(self.value) is not int or not 0 <= self.value <= 100_000:
+                raise ValueError("mission detail count is outside its reviewed range")
+        elif self.name == "ace-pilot":
+            if type(self.value) is not bool:
+                raise ValueError("ace-pilot mission detail must be boolean")
+        elif self.name == "ace-probability":
+            if (
+                type(self.value) is not float
+                or not math.isfinite(self.value)
+                or not 0 <= self.value <= 1
+            ):
+                raise ValueError("ace probability is outside its reviewed range")
+        elif (
+            type(self.value) is not float
+            or not math.isfinite(self.value)
+            or not 0 <= self.value <= 1_000_000_000
+        ):
+            raise ValueError("engagement distance is outside its reviewed range")
 
 
 @dataclass(frozen=True)
@@ -271,6 +365,8 @@ class Contract:
     reward: Reward = field(default_factory=Reward)
     evidence: list[Evidence] = field(default_factory=list)
     """Provider evidence contributing generated fields on this contract."""
+    mission_details: list[MissionDetail] = field(default_factory=list)
+    """Independent G5 tactical facts; presentation remains profile-controlled."""
 
     @property
     def rank(self) -> int | None:
@@ -299,6 +395,13 @@ class Contract:
 
     def kind_of(self, key: str) -> StringKind | None:
         return next((kind for kind, keys in self.keys.items() if key in keys), None)
+
+    def mission_detail(self, name: str) -> MissionDetail | None:
+        wanted = name.casefold()
+        return next(
+            (item for item in self.mission_details if item.name.casefold() == wanted),
+            None,
+        )
 
     @property
     def title(self) -> str | None:

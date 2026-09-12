@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "name": "default",
   "description": "Everything shown, formatted close to MrKraken's StarStrings.",
   "fields": {
@@ -27,6 +27,11 @@
     "labels": {},
     "reputation_separator": " / ",
     "thousands_separator": true
+  },
+  "mission_presentation": {
+    "facts": {},
+    "description_details": false,
+    "tags": {"enabled": false}
   },
   "templates": {},
   "injection": {

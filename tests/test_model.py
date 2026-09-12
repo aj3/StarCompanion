@@ -1,11 +1,16 @@
+import pytest
+
 from starcompanion.model import (
     BlueprintPool,
     Contract,
     ContractSet,
     Difficulty,
+    Evidence,
+    FactConfidence,
     Gate,
     GateKind,
     Org,
+    MissionDetail,
     Reward,
     ScenarioPoints,
     StringKind,
@@ -122,3 +127,28 @@ def test_sorted_by_rank_puts_unranked_last():
     none = Contract(id="n", org=org, family="f")
 
     assert ContractSet(contracts=[none, hard, easy]).sorted_by_rank() == [easy, hard, none]
+
+
+def test_mission_details_reject_unsafe_or_untyped_values():
+    evidence = (Evidence("test", "record", "path", "$.field", 1),)
+
+    for value in (float("nan"), float("inf"), " padded ", "hidden\u200btext", [], None):
+        with pytest.raises(ValueError):
+            MissionDetail("hostile-spawns", value, FactConfidence.HIGH, evidence)
+
+    with pytest.raises(ValueError, match="confidence"):
+        MissionDetail("hostile-spawns", 2, "high", evidence)
+
+    for name, value in (
+        ("hostile-spawns", -1),
+        ("hostile-spawns", True),
+        ("ace-pilot", 1),
+        ("ace-probability", 1.1),
+        ("engagement-distance", float("inf")),
+        ("mission-type", 7),
+    ):
+        with pytest.raises(ValueError):
+            MissionDetail(name, value, FactConfidence.HIGH, evidence)
+
+    with pytest.raises(ValueError, match="provenance"):
+        MissionDetail("hostile-spawns", 2, FactConfidence.HIGH, ("not evidence",))

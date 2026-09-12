@@ -369,14 +369,16 @@ def cmd_import(args) -> int:
     print(f"imported {len(contracts.contracts)} contracts from {len(contracts.orgs)} orgs")
     print(f"  keys     : {sum(len(c.all_keys()) for c in contracts.contracts)}")
     for capability in contracts.capabilities:
+        fact_kind = "reward facts" if capability.reward_facts else "facts"
+        fact_total = capability.reward_facts or capability.facts_seen
         print(
             f"  provider : {capability.provider} v{capability.version} "
             f"{capability.status.value} — {capability.contracts_enhanced:,} contracts, "
             f"{capability.evidence_links:,} evidence links"
         )
         print(
-            f"             reward facts {capability.matched_facts:,}/"
-            f"{capability.reward_facts:,} matched; "
+            f"             {fact_kind} {capability.matched_facts:,}/"
+            f"{fact_total:,} matched; "
             f"{capability.unmatched_facts:,} unmatched"
         )
         if capability.diagnostic_counts:
@@ -1243,6 +1245,8 @@ def cmd_inspect(args) -> int:
         print(f"{field:14}: {value}")
     contracts = cache.load(args.cache)
     for capability in contracts.capabilities:
+        fact_kind = "reward facts" if capability.reward_facts else "facts"
+        fact_total = capability.reward_facts or capability.facts_seen
         print(
             f"provider      : {capability.provider} v{capability.version} "
             f"[{capability.status.value}]"
@@ -1253,7 +1257,7 @@ def cmd_inspect(args) -> int:
         print(f"  evidence    : {capability.evidence_links:,}")
         print(
             f"  coverage    : {capability.matched_facts:,}/"
-            f"{capability.reward_facts:,} reward facts matched; "
+            f"{fact_total:,} {fact_kind} matched; "
             f"{capability.unmatched_facts:,} unmatched"
         )
         if capability.diagnostic_counts:

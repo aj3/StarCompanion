@@ -74,6 +74,44 @@ TOGGLES: tuple[tuple[str, str, str, bool], ...] = (
     ),
 )
 
+MISSION_TOGGLES: tuple[tuple[str, str, str], ...] = (
+    (
+        "mission_type",
+        "Mission type",
+        "The locally evidenced contract category, when its localization resolves.",
+    ),
+    (
+        "difficulty",
+        "Difficulty evidence",
+        "Reviewed difficulty, risk, knowledge, mental-load, and skill fields.",
+    ),
+    (
+        "friendly_spawns",
+        "Friendly spawns",
+        "Finite friendly spawn totals proven by paired local fields.",
+    ),
+    (
+        "hostile_spawns",
+        "Hostile spawns",
+        "Finite hostile spawn totals; unbounded sentinels are never shown as totals.",
+    ),
+    (
+        "ace",
+        "Ace-pilot evidence",
+        "Direct ace flags or explicitly uncertain probability evidence.",
+    ),
+    (
+        "turrets",
+        "Turret count",
+        "Shown only when the selected build exposes a reviewed direct field.",
+    ),
+    (
+        "engagement",
+        "Engagement facts",
+        "Reviewed engagement type and distance fields without name-based guessing.",
+    ),
+)
+
 
 class FieldsTab(QWidget):
     def __init__(self, state: AppState, parent: QWidget | None = None):
@@ -81,6 +119,7 @@ class FieldsTab(QWidget):
         self.state = state
         self._loading = False
         self.boxes: dict[str, QCheckBox] = {}
+        self.mission_boxes: dict[str, QCheckBox] = {}
         self.rows: dict[str, ToggleRow] = {}
         self.setAccessibleName("Contract content settings")
         self.setAccessibleDescription(
@@ -94,10 +133,13 @@ class FieldsTab(QWidget):
         summary.setSpacing(SPACING.medium)
         self.enabled_metric = MetricTile("Enabled fields")
         self.coverage_metric = MetricTile("Local reward coverage")
+        self.tactical_metric = MetricTile("Mission facts")
         summary.addWidget(self.enabled_metric, 0, 0)
         summary.addWidget(self.coverage_metric, 0, 1)
+        summary.addWidget(self.tactical_metric, 0, 2)
         summary.setColumnStretch(0, 1)
         summary.setColumnStretch(1, 1)
+        summary.setColumnStretch(2, 1)
         layout.addLayout(summary)
 
         core = SectionCard(
@@ -109,8 +151,13 @@ class FieldsTab(QWidget):
             "Optional community-assisted fields remain isolated behind the explicit capability flag.",
         )
         extended.setVisible(community_rewards_enabled())
+        tactical = SectionCard(
+            "Mission details",
+            "Each category is independent and remains silent when its own provider lacks evidence.",
+        )
         self.core_section = core
         self.extended_section = extended
+        self.tactical_section = tactical
         focus_order: list[QCheckBox] = []
 
         for name, label, hint, needs_rewards in TOGGLES:
@@ -127,7 +174,19 @@ class FieldsTab(QWidget):
             (extended if needs_rewards else core).add_widget(row)
             focus_order.append(check)
 
+        for name, label, hint in MISSION_TOGGLES:
+            row = ToggleRow(label, hint)
+            check = row.checkbox
+            check.toggled.connect(
+                lambda checked, field=name: self._set_mission(field, checked)
+            )
+            self.mission_boxes[name] = check
+            self.rows[f"mission:{name}"] = row
+            tactical.add_widget(row)
+            focus_order.append(check)
+
         layout.addWidget(core)
+        layout.addWidget(tactical)
         layout.addWidget(extended)
 
         self.notice = NoticeBanner(tone=Tone.WARNING)
@@ -147,11 +206,21 @@ class FieldsTab(QWidget):
         setattr(self.state.profile.fields, name, checked)
         self.state.touch_profile()
 
+    def _set_mission(self, name: str, checked: bool) -> None:
+        if self._loading:
+            return
+        setattr(self.state.profile.mission_presentation.facts, name, checked)
+        self.state.touch_profile()
+
     def refresh(self) -> None:
         self._loading = True
         try:
             for name, check in self.boxes.items():
                 check.setChecked(getattr(self.state.profile.fields, name))
+            for name, check in self.mission_boxes.items():
+                check.setChecked(
+                    getattr(self.state.profile.mission_presentation.facts, name)
+                )
         finally:
             self._loading = False
 
@@ -159,8 +228,9 @@ class FieldsTab(QWidget):
         has_rewards = bool(
             contracts and any(not c.reward.is_empty for c in contracts.contracts)
         )
-        enabled = sum(check.isChecked() for check in self.boxes.values())
-        self.enabled_metric.set_value(f"{enabled} / {len(self.boxes)}")
+        all_boxes = (*self.boxes.values(), *self.mission_boxes.values())
+        enabled = sum(check.isChecked() for check in all_boxes)
+        self.enabled_metric.set_value(f"{enabled} / {len(all_boxes)}")
         if contracts is None:
             self.coverage_metric.set_value("Not loaded", "Read the local game archive first")
         elif has_rewards:
@@ -171,6 +241,22 @@ class FieldsTab(QWidget):
             )
         else:
             self.coverage_metric.set_value("No matches", "Provider evidence remains visible")
+        tactical_count = sum(
+            len(contract.mission_details)
+            for contract in contracts.contracts
+        ) if contracts else 0
+        if contracts is None:
+            self.tactical_metric.set_value("Not loaded")
+        elif tactical_count:
+            tactical_contracts = sum(
+                bool(contract.mission_details) for contract in contracts.contracts
+            )
+            self.tactical_metric.set_value(
+                f"{tactical_count:,} facts",
+                f"across {tactical_contracts:,} contracts",
+            )
+        else:
+            self.tactical_metric.set_value("Unavailable", "See provider diagnostics")
         if contracts is None:
             notice = (
                 "Local reward facts have not been loaded. Return to Overview to read "

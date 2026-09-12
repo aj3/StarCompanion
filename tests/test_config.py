@@ -52,6 +52,17 @@ def test_customised_profile_round_trips_losslessly():
                 "title": {"prefix": "org_rank", "bracket_bp": False},
             },
             "templates": {"foxwell": {"title": "{{ base }}!"}},
+            "mission_presentation": {
+                "facts": {"mission_type": True, "hostile_spawns": True},
+                "description_details": True,
+                "tags": {
+                    "enabled": True,
+                    "fields": ["mission_type", "hostile_spawns"],
+                    "placement": "suffix",
+                    "separator": " • ",
+                    "max_characters": 48,
+                },
+            },
             "injection": {"mode": "overwrite", "backup": False},
         }
     )
@@ -102,6 +113,15 @@ def test_v1_profile_with_templates_preserves_them_in_advanced_mode():
     assert profile.templates["foxwell"].title == "CUSTOM"
 
 
+def test_v2_profile_migrates_with_mission_presentation_disabled():
+    profile = Profile.loads('{"schema_version": 2, "name": "v2"}')
+
+    assert profile.schema_version == SCHEMA_VERSION
+    assert profile.mission_presentation.facts.enabled() == frozenset()
+    assert not profile.mission_presentation.description_details
+    assert not profile.mission_presentation.tags.enabled
+
+
 def test_missing_schema_version_assumes_current():
     assert Profile.loads('{"name": "x"}').schema_version == SCHEMA_VERSION
 
@@ -135,6 +155,21 @@ def test_void_tag_is_not_a_valid_emphasis():
 def test_unknown_emphasis_field_is_rejected():
     with pytest.raises(ValidationError, match="unknown field"):
         Profile.model_validate({"formatting": {"by_field": {"nonsense": "EM4"}}})
+
+
+def test_tag_builder_rejects_duplicate_fields_and_unbounded_lengths():
+    with pytest.raises(ValidationError, match="must be unique"):
+        Profile.model_validate(
+            {
+                "mission_presentation": {
+                    "tags": {"fields": ["ace", "ace"]}
+                }
+            }
+        )
+    with pytest.raises(ValidationError):
+        Profile.model_validate(
+            {"mission_presentation": {"tags": {"max_characters": 500}}}
+        )
 
 
 def test_bad_tag_inside_by_field_is_rejected():
