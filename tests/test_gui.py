@@ -451,6 +451,33 @@ def test_mission_fact_controls_update_profile_rendering_and_tag_preview(window):
     assert "[Hostiles 7]" in window.formatting.tag_preview.text()
 
 
+def test_route_and_mining_controls_are_typed_and_profile_bound(window):
+    route = window.formatting.route_titles_enabled
+    mining = window.formatting.mining_signature_enabled
+    route.setChecked(True)
+    mining.setChecked(True)
+    window.formatting.route_title_mode.setCurrentIndex(
+        window.formatting.route_title_mode.findData("replace")
+    )
+    window.formatting.route_arrow.setCurrentIndex(
+        window.formatting.route_arrow.findData("to")
+    )
+    window.formatting.route_location_detail.setCurrentIndex(
+        window.formatting.route_location_detail.findData("name")
+    )
+
+    presentation = window.state.profile.mission_presentation
+    assert presentation.route_titles_enabled
+    assert presentation.mining_signature_enabled
+    assert presentation.route_title_mode == "replace"
+    assert presentation.route_arrow == "to"
+    assert presentation.route_location_detail == "name"
+    assert window.formatting.tag_metric.value.text() == "Enabled"
+    assert window.formatting.route_title_mode.accessibleName()
+    assert window.formatting.route_arrow.accessibleName()
+    assert window.formatting.route_location_detail.accessibleName()
+
+
 # --- formatting tab ----------------------------------------------------------
 
 

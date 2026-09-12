@@ -1,6 +1,6 @@
 # StarCompanion core threat model
 
-**Version:** 3 (G6 typed presentation)
+**Version:** 4 (G6 typed route presentation)
 **Review date:** 2026-09-12
 
 ## Security objectives
@@ -32,7 +32,7 @@ strings, usernames, and absolute paths must not enter diagnostics or releases.
 | Diagnostics | Intended to be shareable | Aggregate counts/status only; excludes paths, usernames, values, logs, ownership, and game strings |
 | GUI administration | User-selected paths and long-running local work cross the event loop/worker boundary | Background jobs own discovery, archive reading, ownership scanning, settings portability, and diagnostics I/O; model snapshots cross back to Qt; shutdown requests cancellation and waits boundedly |
 | Advanced string editor | Large local string graphs and bulk edits could freeze, accidentally broaden a write, or lose personal text during replacement | Virtualized projection, debounced in-memory validation, model-level undo/redo, explicit multi-select reset, the unchanged serialized C3 operation plan as the only apply boundary, and separate capped collision-resistant `user.ini` snapshots before changed saves |
-| Tactical fact presentation | Local fields may be malformed, ambiguous, unlocalized, oversized, or unsupported by one build | Fixed fact vocabulary, per-fact type/range checks, required source evidence, equal-value evidence merging, contradictory-value suppression, control/markup bounds, literal-versus-localization field evidence, independent provider status, profile-default off migration, complete-tag length budget, and provenance only for rendered facts |
+| Tactical and route presentation | Local fields or stock mission variables may be malformed, ambiguous, unlocalized, oversized, or unsupported by one build | Fixed fact and route-family vocabularies, per-fact type/range checks, exact mission-token parsing, description-variant intersection, existing-route suppression, required source evidence, contradictory-value suppression, control/markup bounds, independent provider status, profile-default off migration, complete-tag length budget, and provenance only for rendered facts or variables |
 | Backup browser | A listed file can be replaced or redirected before restore | Target-scoped ordinary-file filtering, preview fingerprints, pre-write revalidation, preservation of the current target, journaled atomic replacement, and final digest verification |
 | Dependencies/release | Third-party code or signing credentials may be compromised | Exact pins and hashes, offline wheelhouse build, vulnerability audit, CycloneDX SBOM, license/notice verification, frozen offline smoke, protected manual signing environment, thumbprint pin, timestamp and signature verification |
 

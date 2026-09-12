@@ -46,7 +46,10 @@ preserving the original value. Synthetic mission classification, spawn/ace,
 and engagement/turret providers now add bounded reference joins and suppress
 shared-description matching. G6's first completed slice carries the tactical
 facts through cache schema 7 into independent GUI controls, description
-details, bounded typed title tags, and rendered-only provenance.
+details, bounded typed title tags, and rendered-only provenance. Its second
+slice adds exact-token hauling routes, title shortening, and Battaglia resource
+labels behind independent default-off profile controls and the same title
+budget.
 [G5_LOCAL_PROVIDERS.md](G5_LOCAL_PROVIDERS.md) and
 [G6_PRESENTATION.md](G6_PRESENTATION.md) record those contracts. **Sprint G4 — Ownership and Editor Completion**
 is complete: revision-bound manual ownership, complete

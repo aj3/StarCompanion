@@ -98,6 +98,11 @@ class FormattingTab(QWidget):
             self.tag_placement,
             self.tag_separator,
             self.tag_max_characters,
+            self.route_titles_enabled,
+            self.route_title_mode,
+            self.route_arrow,
+            self.route_location_detail,
+            self.mining_signature_enabled,
             self.wording_order,
             self.reputation_separator,
             self.thousands_separator,
@@ -374,6 +379,49 @@ class FormattingTab(QWidget):
         form.addRow("Maximum tag characters", self.tag_max_characters)
         box.add_layout(form)
 
+        self.route_titles_enabled = QCheckBox(
+            "Add evidence-backed routes to hauling titles"
+        )
+        self.route_titles_enabled.setAccessibleDescription(
+            "Uses only endpoint tokens present in the stock mission descriptions."
+        )
+        self.route_titles_enabled.toggled.connect(self._set_route_enabled)
+        box.add_widget(self.route_titles_enabled)
+
+        self.route_title_mode = QComboBox()
+        self.route_title_mode.addItem("Keep title and append route", "append")
+        self.route_title_mode.addItem("Replace eligible title with route", "replace")
+        self.route_title_mode.setAccessibleName("Hauling route title behavior")
+        self.route_title_mode.currentIndexChanged.connect(self._set_route_mode)
+        self.route_arrow = QComboBox()
+        for label, value in (
+            ("Greater-than (>)", ">"),
+            ("ASCII arrow (->)", "->"),
+            ("Word (to)", "to"),
+        ):
+            self.route_arrow.addItem(label, value)
+        self.route_arrow.setAccessibleName("Hauling route separator")
+        self.route_arrow.currentIndexChanged.connect(self._set_route_arrow)
+        self.route_location_detail = QComboBox()
+        self.route_location_detail.addItem("Full address", "address")
+        self.route_location_detail.addItem("Short name", "name")
+        self.route_location_detail.setAccessibleName("Hauling location detail")
+        self.route_location_detail.currentIndexChanged.connect(self._set_route_detail)
+        route_form = QFormLayout()
+        route_form.addRow("Route behavior", self.route_title_mode)
+        route_form.addRow("Route separator", self.route_arrow)
+        route_form.addRow("Location detail", self.route_location_detail)
+        box.add_layout(route_form)
+
+        self.mining_signature_enabled = QCheckBox(
+            "Append Battaglia mining resource tokens"
+        )
+        self.mining_signature_enabled.setAccessibleDescription(
+            "Uses exact Resources and MineableType tokens from reviewed scan mission descriptions."
+        )
+        self.mining_signature_enabled.toggled.connect(self._set_mining_signature)
+        box.add_widget(self.mining_signature_enabled)
+
         self.tag_preview = QLabel("No evidenced mission facts are loaded for preview.")
         self.tag_preview.setWordWrap(True)
         self.tag_preview.setProperty("component", "preview")
@@ -422,6 +470,37 @@ class FormattingTab(QWidget):
             return
         self.state.profile.mission_presentation.tags.max_characters = value
         self.state.touch_profile()
+
+    def _set_route_enabled(self, checked: bool) -> None:
+        if not self._loading:
+            self.state.profile.mission_presentation.route_titles_enabled = checked
+            self.state.touch_profile()
+
+    def _set_route_mode(self, index: int) -> None:
+        if not self._loading:
+            self.state.profile.mission_presentation.route_title_mode = (
+                self.route_title_mode.itemData(index)
+            )
+            self.state.touch_profile()
+
+    def _set_route_arrow(self, index: int) -> None:
+        if not self._loading:
+            self.state.profile.mission_presentation.route_arrow = (
+                self.route_arrow.itemData(index)
+            )
+            self.state.touch_profile()
+
+    def _set_route_detail(self, index: int) -> None:
+        if not self._loading:
+            self.state.profile.mission_presentation.route_location_detail = (
+                self.route_location_detail.itemData(index)
+            )
+            self.state.touch_profile()
+
+    def _set_mining_signature(self, checked: bool) -> None:
+        if not self._loading:
+            self.state.profile.mission_presentation.mining_signature_enabled = checked
+            self.state.touch_profile()
 
     # --- structured wording -------------------------------------------------
 
@@ -631,6 +710,22 @@ class FormattingTab(QWidget):
                 max(0, self.tag_separator.findData(mission.tags.separator))
             )
             self.tag_max_characters.setValue(mission.tags.max_characters)
+            self.route_titles_enabled.setChecked(mission.route_titles_enabled)
+            self.route_title_mode.setCurrentIndex(
+                max(0, self.route_title_mode.findData(mission.route_title_mode))
+            )
+            self.route_arrow.setCurrentIndex(
+                max(0, self.route_arrow.findData(mission.route_arrow))
+            )
+            self.route_location_detail.setCurrentIndex(
+                max(
+                    0,
+                    self.route_location_detail.findData(
+                        mission.route_location_detail
+                    ),
+                )
+            )
+            self.mining_signature_enabled.setChecked(mission.mining_signature_enabled)
 
             wording = self.state.profile.wording
             while self.wording_order.count() > len(WORDING_ORDERS):
@@ -675,10 +770,30 @@ class FormattingTab(QWidget):
         if contract is None:
             preview = "No evidenced mission facts are loaded for preview."
         else:
-            tags = self.state.profile.to_render_options().title_fact_tags(contract)
+            options = self.state.profile.to_render_options()
+            tags = " ".join(
+                filter(
+                    None,
+                    (
+                        options.title_fact_tags(contract),
+                        options.mission_title_suffix(contract),
+                    ),
+                )
+            )
             preview = tags or "No enabled title tags match this contract."
         self.tag_preview.setText(preview)
-        enabled = self.state.profile.mission_presentation.tags.enabled
+        mission = self.state.profile.mission_presentation
+        enabled = (
+            mission.tags.enabled
+            or mission.route_titles_enabled
+            or mission.mining_signature_enabled
+        )
+        for control in (
+            self.route_title_mode,
+            self.route_arrow,
+            self.route_location_detail,
+        ):
+            control.setEnabled(mission.route_titles_enabled)
         self.tag_metric.set_value("Enabled" if enabled else "Off", preview)
 
     def _update_reward_note(self) -> None:

@@ -35,7 +35,7 @@ from .render.renderer import (
 )
 from .validate import EMPHASIS_TAGS
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 PROFILE_DIR = Path(__file__).parent / "profiles"
 
@@ -214,6 +214,11 @@ class MissionPresentation(Strict):
     facts: MissionFactToggles = Field(default_factory=MissionFactToggles)
     description_details: bool = False
     tags: MissionTagBuilder = Field(default_factory=MissionTagBuilder)
+    route_titles_enabled: bool = False
+    route_title_mode: Literal["append", "replace"] = "append"
+    route_arrow: Literal[">", "->", "to"] = ">"
+    route_location_detail: Literal["address", "name"] = "address"
+    mining_signature_enabled: bool = False
 
 
 class OrgTemplates(Strict):
@@ -238,7 +243,7 @@ class Injection(Strict):
 
 
 class Profile(Strict):
-    schema_version: Literal[3] = SCHEMA_VERSION
+    schema_version: Literal[4] = SCHEMA_VERSION
     name: str = "default"
     description: str = ""
     fields: FieldToggles = Field(default_factory=FieldToggles)
@@ -282,8 +287,10 @@ class Profile(Strict):
             }
             found = 2
         if found == 2:
-            data["schema_version"] = SCHEMA_VERSION
             data.setdefault("mission_presentation", {})
+            found = 3
+        if found == 3:
+            data["schema_version"] = SCHEMA_VERSION
             found = SCHEMA_VERSION
         if found != SCHEMA_VERSION:
             # Checked before model validation so the message names the real
@@ -331,6 +338,11 @@ class Profile(Strict):
             tag_builder_placement=self.mission_presentation.tags.placement,
             tag_builder_separator=self.mission_presentation.tags.separator,
             tag_builder_max_characters=self.mission_presentation.tags.max_characters,
+            route_titles_enabled=self.mission_presentation.route_titles_enabled,
+            route_title_mode=self.mission_presentation.route_title_mode,
+            route_arrow=self.mission_presentation.route_arrow,
+            route_location_detail=self.mission_presentation.route_location_detail,
+            mining_signature_enabled=self.mission_presentation.mining_signature_enabled,
         )
 
     def template_overrides(self) -> dict[str, str]:

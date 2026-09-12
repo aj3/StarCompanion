@@ -86,9 +86,10 @@ setting the game ignores the override entirely and nothing appears to happen.
 
 *Contract Content* independently enables each locally evidenced mission fact.
 *Presentation* changes style, generated labels, information order, number
-formatting, description details, and bounded title tags through validated
-controls. New tactical controls default off during profile migration, and a
-missing provider value is never guessed. *Custom wording* is an explicit advanced
+formatting, description details, bounded title tags, evidence-backed hauling
+routes, and Battaglia resource labels through validated controls. New tactical
+controls default off during profile migration, and a missing provider or stock
+token is never guessed. *Custom wording* is an explicit advanced
 mode for sandboxed templates, while the virtualized *String editor* handles
 individual reviewed values. *Blueprints* joins
 the local C4 catalog to channel-scoped ownership and incrementally scans local
@@ -294,9 +295,10 @@ protected manual release operation documented in
 | `minimal` | Rep and a blueprint flag in titles only; CIG's prose untouched |
 | `rank-first` | Giver and rank lead every title; rep emphasised above gate notes |
 
-Profiles are versioned JSON — save, share, and reload them. Version 1 profiles
-migrate safely to version 2: ordinary profiles use structured wording, while a
-profile containing custom templates retains them in explicit advanced mode.
+Profiles are versioned JSON — save, share, and reload them. Older profiles
+migrate safely to schema 4: ordinary profiles use structured wording, a profile
+containing custom templates retains explicit advanced mode, and new tactical,
+route, and mining controls remain off until the user enables them.
 
 ## Installing the result
 

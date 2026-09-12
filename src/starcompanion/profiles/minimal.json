@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "name": "minimal",
   "description": "Rep and blueprint flag in titles only; descriptions left as CIG wrote them.",
   "fields": {

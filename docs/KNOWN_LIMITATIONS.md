@@ -27,9 +27,15 @@
 - LIVE `1.0.191.55227` exposes no reviewed direct ace-pilot, turret-count, or
   engagement fields. Those independent capabilities remain unavailable rather
   than being guessed from record names or shared mission descriptions.
-- New G6 mission-detail and title-tag settings default off when profiles migrate
-  to schema 3. Only explicitly enabled fact groups render, and a selected group
-  remains silent when its independent provider has no evidence for the build.
+- New G6 mission-detail, title-tag, route, and mining-label settings default off
+  when profiles migrate to schema 4. Only explicitly enabled evidenced values
+  render, and a selected group remains silent when its provider or stock text
+  has no evidence for the build.
+- Route and mining labels currently preserve direct stock mission variables.
+  Nested mission-variable indirection is not expanded because the contract
+  cache does not retain the complete localization dictionary. Numeric mining
+  signatures are separately sourced legacy data and remain deferred to the
+  opt-in, exact-build wording pack rather than being presented as CIG data.
 - Cache schema 7 is intentionally incompatible with older generated caches.
   Re-import the selected local channel to rebuild; personal wording, ownership,
   and settings remain in their separate stores.

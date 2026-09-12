@@ -59,8 +59,8 @@ does not execute or silently download either project's code or generated data.
 | Friendly and hostile spawn summaries | **Complete** | Bounded graph joins, independent diagnostics, typed G6 controls, title tags, description details, and LIVE aggregate validation are complete. |
 | Ace-pilot `[ACE]` and uncertain `[ACE?]` markers | **Complete** | Direct booleans and probabilities have distinct typed markers and provenance. The current LIVE build exposes neither, so the control remains silent instead of guessing. |
 | Turret counts and engagement details | **Complete** | Typed controls and bounded presentation cover direct provider facts. The current LIVE build reports the provider unavailable because it has no reviewed fields. |
-| Hauling/delivery/courier routes and title shortening | **Planned** | G6 presentation provider and Tag Builder. |
-| Battaglia/asteroid resource-signature tags | **Planned** | G6 mission/mining provider. |
+| Hauling/delivery/courier routes and title shortening | **Complete** | Exact stock endpoint tokens, description-variant intersection, append/replace modes, typed display choices, bounded whole-unit rendering, and rendered-only provenance are synthetic- and LIVE-validated. |
+| Battaglia/asteroid resource-signature tags | **Partial** | Exact Battaglia resource-label tokens are independently controlled and LIVE-validated. Numeric RS values are curated legacy data and remain in the opt-in build-bounded wording pack. |
 | Ship statistics and component summaries | **Partial** | G5 typed vehicle provider foundation is synthetic-tested; schema-specific fact expansion and live-build validation remain. |
 | Ship-component and ship-weapon statistics | **Partial** | G5 component and dedicated ship-weapon provider facts are synthetic-tested; live schema validation remains. |
 | FPS-weapon statistics | **Partial** | G5 dedicated FPS-weapon facts and isolation diagnostics are synthetic-tested; live schema validation remains. |
@@ -126,8 +126,8 @@ localization key.
 |---|---|---|
 | Blueprint title markers, pools, component context, ranks, regional variants, and caveats | **Complete** | Existing mission facts/rendering cover the content, and G4 joins exact channel-scoped ownership into the render-only contract copy. |
 | Reputation, direct rewards, and scenario progress in contracts | **Complete** | Existing local provider. |
-| Hauling title overhaul with origin/destination | **Planned** | G6. |
-| Asteroid resource-signature values in scan objectives | **Planned** | G6. |
+| Hauling title overhaul with origin/destination | **Complete** | G6 uses only exact stock route variables shared by contributing description variants. |
+| Asteroid resource-signature values in scan objectives | **Partial** | Stock resource variables are complete; numeric RS values remain for the separately sourced, opt-in legacy pack. |
 | Shorter Hephaestanite and mining UI wording; `(Raw)` normalization | **Planned** | G6 local presentation pack. |
 | Illegal-item warning prefix | **Planned** | G6 item presentation rules. |
 | Component Type/Size/Grade and missile-type prefixes | **Planned** | G5 facts, G6 Tag Builder. |
@@ -148,9 +148,10 @@ localization key.
    has independent capability and drift diagnostics.
 3. **G6 — Tag Builder and legacy presentation (active):** independently
    controlled tactical mission presentation and mission Tag Builder are
-   complete. Continue with route-aware mission titles, configurable
-   item/commodity/missile tags, favorites, mining/resource-signature features,
-   and the remaining legacy wording pack under the strict boundary above.
+   complete. Route-aware mission titles and stock Battaglia resource labels are
+   also complete. Continue with configurable entity/item/commodity/missile
+   tags, favorites, numeric mining signatures, and the remaining legacy wording
+   pack under the strict boundary above.
 4. **G7 — Experience parity:** dedicated simple mode, clear-localization flow,
    GUI language selection and safe `USER.cfg` activation, portable/data-root
    management with OneDrive guidance, filtered clipboard export, close-dirty

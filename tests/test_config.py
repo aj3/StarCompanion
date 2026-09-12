@@ -122,6 +122,35 @@ def test_v2_profile_migrates_with_mission_presentation_disabled():
     assert not profile.mission_presentation.tags.enabled
 
 
+def test_v3_profile_migrates_with_route_and_mining_presentation_disabled():
+    profile = Profile.loads('{"schema_version": 3, "name": "v3"}')
+
+    assert profile.schema_version == SCHEMA_VERSION
+    assert not profile.mission_presentation.route_titles_enabled
+    assert not profile.mission_presentation.mining_signature_enabled
+
+
+def test_route_and_mining_settings_flow_to_typed_render_options():
+    profile = Profile.model_validate(
+        {
+            "mission_presentation": {
+                "route_titles_enabled": True,
+                "route_title_mode": "replace",
+                "route_arrow": "to",
+                "route_location_detail": "name",
+                "mining_signature_enabled": True,
+            }
+        }
+    )
+
+    options = profile.to_render_options()
+    assert options.route_titles_enabled
+    assert options.route_title_mode == "replace"
+    assert options.route_arrow == "to"
+    assert options.route_location_detail == "name"
+    assert options.mining_signature_enabled
+
+
 def test_missing_schema_version_assumes_current():
     assert Profile.loads('{"name": "x"}').schema_version == SCHEMA_VERSION
 

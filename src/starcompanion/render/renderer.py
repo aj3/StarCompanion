@@ -31,6 +31,7 @@ from ..model import (
     MissionDetail,
     StringKind,
 )
+from ..route_presentation import resource_signature, route_fragment, token_evidence
 from ..validate import EMPHASIS_TAGS, Issue, Severity, validate_value
 
 TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
@@ -195,6 +196,11 @@ class RenderOptions:
     tag_builder_placement: str = "prefix"
     tag_builder_separator: str = " "
     tag_builder_max_characters: int = 72
+    route_titles_enabled: bool = False
+    route_title_mode: str = "append"
+    route_arrow: str = ">"
+    route_location_detail: str = "address"
+    mining_signature_enabled: bool = False
 
     def __post_init__(self):
         for tag in (self.emphasis, *self.emphasis_by_field.values()):
@@ -229,6 +235,12 @@ class RenderOptions:
             raise ValueError("unsupported tag builder separator")
         if not 16 <= self.tag_builder_max_characters <= 160:
             raise ValueError("tag builder length must be between 16 and 160")
+        if self.route_title_mode not in {"append", "replace"}:
+            raise ValueError("unsupported route title mode")
+        if self.route_arrow not in {">", "->", "to"}:
+            raise ValueError("unsupported route arrow")
+        if self.route_location_detail not in {"address", "name"}:
+            raise ValueError("unsupported route location detail")
 
     def emphasis_for(self, field_name: str | None) -> str:
         return self.emphasis_by_field.get(field_name or "", self.emphasis)
@@ -269,14 +281,64 @@ class RenderOptions:
         )
 
     def title_fact_tags(self, contract: Contract) -> str:
-        return self.tag_builder_separator.join(
-            text for text, _details in self._title_fact_parts(contract)
+        parts = [text for text, _details in self._title_fact_parts(contract)]
+        return self.tag_builder_separator.join(parts)
+
+    def mission_title_suffix(self, contract: Contract) -> str:
+        parts: list[str] = []
+        current_length = len(self.title_fact_tags(contract))
+        if self.route_titles_enabled and self.route_title_mode == "append":
+            route = route_fragment(
+                contract,
+                arrow=self.route_arrow,
+                detail=self.route_location_detail,
+            )
+            if route:
+                current_length = self._append_bounded_title_part(
+                    parts, f"[{route}]", current_length
+                )
+        if self.mining_signature_enabled:
+            signature = resource_signature(contract)
+            if signature:
+                self._append_bounded_title_part(
+                    parts, f"[{signature}]", current_length
+                )
+        return self.tag_builder_separator.join(parts)
+
+    def mission_title_base(self, contract: Contract, base: str) -> str:
+        if self.route_titles_enabled and self.route_title_mode == "replace":
+            route = route_fragment(
+                contract,
+                arrow=self.route_arrow,
+                detail=self.route_location_detail,
+            )
+            current_length = len(self.title_fact_tags(contract))
+            added = len(route) + (
+                len(self.tag_builder_separator) if current_length else 0
+            )
+            if route and current_length + added <= self.tag_builder_max_characters:
+                return route
+        return base
+
+    def _append_bounded_title_part(
+        self,
+        parts: list[str],
+        text: str,
+        current_length: int,
+    ) -> int:
+        added = len(text) + (
+            len(self.tag_builder_separator) if current_length else 0
         )
+        if current_length + added <= self.tag_builder_max_characters:
+            parts.append(text)
+            return current_length + added
+        return current_length
 
     def mission_evidence(
         self,
         contract: Contract,
         kind: StringKind,
+        rendered_value: str | None = None,
     ) -> tuple[Evidence, ...]:
         if kind is StringKind.DESC and self.show_mission_details:
             details = self.visible_mission_details(contract)
@@ -288,11 +350,51 @@ class RenderOptions:
             )
         else:
             details = ()
-        return tuple(
+        evidence = list(
             dict.fromkeys(
                 evidence for detail in details for evidence in detail.evidence
             )
         )
+        if kind is StringKind.TITLE:
+            route = ""
+            if self.route_titles_enabled:
+                candidate = route_fragment(
+                    contract,
+                    arrow=self.route_arrow,
+                    detail=self.route_location_detail,
+                )
+                if self.route_title_mode == "append":
+                    rendered = f"[{candidate}]" in self.mission_title_suffix(
+                        contract
+                    )
+                else:
+                    current_length = len(self.title_fact_tags(contract))
+                    added = len(candidate) + (
+                        len(self.tag_builder_separator) if current_length else 0
+                    )
+                    rendered = bool(candidate) and (
+                        current_length + added <= self.tag_builder_max_characters
+                    )
+                if rendered_value is not None and candidate not in rendered_value:
+                    rendered = False
+                if rendered:
+                    route = candidate
+            resource = ""
+            if self.mining_signature_enabled:
+                candidate = resource_signature(contract)
+                if (
+                    f"[{candidate}]" in self.mission_title_suffix(contract)
+                    and (rendered_value is None or candidate in rendered_value)
+                ):
+                    resource = candidate
+            evidence.extend(
+                token_evidence(
+                    contract,
+                    route_text=route,
+                    resource_text=resource,
+                )
+            )
+        return tuple(dict.fromkeys(evidence))
 
     def _title_fact_parts(
         self,
@@ -491,7 +593,10 @@ class Renderer:
                 kind = contract.kind_of(key) or StringKind.DESC
                 result.provenance[key] = tuple(
                     dict.fromkeys(
-                        (*contract.evidence, *self.options.mission_evidence(contract, kind))
+                        (
+                            *contract.evidence,
+                            *self.options.mission_evidence(contract, kind, value),
+                        )
                     )
                 )
                 result.warnings.extend((key, i) for i in issues)
