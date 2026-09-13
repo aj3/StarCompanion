@@ -130,6 +130,14 @@ def test_v3_profile_migrates_with_route_and_mining_presentation_disabled():
     assert not profile.mission_presentation.mining_signature_enabled
 
 
+def test_v4_profile_migrates_with_entity_tags_disabled():
+    profile = Profile.loads('{"schema_version": 4, "name": "v4"}')
+
+    assert profile.schema_version == SCHEMA_VERSION
+    assert not profile.mission_presentation.entity_tags.enabled
+    assert not profile.mission_presentation.legacy_mining_pack_enabled
+
+
 def test_route_and_mining_settings_flow_to_typed_render_options():
     profile = Profile.model_validate(
         {
@@ -139,6 +147,14 @@ def test_route_and_mining_settings_flow_to_typed_render_options():
                 "route_arrow": "to",
                 "route_location_detail": "name",
                 "mining_signature_enabled": True,
+                "legacy_mining_pack_enabled": True,
+                "entity_tags": {
+                    "enabled": True,
+                    "kinds": ["component", "missile"],
+                    "fields": ["kind", "size"],
+                    "placement": "suffix",
+                    "max_characters": 48,
+                },
             }
         }
     )
@@ -149,6 +165,12 @@ def test_route_and_mining_settings_flow_to_typed_render_options():
     assert options.route_arrow == "to"
     assert options.route_location_detail == "name"
     assert options.mining_signature_enabled
+    assert options.legacy_mining_pack_enabled
+    assert options.entity_tag_builder_enabled
+    assert options.entity_tag_kinds == frozenset({"component", "missile"})
+    assert options.entity_tag_fields == ("kind", "size")
+    assert options.entity_tag_placement == "suffix"
+    assert options.entity_tag_max_characters == 48
 
 
 def test_missing_schema_version_assumes_current():

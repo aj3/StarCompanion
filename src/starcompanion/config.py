@@ -24,6 +24,8 @@ from pydantic import (
 from .inject import DEFAULT_BACKUP_RETENTION, MAX_BACKUP_RETENTION, MergeMode
 from .model import ContractSet
 from .render.renderer import (
+    ENTITY_TAG_FIELDS,
+    ENTITY_TAG_KINDS,
     Field as RenderField,
     RenderLabels,
     RenderOptions,
@@ -35,7 +37,7 @@ from .render.renderer import (
 )
 from .validate import EMPHASIS_TAGS
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 PROFILE_DIR = Path(__file__).parent / "profiles"
 
@@ -208,6 +210,35 @@ class MissionTagBuilder(Strict):
         return value
 
 
+EntityTagKind = Literal[
+    "vehicle",
+    "component",
+    "ship-weapon",
+    "fps-weapon",
+    "medical",
+    "commodity",
+    "missile",
+]
+EntityTagField = Literal["kind", "size", "grade", "class"]
+
+
+class EntityTagBuilder(Strict):
+    """Typed, bounded labels over unambiguous G5 entity/name joins."""
+
+    enabled: bool = False
+    kinds: frozenset[EntityTagKind] = frozenset(ENTITY_TAG_KINDS)
+    fields: tuple[EntityTagField, ...] = ENTITY_TAG_FIELDS
+    placement: Literal["prefix", "suffix"] = "prefix"
+    max_characters: int = Field(default=72, ge=16, le=160)
+
+    @field_validator("fields")
+    @classmethod
+    def _unique_fields(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("entity tag fields must be unique")
+        return value
+
+
 class MissionPresentation(Strict):
     """Presentation-only settings over cached G5 facts."""
 
@@ -219,6 +250,8 @@ class MissionPresentation(Strict):
     route_arrow: Literal[">", "->", "to"] = ">"
     route_location_detail: Literal["address", "name"] = "address"
     mining_signature_enabled: bool = False
+    legacy_mining_pack_enabled: bool = False
+    entity_tags: EntityTagBuilder = Field(default_factory=EntityTagBuilder)
 
 
 class OrgTemplates(Strict):
@@ -243,7 +276,7 @@ class Injection(Strict):
 
 
 class Profile(Strict):
-    schema_version: Literal[4] = SCHEMA_VERSION
+    schema_version: Literal[5] = SCHEMA_VERSION
     name: str = "default"
     description: str = ""
     fields: FieldToggles = Field(default_factory=FieldToggles)
@@ -290,8 +323,10 @@ class Profile(Strict):
             data.setdefault("mission_presentation", {})
             found = 3
         if found == 3:
+            found = 4
+        if found == 4:
             data["schema_version"] = SCHEMA_VERSION
-            found = SCHEMA_VERSION
+            found = 5
         if found != SCHEMA_VERSION:
             # Checked before model validation so the message names the real
             # problem instead of a confusing Literal mismatch.
@@ -343,6 +378,14 @@ class Profile(Strict):
             route_arrow=self.mission_presentation.route_arrow,
             route_location_detail=self.mission_presentation.route_location_detail,
             mining_signature_enabled=self.mission_presentation.mining_signature_enabled,
+            legacy_mining_pack_enabled=(
+                self.mission_presentation.legacy_mining_pack_enabled
+            ),
+            entity_tag_builder_enabled=self.mission_presentation.entity_tags.enabled,
+            entity_tag_kinds=frozenset(self.mission_presentation.entity_tags.kinds),
+            entity_tag_fields=tuple(self.mission_presentation.entity_tags.fields),
+            entity_tag_placement=self.mission_presentation.entity_tags.placement,
+            entity_tag_max_characters=self.mission_presentation.entity_tags.max_characters,
         )
 
     def template_overrides(self) -> dict[str, str]:
@@ -389,6 +432,7 @@ def load_builtin(name: str) -> Profile:
 __all__ = [
     "SCHEMA_VERSION",
     "Appearance",
+    "EntityTagBuilder",
     "Formatting",
     "FieldToggles",
     "Injection",

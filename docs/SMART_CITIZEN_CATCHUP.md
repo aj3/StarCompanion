@@ -911,9 +911,9 @@ and Windows/Ubuntu CI gates passed together on the G3 implementation commit.
   The build has no reviewed direct ace, turret, or engagement fields, so those
   facts remain explicitly unavailable rather than inferred. No HOTFIX archive
   was installed; that real-channel check remains gated on a local installation.
-- **G6 active (2026-09-12):** tactical mission facts now cross the isolated
-  archive helper, shared bounded graph, typed domain, cache schema 7, profile
-  schema 4, and reusable GUI controls. Description details and title tags are
+- **G6 complete (2026-09-13):** tactical mission facts now cross the isolated
+  archive helper, shared bounded graph, typed domain, cache schema 9, profile
+  schema 5, and reusable GUI controls. Description details and title tags are
   independently enabled, default off for migrated profiles, bounded, and
   provenance-bearing only when rendered. Conflicting cross-record values are
   suppressed instead of resolved by iteration order. LIVE `1.0.191.55227`
@@ -921,8 +921,15 @@ and Windows/Ubuntu CI gates passed together on the G3 implementation commit.
   737 contracts. The next slice found 103 exact-token hauling routes and five
   Battaglia resource-label contracts; default bounds rendered 83 routes and all
   five resource labels with no warnings or skipped keys. No extracted game data
-  is committed. Entity tag rules, favorites, numeric resource signatures, and
-  the legacy wording pack remain in G6.
+  is committed. The final slice adds strict entity/item name
+  joins and typed tags, one-level nested mission-token intersection, user-layer
+  ship favorites and ASOP ordering, and 26 explicitly attributed numeric mining
+  signatures bounded to an exact reviewed build/key/stock tuple. The completed
+  read-only LIVE rerun retained 1,134 fail-closed display keys, 13 nested route
+  expansions, and all 26 attributed signatures; an all-options render produced
+  6,362 values with no warnings or skips. Generic UI, cross-domain, and crafting
+  output labels were explicitly suppressed. HOTFIX remains externally blocked
+  because no local HOTFIX archive is installed.
 - **G5** extracts independently evidenced mission type/difficulty,
   friendly/hostile spawn, ace-pilot, turret, and engagement facts alongside
   the planned entity providers. Shared-description ambiguity suppresses an

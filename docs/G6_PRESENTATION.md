@@ -2,9 +2,9 @@
 
 Sprint G6 presents locally extracted facts without weakening the C0–C5 write
 boundary. Completed slices cover mission classification, difficulty, spawn,
-ace, turret, and engagement facts plus stock-token hauling routes and Battaglia
-resource labels. Entity tags, favorites, numeric resource signatures, and the
-opt-in legacy wording pack remain in later G6 slices.
+ace, turret, and engagement facts; nested stock-token hauling routes and
+Battaglia resource labels; typed entity tags; ship favorites and ASOP ordering;
+and an exact-build legacy numeric mining pack.
 
 ## Data path
 
@@ -18,9 +18,10 @@ opt-in legacy wording pack remain in later G6 slices.
    are suppressed and degrade only their provider. Non-finite numbers, unsupported names or types, markup,
    controls, hidden formatting characters, untrimmed strings, and oversized
    strings are rejected.
-4. Cache schema 7 interns tactical evidence with existing provider evidence.
+4. Cache schema 9 interns tactical, nested-route, entity-tag, and legacy-pack
+   evidence with existing provider evidence.
    Loading performs the same type, bounds, enum, and evidence-reference checks.
-5. Profile schema 4 stores independent fact toggles, description-detail
+5. Profile schema 5 stores independent fact toggles, description-detail
    visibility, the typed title Tag Builder, route choices, and mining-label
    visibility. Migration leaves every new control off so an existing profile's
    rendered output does not change.
@@ -52,6 +53,26 @@ one of three plain separators. A stock title that already contains an endpoint
 is left unchanged. Battaglia scan/mining labels likewise use only exact stock
 `Resources` and `MineableType` variables. Both features honor the complete-unit
 title budget and attach evidence only for variables that actually render.
+Nested route variables are expanded one level only when every candidate stock
+entry agrees on the exact mission tokens; ambiguous or empty candidates suppress
+the expansion.
+
+Entity and item tags use unambiguous local DataForge-to-localization joins.
+Shared names with conflicting kinds are suppressed, and Size/Grade/Class is
+shown only when every record sharing a display key agrees. A fail-closed
+per-kind key-family allowlist rejects generic UI labels, cross-domain names,
+and crafting-output labels before they can become localization mutations.
+Crafting relationships remain available to the G5 backend but are not treated
+as independently named presentation entities. Ship favorites and
+two-digit `NN-` ASOP order prefixes are restricted to evidence-backed vehicle
+name rows and execute through the existing channel/language-scoped `user.ini`
+command model, including undo/redo and reviewed saving.
+
+The legacy numeric mining pack is disabled by default. Its 26 factual values
+are attributed to a pinned historical StarStrings commit, accepted only for
+build `1.0.191.55227`, and further require exact localization keys and exact
+stock English names. It never fills unresolved CIG text and fails closed on a
+new build or changed value.
 
 Provider Health remains the source of truth when a build does not expose a
 field. Selecting a presentation option never manufactures a value and never
@@ -82,5 +103,14 @@ produced no warning or skip, and 376 rendered-only token evidence links. These
 are aggregate counts; the temporary cache is deleted and no extracted text is
 committed.
 
-HOTFIX validation remains externally blocked until a local HOTFIX archive is
-installed. It must be run independently and cannot be substituted with LIVE.
+The final read-only LIVE rerun retained 1,134 safely classified display keys:
+132 commodities, 387 components, 349 FPS weapons, 12 medical items, 64
+missiles, 177 ship weapons, and 13 vehicles. The 13 nested-route expansions
+and all 26 exact-build legacy signatures survived cache round-trip. Rendering
+the complete opt-in aggregate produced 6,362 values with zero warnings or
+skips; all numeric signatures retained evidence. Generic or cross-domain
+localization families were reported as suppressed coverage, not silently
+accepted. The 15.1 MB temporary validation cache was deleted after this
+aggregate inspection, and no game data is committed. HOTFIX validation remains
+externally blocked until a local HOTFIX archive is installed; LIVE cannot stand
+in for that independent channel check.

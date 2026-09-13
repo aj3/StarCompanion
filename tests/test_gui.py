@@ -30,7 +30,7 @@ from starcompanion.config import Profile, load_builtin  # noqa: E402
 from starcompanion.gui import AppState, MainWindow  # noqa: E402
 from starcompanion.ini import BOM, LocalizationFile  # noqa: E402
 from starcompanion.inject import MergeMode, backup  # noqa: E402
-from starcompanion.model import StringKind  # noqa: E402
+from starcompanion.model import Evidence, LocalizedEntity, StringKind  # noqa: E402
 from starcompanion.portability import PreferencesStore  # noqa: E402
 from starcompanion.sources import contracts_ini  # noqa: E402
 
@@ -454,8 +454,10 @@ def test_mission_fact_controls_update_profile_rendering_and_tag_preview(window):
 def test_route_and_mining_controls_are_typed_and_profile_bound(window):
     route = window.formatting.route_titles_enabled
     mining = window.formatting.mining_signature_enabled
+    legacy = window.formatting.legacy_mining_pack_enabled
     route.setChecked(True)
     mining.setChecked(True)
+    legacy.setChecked(True)
     window.formatting.route_title_mode.setCurrentIndex(
         window.formatting.route_title_mode.findData("replace")
     )
@@ -469,6 +471,7 @@ def test_route_and_mining_controls_are_typed_and_profile_bound(window):
     presentation = window.state.profile.mission_presentation
     assert presentation.route_titles_enabled
     assert presentation.mining_signature_enabled
+    assert presentation.legacy_mining_pack_enabled
     assert presentation.route_title_mode == "replace"
     assert presentation.route_arrow == "to"
     assert presentation.route_location_detail == "name"
@@ -476,6 +479,44 @@ def test_route_and_mining_controls_are_typed_and_profile_bound(window):
     assert window.formatting.route_title_mode.accessibleName()
     assert window.formatting.route_arrow.accessibleName()
     assert window.formatting.route_location_detail.accessibleName()
+
+
+def test_entity_tag_controls_render_only_evidenced_local_entity_values(window):
+    from starcompanion.model import EntityAttribute, Evidence, LocalizedEntity
+
+    evidence = Evidence(
+        "local-dataforge-components",
+        "record",
+        "records/component.xml",
+        "$.itemSize",
+        2,
+    )
+    window.state.contracts.entities.append(
+        LocalizedEntity(
+            "localization:item_name_test",
+            "component",
+            "item_name_test",
+            "Test Component",
+            (EntityAttribute("size", 2, (evidence,)),),
+            (evidence,),
+        )
+    )
+    window.state.set_contracts(window.state.contracts)
+    window.formatting.entity_tag_builder_enabled.setChecked(True)
+
+    assert window.state.profile.mission_presentation.entity_tags.enabled
+    assert window.state.render().values["item_name_test"] == (
+        "[Component S2] Test Component"
+    )
+    assert "[Component S2]" in window.formatting.entity_tag_preview.text()
+
+    window.formatting.entity_kind_boxes["component"].setChecked(False)
+    assert "item_name_test" not in window.state.render().values
+
+    window.formatting.entity_tag_placement.setCurrentIndex(
+        window.formatting.entity_tag_placement.findData("suffix")
+    )
+    assert window.formatting.entity_tag_placement.accessibleName()
 
 
 # --- formatting tab ----------------------------------------------------------
@@ -664,6 +705,7 @@ def test_target_page_controls_have_screen_reader_names_and_descriptions(window):
         window.formatting.prefix,
         window.formatting.bracket_rep,
         window.formatting.bracket_bp,
+        window.formatting.legacy_mining_pack_enabled,
         window.formatting.wording_order,
         window.formatting.reputation_separator,
         window.formatting.thousands_separator,
@@ -691,6 +733,11 @@ def test_target_page_controls_have_screen_reader_names_and_descriptions(window):
         window.editor.rendered_view,
         window.editor.merged_editor,
         window.editor.provenance_view,
+        window.editor.favorite_button,
+        window.editor.unfavorite_button,
+        window.editor.asop_order,
+        window.editor.order_button,
+        window.editor.clear_order_button,
         window.editor.undo_button,
         window.editor.redo_button,
         window.editor.reset_button,
@@ -911,6 +958,46 @@ def test_advanced_editor_debounces_edit_validation_and_supports_undo(window, qap
     assert window.editor.undo_button.isEnabled()
     window.editor.undo()
     assert record.key not in window.editor.document.values
+
+
+def test_advanced_editor_ship_favorite_and_asop_order_are_one_undoable_model_command(
+    window,
+    qapp,
+):
+    key = "vehicle_name_test"
+    window.state.contracts.entities.append(
+        LocalizedEntity(
+            f"localization:{key}",
+            "vehicle",
+            key,
+            "300i",
+            attributes=(),
+            evidence=(
+                Evidence(
+                    "local-dataforge-vehicles",
+                    "vehicle-id",
+                    "entities/spaceships/test.xml",
+                    "$.vehicleName",
+                    f"@{key}",
+                ),
+            ),
+        )
+    )
+    window.state.set_contracts(window.state.contracts)
+    window.editor.rebuild()
+    window.editor._restore_selection((key,))
+    qapp.processEvents()
+
+    assert window.editor.favorite_button.isEnabled()
+    window.editor.favorite_selected(True)
+    assert window.editor.document.values[key] == "*300i"
+    window.editor.asop_order.setValue(5)
+    window.editor.order_selected()
+    assert window.editor.document.values[key] == "*05-300i"
+    assert window.editor.document.commands[-1].label == "order selected ships for ASOP"
+
+    window.editor.undo()
+    assert window.editor.document.values[key] == "*300i"
 
 
 def test_advanced_editor_search_is_debounced_and_filterable(window, qapp):

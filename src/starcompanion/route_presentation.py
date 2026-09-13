@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import re
 
-from .model import Contract, Evidence, StringKind
+from .ini import LocalizationFile
+from .model import Contract, ContractSet, Evidence, RouteExpansion, StringKind
 
 _TOKEN = re.compile(r"~mission\(\s*([A-Za-z][A-Za-z0-9_]*)\s*(\|[^)]*)?\)")
 _ROUTE_FAMILIES = ("haulcargo", "delivery", "courier")
 _RESOURCE_FAMILIES = ("rpt_scan", "rpt_scanmine")
+_MAX_NESTED_VARIABLES = 128
+_MAX_NESTED_CANDIDATES = 512
 
 
 def _role(name: str) -> str | None:
@@ -35,6 +38,73 @@ def _agreed(groups: list[dict[str, str]]) -> dict[str, str]:
     return {name: token for name, token in groups[0].items() if name in common}
 
 
+def _strict_agreed(groups: list[dict[str, str]]) -> dict[str, str]:
+    if not groups:
+        return {}
+    common = set(groups[0])
+    for group in groups[1:]:
+        common &= set(group)
+    return {name: token for name, token in groups[0].items() if name in common}
+
+
+def attach_nested_route_expansions(
+    contracts: ContractSet,
+    strings: LocalizationFile,
+) -> None:
+    """Retain only one-level endpoint intersections for referenced `*Token`s."""
+
+    entries = tuple(strings.entries())
+    for contract in contracts.contracts:
+        variables: list[str] = []
+        for key in contract.keys_of(StringKind.DESC):
+            for match in _TOKEN.finditer(contract.base_text(key) or ""):
+                name = match.group(1)
+                if (
+                    _role(name) is None
+                    and match.group(2) is None
+                    and name.casefold().endswith("token")
+                    and name not in variables
+                ):
+                    variables.append(name)
+        expansions: list[RouteExpansion] = []
+        for variable in variables[:_MAX_NESTED_VARIABLES]:
+            suffix = f"_{variable}".casefold()
+            candidates = [
+                entry
+                for entry in entries
+                if entry.key.casefold().endswith(suffix)
+            ]
+            if not candidates or len(candidates) > _MAX_NESTED_CANDIDATES:
+                continue
+            groups: list[dict[str, str]] = []
+            for entry in candidates:
+                endpoints: dict[str, str] = {}
+                for match in _TOKEN.finditer(entry.value):
+                    if _role(match.group(1)):
+                        endpoints.setdefault(match.group(1), match.group(0))
+                groups.append(endpoints)
+            agreed = _strict_agreed(groups)
+            if not agreed or len(agreed) > 64:
+                continue
+            evidence = tuple(
+                Evidence(
+                    "local-stock-route-expansion",
+                    contract.id,
+                    f"localization:{entry.key}",
+                    f"nested-token:{variable}",
+                    match.group(0),
+                )
+                for entry in candidates
+                for match in _TOKEN.finditer(entry.value)
+                if match.group(1) in agreed
+            )
+            if evidence:
+                expansions.append(
+                    RouteExpansion(variable, tuple(agreed.values()), evidence)
+                )
+        contract.route_expansions = expansions
+
+
 def route_fragment(contract: Contract, *, arrow: str = ">", detail: str = "address") -> str:
     """Return only endpoint tokens shared by every contributing description."""
 
@@ -52,6 +122,19 @@ def route_fragment(contract: Contract, *, arrow: str = ">", detail: str = "addre
             role = _role(match.group(1))
             if role:
                 source[role].setdefault(match.group(1), match.group(0))
+            elif match.group(2) is None:
+                expansion = contract.route_expansion(match.group(1))
+                if expansion is not None:
+                    for nested in expansion.tokens:
+                        nested_match = _TOKEN.fullmatch(nested)
+                        if nested_match is None:
+                            continue
+                        nested_role = _role(nested_match.group(1))
+                        if nested_role:
+                            source[nested_role].setdefault(
+                                nested_match.group(1),
+                                nested,
+                            )
         if source["from"]:
             from_groups.append(source["from"])
         if source["to"]:
@@ -111,4 +194,12 @@ def token_evidence(
                         match.group(0),
                     )
                 )
+    for expansion in contract.route_expansions:
+        names = {
+            match.group(1).casefold()
+            for token in expansion.tokens
+            if (match := _TOKEN.fullmatch(token)) is not None
+        }
+        if names & rendered_route:
+            evidence.extend(expansion.evidence)
     return tuple(dict.fromkeys(evidence))

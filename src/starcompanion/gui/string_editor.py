@@ -158,6 +158,7 @@ def build_string_snapshot(
     categories: dict[str, str] = {}
     organizations: dict[str, str] = {}
     families: dict[str, str] = {}
+    entity_evidence: dict[str, tuple[Evidence, ...]] = {}
     for contract in contracts.contracts:
         # Iterate the existing kind buckets directly. Contract.kind_of() is a
         # convenient single-key helper but using it once per row would turn a
@@ -168,6 +169,20 @@ def build_string_snapshot(
                 categories[key] = kind.value
                 organizations[key] = contract.org.name
                 families[key] = contract.family
+    for entity in contracts.entities:
+        key = entity.localization_key
+        stock[key] = entity.base_text
+        categories[key] = entity.kind
+        organizations[key] = "Local entity catalog"
+        families[key] = entity.kind
+        entity_evidence[key] = entity.evidence
+    for item in contracts.legacy_signatures:
+        key = item.localization_key
+        stock[key] = item.base_text
+        categories[key] = "legacy-mining"
+        organizations[key] = "Community legacy pack"
+        families[key] = item.supported_build
+        entity_evidence[key] = item.evidence
 
     generated_provenance = {
         key: tuple(_evidence_text(item) for item in rendered.provenance.get(key, ()))
@@ -212,7 +227,11 @@ def build_string_snapshot(
             merged=entry.value,
             winner=entry.winner,
             contributions=entry.contributions,
-            evidence=tuple(rendered.provenance.get(key, ())),
+            evidence=tuple(
+                dict.fromkeys(
+                    (*entity_evidence.get(key, ()), *rendered.provenance.get(key, ()))
+                )
+            ),
             operation=outcomes.get(key, "unchanged"),
             issues=tuple(issues.get(key, ())),
         )

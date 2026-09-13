@@ -28,6 +28,7 @@ from ..model import (
     ContractSet,
     Evidence,
     GateKind,
+    LocalizedEntity,
     MissionDetail,
     StringKind,
 )
@@ -47,6 +48,25 @@ MISSION_FACT_GROUPS = (
     "turrets",
     "engagement",
 )
+ENTITY_TAG_KINDS = (
+    "vehicle",
+    "component",
+    "ship-weapon",
+    "fps-weapon",
+    "medical",
+    "commodity",
+    "missile",
+)
+ENTITY_TAG_FIELDS = ("kind", "size", "grade", "class")
+_ENTITY_KIND_LABELS = {
+    "vehicle": "Vehicle",
+    "component": "Component",
+    "ship-weapon": "Ship Weapon",
+    "fps-weapon": "FPS Weapon",
+    "medical": "Medical",
+    "commodity": "Commodity",
+    "missile": "Missile",
+}
 _GROUP_FACTS = {
     "mission_type": ("mission-type",),
     "difficulty": (
@@ -201,6 +221,12 @@ class RenderOptions:
     route_arrow: str = ">"
     route_location_detail: str = "address"
     mining_signature_enabled: bool = False
+    legacy_mining_pack_enabled: bool = False
+    entity_tag_builder_enabled: bool = False
+    entity_tag_kinds: frozenset[str] = frozenset(ENTITY_TAG_KINDS)
+    entity_tag_fields: tuple[str, ...] = ENTITY_TAG_FIELDS
+    entity_tag_placement: str = "prefix"
+    entity_tag_max_characters: int = 72
 
     def __post_init__(self):
         for tag in (self.emphasis, *self.emphasis_by_field.values()):
@@ -241,6 +267,17 @@ class RenderOptions:
             raise ValueError("unsupported route arrow")
         if self.route_location_detail not in {"address", "name"}:
             raise ValueError("unsupported route location detail")
+        if set(self.entity_tag_kinds) - set(ENTITY_TAG_KINDS):
+            raise ValueError("unsupported entity tag kind")
+        if (
+            set(self.entity_tag_fields) - set(ENTITY_TAG_FIELDS)
+            or len(self.entity_tag_fields) != len(set(self.entity_tag_fields))
+        ):
+            raise ValueError("invalid entity tag fields")
+        if self.entity_tag_placement not in {"prefix", "suffix"}:
+            raise ValueError("unsupported entity tag placement")
+        if not 16 <= self.entity_tag_max_characters <= 160:
+            raise ValueError("entity tag length must be between 16 and 160")
 
     def emphasis_for(self, field_name: str | None) -> str:
         return self.emphasis_by_field.get(field_name or "", self.emphasis)
@@ -478,6 +515,56 @@ class RenderOptions:
             return f"{value:g}" if compact else f"{value:,.1f}"
         return value
 
+    def entity_tag(
+        self,
+        entity: LocalizedEntity,
+    ) -> tuple[str, tuple[Evidence, ...]]:
+        """Build one bounded tag from typed, equal-across-record entity facts."""
+
+        if (
+            not self.entity_tag_builder_enabled
+            or entity.kind not in self.entity_tag_kinds
+        ):
+            return "", ()
+        parts: list[str] = []
+        evidence: list[Evidence] = []
+        current = 2
+        for field_name in self.entity_tag_fields:
+            if field_name == "kind":
+                text = _ENTITY_KIND_LABELS[entity.kind]
+                selected = entity.evidence
+            else:
+                attribute = entity.attribute(field_name)
+                if attribute is None:
+                    continue
+                if field_name == "size":
+                    text = f"S{attribute.value}"
+                elif field_name == "grade":
+                    text = f"Grade {attribute.value}"
+                else:
+                    text = str(attribute.value)
+                selected = attribute.evidence
+            added = len(text) + (1 if parts else 0)
+            if current + added > self.entity_tag_max_characters:
+                continue
+            parts.append(text)
+            current += added
+            evidence.extend(selected)
+        if not parts:
+            return "", ()
+        return f"[{' '.join(parts)}]", tuple(dict.fromkeys(evidence))
+
+    def render_entity(
+        self,
+        entity: LocalizedEntity,
+    ) -> tuple[str, tuple[Evidence, ...]] | None:
+        tag, evidence = self.entity_tag(entity)
+        if not tag:
+            return None
+        if self.entity_tag_placement == "prefix":
+            return f"{tag} {entity.base_text}", evidence
+        return f"{entity.base_text} {tag}", evidence
+
 
 @dataclass
 class RenderResult:
@@ -600,6 +687,60 @@ class Renderer:
                     )
                 )
                 result.warnings.extend((key, i) for i in issues)
+
+        for entity in contracts.entities:
+            rendered = self.options.render_entity(entity)
+            if rendered is None:
+                continue
+            value, evidence = rendered
+            key = entity.localization_key
+            if key in result.values:
+                if result.values[key] != value:
+                    result.skipped.append(
+                        (key, "entity localization collides with a contract key")
+                    )
+                continue
+            issues = validate_value(value, trusted_source=entity.base_text)
+            source_warnings = {
+                issue
+                for issue in validate_value(entity.base_text)
+                if issue.severity is Severity.WARNING
+            }
+            issues = [
+                issue
+                for issue in issues
+                if not (
+                    issue.severity is Severity.WARNING and issue in source_warnings
+                )
+            ]
+            errors = [issue for issue in issues if issue.severity is Severity.ERROR]
+            if errors:
+                result.skipped.append((key, str(errors[0])))
+                continue
+            result.values[key] = value
+            result.provenance[key] = evidence
+            result.warnings.extend((key, issue) for issue in issues)
+
+        if self.options.legacy_mining_pack_enabled:
+            for item in contracts.legacy_signatures:
+                key = item.localization_key
+                value = f"{item.base_text} (RS {item.signature})"
+                if key in result.values:
+                    if result.values[key] != value:
+                        result.skipped.append(
+                            (key, "legacy localization collides with another generated key")
+                        )
+                    continue
+                issues = validate_value(value, trusted_source=item.base_text)
+                errors = [
+                    issue for issue in issues if issue.severity is Severity.ERROR
+                ]
+                if errors:
+                    result.skipped.append((key, str(errors[0])))
+                    continue
+                result.values[key] = value
+                result.provenance[key] = item.evidence
+                result.warnings.extend((key, issue) for issue in issues)
 
         return result
 

@@ -10,7 +10,12 @@ from starcompanion.model import (
     StringKind,
 )
 from starcompanion.render import Renderer, RenderOptions
-from starcompanion.route_presentation import resource_signature, route_fragment
+from starcompanion.route_presentation import (
+    attach_nested_route_expansions,
+    resource_signature,
+    route_fragment,
+)
+from starcompanion.ini import LocalizationFile
 
 
 def contract(title_key, bodies, title="Cargo Run"):
@@ -181,3 +186,46 @@ def test_advanced_template_that_omits_route_gets_no_route_provenance():
 
     assert rendered.values["Org_HaulCargo_title"] == "Cargo Run"
     assert not rendered.provenance["Org_HaulCargo_title"]
+
+
+def test_nested_route_token_expands_only_the_intersection_of_stock_candidates():
+    item = contract(
+        "Org_HaulCargo_title",
+        {"d": "Complete ~mission(SingleToMultiToken)"},
+    )
+    contracts = ContractSet([item], {"org": item.org})
+    strings = LocalizationFile.loads(
+        "\n".join(
+            (
+                "Haul_2_SingleToMultiToken=From ~mission(Location) to ~mission(Destination1) and ~mission(Destination2)",
+                "Haul_3_SingleToMultiToken=From ~mission(Location) to ~mission(Destination1) and ~mission(Destination3)",
+            )
+        )
+    )
+    attach_nested_route_expansions(contracts, strings)
+
+    assert route_fragment(item) == (
+        "~mission(Location|Address) > ~mission(Destination1|Address)"
+    )
+    rendered = Renderer(RenderOptions(route_titles_enabled=True)).render_all(contracts)
+    evidence = rendered.provenance["Org_HaulCargo_title"]
+    assert {item.provider for item in evidence} == {"local-stock-route-expansion"}
+    assert {item.field_path for item in evidence} == {
+        "nested-token:SingleToMultiToken"
+    }
+
+
+def test_nested_route_candidate_without_endpoint_suppresses_the_expansion():
+    item = contract(
+        "Org_HaulCargo_title",
+        {"d": "Complete ~mission(SingleToMultiToken)"},
+    )
+    contracts = ContractSet([item], {"org": item.org})
+    strings = LocalizationFile.loads(
+        "Haul_1_SingleToMultiToken=At ~mission(Destination)\n"
+        "Haul_2_SingleToMultiToken=No endpoint here"
+    )
+
+    attach_nested_route_expansions(contracts, strings)
+    assert not item.route_expansions
+    assert route_fragment(item) == ""

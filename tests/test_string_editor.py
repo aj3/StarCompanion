@@ -22,7 +22,14 @@ from starcompanion.gui.string_editor import (
     StringTableModel,
     build_string_snapshot,
 )
-from starcompanion.model import Contract, ContractSet, Evidence, Org, StringKind
+from starcompanion.model import (
+    Contract,
+    ContractSet,
+    Evidence,
+    LocalizedEntity,
+    Org,
+    StringKind,
+)
 from starcompanion.render import RenderResult
 
 
@@ -89,6 +96,38 @@ def test_snapshot_uses_c3_precedence_plan_and_provenance():
     assert record.operation == "change"
     assert record.providers == ("local-dataforge-missions",)
     assert record.key in snapshot.plan.updated
+
+
+def test_snapshot_includes_evidence_backed_vehicle_names_for_safe_user_actions():
+    contracts, _rendered = corpus()
+    evidence = Evidence(
+        "local-dataforge-vehicles",
+        "vehicle-id",
+        "entities/spaceships/test.xml",
+        "$.vehicleName",
+        "@vehicle_name_test",
+    )
+    contracts.entities.append(
+        LocalizedEntity(
+            "localization:vehicle_name_test",
+            "vehicle",
+            "vehicle_name_test",
+            "Test Ship",
+            attributes=(),
+            evidence=(evidence,),
+        )
+    )
+
+    snapshot = build_string_snapshot(
+        contracts,
+        RenderResult(),
+        profile_name="default",
+    )
+    record = snapshot.by_key["vehicle_name_test"]
+
+    assert record.category == "vehicle"
+    assert record.stock == record.merged == "Test Ship"
+    assert record.providers == ("local-dataforge-vehicles",)
 
 
 def test_document_supports_bounded_model_level_undo_redo_and_multi_reset():

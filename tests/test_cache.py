@@ -12,15 +12,18 @@ from starcompanion.model import (
     Contract,
     ContractSet,
     Difficulty,
+    EntityAttribute,
     Evidence,
     FactConfidence,
     Gate,
     GateKind,
     Org,
     MissionDetail,
+    LocalizedEntity,
     ProviderCapability,
     ProviderStatus,
     Reward,
+    RouteExpansion,
     ScenarioPoints,
     StringKind,
 )
@@ -123,6 +126,32 @@ def test_mission_details_round_trip_through_shared_evidence_table():
     assert restored == original
 
 
+def test_entity_and_nested_route_evidence_round_trip_through_shared_table():
+    original = sample_set()
+    evidence = original.contracts[0].evidence[0]
+    original.contracts[0].route_expansions.append(
+        RouteExpansion("RouteToken", ("~mission(Location)",), (evidence,))
+    )
+    original.entities.append(
+        LocalizedEntity(
+            "localization:item_name_test",
+            "component",
+            "item_name_test",
+            "Test Component",
+            (EntityAttribute("size", 2, (evidence,)),),
+            (evidence,),
+        )
+    )
+
+    encoded = json.loads(cache.dumps(original))
+    restored = cache.loads(json.dumps(encoded))
+
+    assert len(encoded["evidence"]) == 1
+    assert encoded["entities"][0]["attributes"][0]["evidence_ids"] == [0]
+    assert encoded["contracts"][0]["route_expansions"][0]["evidence_ids"] == [0]
+    assert restored == original
+
+
 def test_cache_rejects_invalid_mission_detail_evidence_reference():
     raw = json.loads(cache.dumps(sample_set()))
     raw["contracts"][0]["mission_details"] = [
@@ -135,6 +164,34 @@ def test_cache_rejects_invalid_mission_detail_evidence_reference():
     ]
 
     with pytest.raises(ValueError, match="invalid mission detail"):
+        cache.loads(json.dumps(raw))
+
+
+def test_cache_rejects_invalid_entity_and_route_evidence_references():
+    original = sample_set()
+    evidence = original.contracts[0].evidence[0]
+    original.entities.append(
+        LocalizedEntity(
+            "localization:item_name_test",
+            "component",
+            "item_name_test",
+            "Test Component",
+            (EntityAttribute("size", 2, (evidence,)),),
+            (evidence,),
+        )
+    )
+    raw = json.loads(cache.dumps(original))
+    raw["entities"][0]["evidence_ids"] = [999]
+    with pytest.raises(ValueError, match="invalid cached presentation"):
+        cache.loads(json.dumps(raw))
+
+    original.entities.clear()
+    original.contracts[0].route_expansions.append(
+        RouteExpansion("RouteToken", ("~mission(Location)",), (evidence,))
+    )
+    raw = json.loads(cache.dumps(original))
+    raw["contracts"][0]["route_expansions"][0]["evidence_ids"] = [999]
+    with pytest.raises(ValueError, match="invalid route expansion"):
         cache.loads(json.dumps(raw))
 
 

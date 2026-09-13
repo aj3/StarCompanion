@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .inject import DEFAULT_BACKUP_RETENTION, InjectionPlan, MergeMode, apply
 from .ini import LocalizationFile
+from .legacy_pack import attach_legacy_mining_pack
 from .install import DEFAULT_LANGUAGE, GameInstall, normalize_language
 from .model import ContractSet
 from .fallbacks import FallbackDocument
@@ -128,13 +129,22 @@ def _read_contracts_local(
         unavailable_mission_enhancements,
         unavailable_tactical_enhancements,
     )
+    from .entity_presentation import (
+        attach_entity_presentation,
+        unavailable_entity_capabilities,
+    )
     from .extract import datacore, dataforge
+    from .extract.entities import (
+        extract_entity_catalog,
+        presentation_entity_providers,
+    )
     from .extract.mission_tactical import (
         extract_mission_tactical_catalog,
         mission_tactical_providers,
     )
     from .extract.p4k import P4KArchive
     from .fallbacks import apply_to_localization, record_usage
+    from .route_presentation import attach_nested_route_expansions
 
     owns_datacore = datacore_path is None
     if datacore_path is None:
@@ -198,6 +208,9 @@ def _read_contracts_local(
 
         facts = None
         tactical_catalog = None
+        entity_catalog = None
+        data_build = install.version or "unknown"
+        entity_capabilities = ()
         enhancement_sets = []
         tactical_specs = {
             provider.spec.provider: provider.spec.version
@@ -220,6 +233,10 @@ def _read_contracts_local(
                 )
                 for provider, version in tactical_specs.items()
             )
+            entity_capabilities = unavailable_entity_capabilities(
+                install.version or "unknown",
+                reason,
+            )
         else:
             try:
                 report(
@@ -228,12 +245,18 @@ def _read_contracts_local(
                     "Resolving local mission reward records…",
                 )
                 core = datacore.load(datacore_path)
+                data_build = install.version or str(core.version)
                 index = dataforge.DataForgeIndex(core)
                 facts = dataforge.extract_mission_facts(core, index=index)
                 tactical_catalog = extract_mission_tactical_catalog(
                     core,
                     build_version=install.version,
                     index=index,
+                )
+                entity_catalog = extract_entity_catalog(
+                    index,
+                    build_version=install.version,
+                    providers=presentation_entity_providers(),
                 )
                 token.checkpoint()
             except datacore.DataCoreError as exc:
@@ -252,6 +275,10 @@ def _read_contracts_local(
                         reason,
                     )
                     for provider, version in tactical_specs.items()
+                )
+                entity_capabilities = unavailable_entity_capabilities(
+                    install.version or "unknown",
+                    reason,
                 )
         evidenced_groups = (
             tuple(
@@ -277,6 +304,7 @@ def _read_contracts_local(
             )
         report(reporter, OperationStage.PARSE_CONTRACTS, "Finding contract strings…")
         contracts = game_strings.parse(strings, evidenced_groups=evidenced_groups)
+        attach_nested_route_expansions(contracts, strings)
         token.checkpoint()
         if facts is not None:
             enhancement_sets.append(
@@ -297,6 +325,15 @@ def _read_contracts_local(
             "Merging local mission rewards…",
         )
         contracts = apply_enhancements(contracts, enhancement_sets)
+        if entity_catalog is not None:
+            attach_entity_presentation(contracts, entity_catalog, strings)
+        else:
+            contracts.capabilities.extend(entity_capabilities)
+        attach_legacy_mining_pack(
+            contracts,
+            strings,
+            data_build,
+        )
         if applied_fallbacks is not None:
             record_usage(
                 contracts,

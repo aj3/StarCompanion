@@ -637,10 +637,31 @@ def extract_entity_catalog(
     names = [item.spec.provider.casefold() for item in selected]
     if len(names) != len(set(names)):
         raise ValueError("entity provider ids must be unique")
-    results = [
-        provider.extract(index, build_version=build_version)
-        for provider in sorted(selected, key=lambda item: item.spec.provider)
-    ]
+    build = str(index.source.version if build_version is None else build_version)
+    results = []
+    for provider in sorted(selected, key=lambda item: item.spec.provider):
+        try:
+            results.append(provider.extract(index, build_version=build_version))
+        except Exception:
+            results.append(
+                EntityExtractionResult(
+                    (),
+                    CapabilityReport(
+                        provider.spec.provider,
+                        CapabilityStatus.UNAVAILABLE,
+                        build,
+                        0,
+                        0,
+                        (
+                            Diagnostic(
+                                "provider-exception",
+                                "Entity provider failed without affecting peer providers",
+                                Severity.WARNING,
+                            ),
+                        ),
+                    ),
+                )
+            )
     claims: dict[tuple[str, str], set[int]] = {}
     for result_index, result in enumerate(results):
         for fact in result.facts:
@@ -877,7 +898,7 @@ COMMODITY_PROVIDER = ProviderSpec(
             ("displayName",),
             ScalarKind.LOCALE_KEY,
             True,
-            ("$.displayname", "staticentityclassdata"),
+            ("$.displayname", "$.components["),
         ),
         FieldSpec("base-price", ("basePrice", "price"), ScalarKind.FLOAT),
         FieldSpec("shop-buy-price", ("buyPrice",), ScalarKind.FLOAT),
@@ -989,3 +1010,31 @@ def baseline_entity_providers(
         LocalEntityProvider(spec, corrections=corrections)
         for spec in (COMPONENT_PROVIDER, VEHICLE_PROVIDER)
     )
+
+
+def presentation_entity_providers(
+    corrections: CorrectionRegistry | None = None,
+) -> tuple[LocalEntityProvider, ...]:
+    """Use only name/tag fields; omit unrelated stats and graph relationships."""
+
+    selected = []
+    for spec in (
+        COMMODITY_PROVIDER,
+        COMPONENT_PROVIDER,
+        FPS_WEAPON_PROVIDER,
+        MEDICAL_PROVIDER,
+        SHIP_WEAPON_PROVIDER,
+        VEHICLE_PROVIDER,
+    ):
+        fields = tuple(
+            field
+            for field in spec.fields
+            if field.name in {"name", "size", "grade", "class"}
+        )
+        selected.append(
+            LocalEntityProvider(
+                replace(spec, fields=fields, relationships=()),
+                corrections=corrections,
+            )
+        )
+    return tuple(selected)

@@ -1,5 +1,5 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "name": "rank-first",
   "description": "Org and difficulty rank lead every title so a flat contract list scans by tier. Rep is emphasised harder than gate notes.",
   "fields": {

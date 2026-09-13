@@ -196,6 +196,26 @@ def test_specialized_catalog_emits_typed_evidence_for_every_provider():
         assert fact_value.evidence.field_path.startswith("$.")
 
 
+def test_entity_provider_exception_is_isolated_without_exception_text(monkeypatch):
+    first, second = baseline_entity_providers()
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("private record value")
+
+    monkeypatch.setattr(first, "extract", fail)
+    catalog = extract_entity_catalog(
+        DataForgeIndex(entity_fixture()),
+        providers=(first, second),
+    )
+
+    failed = catalog.for_provider(first.spec.provider)
+    healthy = catalog.for_provider(second.spec.provider)
+    assert failed.capability.status is CapabilityStatus.UNAVAILABLE
+    assert failed.capability.diagnostics[0].code == "provider-exception"
+    assert "private record value" not in failed.capability.diagnostics[0].message
+    assert healthy.capability.status is CapabilityStatus.AVAILABLE
+
+
 def test_commodity_and_crafting_relationships_require_resolved_reviewed_targets():
     resource_id = "10000000-0000-0000-0000-000000000021"
     output_id = "10000000-0000-0000-0000-000000000022"

@@ -19,21 +19,25 @@ from .model import (
     Contract,
     ContractSet,
     Difficulty,
+    EntityAttribute,
     Evidence,
     FactConfidence,
     Gate,
     GateKind,
+    LegacyMiningSignature,
     MissionDetail,
+    LocalizedEntity,
     Org,
     ProviderCapability,
     ProviderStatus,
     Reward,
+    RouteExpansion,
     ScenarioPoints,
     StringKind,
     UnresolvedLocalization,
 )
 
-CACHE_VERSION = 7
+CACHE_VERSION = 9
 
 
 class UnsupportedCacheVersion(ValueError):
@@ -138,6 +142,49 @@ def _contract_to_dict(
             }
             for item in contract.mission_details
         ],
+        "route_expansions": [
+            {
+                "variable": item.variable,
+                "tokens": list(item.tokens),
+                "evidence_ids": [evidence_ids[evidence] for evidence in item.evidence],
+            }
+            for item in contract.route_expansions
+        ],
+    }
+
+
+def _entity_to_dict(
+    entity: LocalizedEntity,
+    evidence_ids: dict[Evidence, int],
+) -> dict[str, Any]:
+    return {
+        "entity_id": entity.entity_id,
+        "kind": entity.kind,
+        "localization_key": entity.localization_key,
+        "base_text": entity.base_text,
+        "evidence_ids": [evidence_ids[item] for item in entity.evidence],
+        "attributes": [
+            {
+                "name": item.name,
+                "value": item.value,
+                "evidence_ids": [evidence_ids[evidence] for evidence in item.evidence],
+            }
+            for item in entity.attributes
+        ],
+    }
+
+
+def _legacy_signature_to_dict(
+    item: LegacyMiningSignature,
+    evidence_ids: dict[Evidence, int],
+) -> dict[str, Any]:
+    return {
+        "rule_id": item.rule_id,
+        "supported_build": item.supported_build,
+        "localization_key": item.localization_key,
+        "base_text": item.base_text,
+        "signature": item.signature,
+        "evidence_ids": [evidence_ids[evidence] for evidence in item.evidence],
     }
 
 
@@ -238,6 +285,26 @@ def _evidence_table(
                 if item not in ids:
                     ids[item] = len(table)
                     table.append(item)
+        for expansion in contract.route_expansions:
+            for item in expansion.evidence:
+                if item not in ids:
+                    ids[item] = len(table)
+                    table.append(item)
+    for entity in contracts.entities:
+        for item in entity.evidence:
+            if item not in ids:
+                ids[item] = len(table)
+                table.append(item)
+        for attribute in entity.attributes:
+            for item in attribute.evidence:
+                if item not in ids:
+                    ids[item] = len(table)
+                    table.append(item)
+    for signature in contracts.legacy_signatures:
+        for item in signature.evidence:
+            if item not in ids:
+                ids[item] = len(table)
+                table.append(item)
     return table, ids
 
 
@@ -272,6 +339,20 @@ def dump(contracts: ContractSet, stream, *, source: str = "unknown") -> None:
         stream.write("," if index else "")
         stream.write("\n  ")
         json.dump(_contract_to_dict(contract, evidence_ids), stream, ensure_ascii=False)
+    stream.write("\n ],\n \"entities\": [")
+    for index, entity in enumerate(contracts.entities):
+        stream.write("," if index else "")
+        stream.write("\n  ")
+        json.dump(_entity_to_dict(entity, evidence_ids), stream, ensure_ascii=False)
+    stream.write("\n ],\n \"legacy_signatures\": [")
+    for index, item in enumerate(contracts.legacy_signatures):
+        stream.write("," if index else "")
+        stream.write("\n  ")
+        json.dump(
+            _legacy_signature_to_dict(item, evidence_ids),
+            stream,
+            ensure_ascii=False,
+        )
     stream.write("\n ],\n \"capabilities\": [")
     for index, item in enumerate(contracts.capabilities):
         stream.write("," if index else "")
@@ -307,6 +388,13 @@ def loads(text: str) -> ContractSet:
 
     evidence = [_evidence_from_dict(item) for item in data.get("evidence", ())]
     contracts = [_contract_from_dict(raw, orgs, evidence) for raw in data["contracts"]]
+    entities = [
+        _entity_from_dict(raw, evidence) for raw in data.get("entities", ())
+    ]
+    legacy_signatures = [
+        _legacy_signature_from_dict(raw, evidence)
+        for raw in data.get("legacy_signatures", ())
+    ]
 
     return ContractSet(
         contracts=contracts,
@@ -315,6 +403,8 @@ def loads(text: str) -> ContractSet:
         capabilities=[
             _capability_from_dict(item) for item in data.get("capabilities", ())
         ],
+        entities=entities,
+        legacy_signatures=legacy_signatures,
     )
 
 
@@ -360,6 +450,19 @@ def dump_lines(
             stream,
             {"type": "contract", "data": _contract_to_dict(contract, evidence_ids)},
         )
+    for entity in contracts.entities:
+        _write_line(
+            stream,
+            {"type": "entity", "data": _entity_to_dict(entity, evidence_ids)},
+        )
+    for item in contracts.legacy_signatures:
+        _write_line(
+            stream,
+            {
+                "type": "legacy-signature",
+                "data": _legacy_signature_to_dict(item, evidence_ids),
+            },
+        )
     for item in contracts.capabilities:
         _write_line(stream, {"type": "capability", "data": _capability_to_dict(item)})
     for key, reason in contracts.unparsed:
@@ -373,6 +476,8 @@ def load_lines(stream) -> ContractSet:
     contracts: list[Contract] = []
     unparsed: list[tuple[str, str]] = []
     capabilities: list[ProviderCapability] = []
+    entities: list[LocalizedEntity] = []
+    legacy_signatures: list[LegacyMiningSignature] = []
     evidence: list[Evidence] = []
     for number, line in enumerate(stream, 1):
         if not line.strip():
@@ -396,6 +501,12 @@ def load_lines(stream) -> ContractSet:
             contracts.append(_contract_from_dict(data["data"], orgs, evidence))
         elif kind == "evidence":
             evidence.append(_evidence_from_dict(data["data"]))
+        elif kind == "entity":
+            entities.append(_entity_from_dict(data["data"], evidence))
+        elif kind == "legacy-signature":
+            legacy_signatures.append(
+                _legacy_signature_from_dict(data["data"], evidence)
+            )
         elif kind == "capability":
             capabilities.append(_capability_from_dict(data["data"]))
         elif kind == "unparsed":
@@ -409,6 +520,8 @@ def load_lines(stream) -> ContractSet:
         orgs=orgs,
         unparsed=unparsed,
         capabilities=capabilities,
+        entities=entities,
+        legacy_signatures=legacy_signatures,
     )
 
 
@@ -428,6 +541,7 @@ def _contract_from_dict(
     except (IndexError, TypeError, ValueError) as exc:
         raise ValueError(f"contract {raw.get('id')!r} has an invalid evidence reference") from exc
     mission_details = []
+    route_expansions = []
     try:
         for item in raw.get("mission_details", ()):
             value = item["value"]
@@ -453,6 +567,32 @@ def _contract_from_dict(
     names = [item.name for item in mission_details]
     if len(names) != len(set(names)):
         raise ValueError(f"contract {raw.get('id')!r} has duplicate mission details")
+    try:
+        for item in raw.get("route_expansions", ()):
+            expansion_indices = [
+                int(index) for index in item.get("evidence_ids", ())
+            ]
+            if any(
+                index < 0 or index >= len(evidence_table)
+                for index in expansion_indices
+            ):
+                raise IndexError("route expansion evidence index is outside the cache table")
+            route_expansions.append(
+                RouteExpansion(
+                    variable=str(item["variable"]),
+                    tokens=tuple(str(token) for token in item.get("tokens", ())),
+                    evidence=tuple(
+                        evidence_table[index] for index in expansion_indices
+                    ),
+                )
+            )
+    except (IndexError, KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            f"contract {raw.get('id')!r} has an invalid route expansion"
+        ) from exc
+    variables = [item.variable.casefold() for item in route_expansions]
+    if len(variables) != len(set(variables)):
+        raise ValueError(f"contract {raw.get('id')!r} has duplicate route expansions")
     return Contract(
         id=raw["id"],
         org=orgs[raw["org"]],
@@ -464,7 +604,75 @@ def _contract_from_dict(
         reward=_reward_from_dict(raw.get("reward", {})),
         evidence=evidence,
         mission_details=mission_details,
+        route_expansions=route_expansions,
     )
+
+
+def _entity_from_dict(
+    raw: dict[str, Any],
+    evidence_table: list[Evidence],
+) -> LocalizedEntity:
+    try:
+        indices = [int(index) for index in raw.get("evidence_ids", ())]
+        if any(index < 0 or index >= len(evidence_table) for index in indices):
+            raise IndexError("entity evidence index is outside the cache table")
+        attributes = []
+        for item in raw.get("attributes", ()):
+            value = item["value"]
+            if not isinstance(value, (str, int, float, bool)):
+                raise TypeError("entity attribute value is not scalar")
+            attribute_indices = [
+                int(index) for index in item.get("evidence_ids", ())
+            ]
+            if any(
+                index < 0 or index >= len(evidence_table)
+                for index in attribute_indices
+            ):
+                raise IndexError("entity attribute evidence index is outside the cache table")
+            attributes.append(
+                EntityAttribute(
+                    str(item["name"]),
+                    value,
+                    tuple(evidence_table[index] for index in attribute_indices),
+                )
+            )
+        return LocalizedEntity(
+            entity_id=str(raw["entity_id"]),
+            kind=str(raw["kind"]),
+            localization_key=str(raw["localization_key"]),
+            base_text=str(raw["base_text"]),
+            attributes=tuple(attributes),
+            evidence=tuple(evidence_table[index] for index in indices),
+        )
+    except (IndexError, KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            f"entity {raw.get('entity_id')!r} has invalid cached presentation data"
+        ) from exc
+
+
+def _legacy_signature_from_dict(
+    raw: dict[str, Any],
+    evidence_table: list[Evidence],
+) -> LegacyMiningSignature:
+    try:
+        indices = [int(index) for index in raw.get("evidence_ids", ())]
+        if any(index < 0 or index >= len(evidence_table) for index in indices):
+            raise IndexError("legacy evidence index is outside the cache table")
+        signature = raw["signature"]
+        if type(signature) is not int:
+            raise TypeError("legacy signature must be an integer")
+        return LegacyMiningSignature(
+            rule_id=str(raw["rule_id"]),
+            supported_build=str(raw["supported_build"]),
+            localization_key=str(raw["localization_key"]),
+            base_text=str(raw["base_text"]),
+            signature=signature,
+            evidence=tuple(evidence_table[index] for index in indices),
+        )
+    except (IndexError, KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            f"legacy rule {raw.get('rule_id')!r} has invalid cached presentation data"
+        ) from exc
 
 
 def _write_line(stream, data: dict[str, Any]) -> None:
@@ -481,6 +689,8 @@ def describe(path: Path) -> dict[str, Any]:
         "generated": data.get("generated"),
         "contracts": len(data.get("contracts", ())),
         "providers": len(data.get("capabilities", ())),
+        "entities": len(data.get("entities", ())),
+        "legacy_signatures": len(data.get("legacy_signatures", ())),
         "enhanced_contracts": sum(
             1
             for item in data.get("contracts", ())

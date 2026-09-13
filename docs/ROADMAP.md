@@ -45,11 +45,12 @@ overlap suppression; and exact-build corrections that fail closed while
 preserving the original value. Synthetic mission classification, spawn/ace,
 and engagement/turret providers now add bounded reference joins and suppress
 shared-description matching. G6's first completed slice carries the tactical
-facts through cache schema 7 into independent GUI controls, description
+facts through cache schema 9 into independent GUI controls, description
 details, bounded typed title tags, and rendered-only provenance. Its second
 slice adds exact-token hauling routes, title shortening, and Battaglia resource
-labels behind independent default-off profile controls and the same title
-budget.
+labels. The current slice adds nested token intersection, typed entity/item
+tags, user-layer ship favorites/ASOP ordering, and a source-attributed,
+exact-build legacy mining pack. All presentation features remain default-off.
 [G5_LOCAL_PROVIDERS.md](G5_LOCAL_PROVIDERS.md) and
 [G6_PRESENTATION.md](G6_PRESENTATION.md) record those contracts. **Sprint G4 — Ownership and Editor Completion**
 is complete: revision-bound manual ownership, complete

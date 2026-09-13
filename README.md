@@ -437,6 +437,15 @@ is committed. `--no-user-edits` is available for deliberate diagnostics.
 Undo history is a bounded, checksummed sidecar; if it is stale or damaged it is
 discarded without changing `user.ini`.
 
+The String editor also recognizes locally evidenced vehicle-name rows. Favorite
+and ASOP order actions create one undoable user-layer command, using `*` and an
+unambiguous two-digit `NN-` prefix so numeric ship names such as `300i` are not
+misread. Presentation settings separately expose default-off typed entity tags
+and the exact-build legacy mining-signature pack; rendered provenance identifies
+the local DataForge fields or pinned community source used for each value.
+Entity tags accept only reviewed localization-key families for their typed
+domain; generic UI labels, cross-domain names, and crafting outputs fail closed.
+
 ### Reviewed operation plans and recovery
 
 The source graph and filesystem diff join in one versioned operation plan. It

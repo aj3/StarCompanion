@@ -55,17 +55,17 @@ does not execute or silently download either project's code or generated data.
 | Mission reputation amounts and tracks | **Complete** | C1–C3 local mission provider with field evidence. |
 | Blueprint pools, chances, ranks, regional variants, caveats, and title tags | **Complete** | C1–G3 structured mission rendering. |
 | Direct mission item rewards and scenario points | **Complete** | C1–G3 structured mission rendering. |
-| Mission type and difficulty details | **Complete** | Typed G5 facts now pass through cache schema 7 to independent G6 title/description controls with rendered-only evidence. LIVE aggregate validation is green. |
+| Mission type and difficulty details | **Complete** | Typed G5 facts pass through cache schema 9 to independent G6 title/description controls with rendered-only evidence. LIVE aggregate validation is green. |
 | Friendly and hostile spawn summaries | **Complete** | Bounded graph joins, independent diagnostics, typed G6 controls, title tags, description details, and LIVE aggregate validation are complete. |
 | Ace-pilot `[ACE]` and uncertain `[ACE?]` markers | **Complete** | Direct booleans and probabilities have distinct typed markers and provenance. The current LIVE build exposes neither, so the control remains silent instead of guessing. |
 | Turret counts and engagement details | **Complete** | Typed controls and bounded presentation cover direct provider facts. The current LIVE build reports the provider unavailable because it has no reviewed fields. |
 | Hauling/delivery/courier routes and title shortening | **Complete** | Exact stock endpoint tokens, description-variant intersection, append/replace modes, typed display choices, bounded whole-unit rendering, and rendered-only provenance are synthetic- and LIVE-validated. |
-| Battaglia/asteroid resource-signature tags | **Partial** | Exact Battaglia resource-label tokens are independently controlled and LIVE-validated. Numeric RS values are curated legacy data and remain in the opt-in build-bounded wording pack. |
-| Ship statistics and component summaries | **Partial** | G5 typed vehicle provider foundation is synthetic-tested; schema-specific fact expansion and live-build validation remain. |
-| Ship-component and ship-weapon statistics | **Partial** | G5 component and dedicated ship-weapon provider facts are synthetic-tested; live schema validation remains. |
-| FPS-weapon statistics | **Partial** | G5 dedicated FPS-weapon facts and isolation diagnostics are synthetic-tested; live schema validation remains. |
-| Medical-consumable effects | **Partial** | G5 medical fact extraction is synthetic-tested with typed conversion-drift handling; live schema validation remains. |
-| Commodity and crafting cross-references | **Partial** | Independent G5 commodity and crafting facts are synthetic-tested; reference-graph joins and live validation remain. |
+| Battaglia/asteroid resource-signature tags | **Complete** | Exact Battaglia resource tokens use local evidence; the separate 26-value numeric pack is default-off, source-attributed, exact-build/key/stock bounded, and fails closed on drift. |
+| Ship statistics and component summaries | **Partial** | Vehicle/component extraction and safe name presentation are LIVE-validated; richer schema-specific statistic rendering remains. |
+| Ship-component and ship-weapon statistics | **Partial** | Dedicated providers and fail-closed typed name/size/grade presentation are LIVE-validated; detailed statistic rendering remains. |
+| FPS-weapon statistics | **Partial** | Dedicated extraction, isolation diagnostics, and safe typed name presentation are LIVE-validated; detailed statistic rendering remains. |
+| Medical-consumable effects | **Partial** | Typed effect extraction and safe name presentation are LIVE-validated; effect presentation remains. |
+| Commodity and crafting cross-references | **Complete** | Independent providers, real-record resource/output joins, drift diagnostics, and LIVE aggregate regressions are complete. Crafting output labels are deliberately excluded from name mutation. |
 | Journal/discovery enhancements and mining compendium | **Partial** | G5 journal facts are synthetic-tested; cross-references, mining facts, and G6 presentation remain. |
 | Provider capability, drift, and per-value evidence | **Complete** | Mission rewards, eight entity providers, and three tactical providers have isolated status/drift reporting, evidence-bearing values, LIVE aggregate checks, and fail-closed exact-build corrections. |
 
@@ -81,7 +81,7 @@ does not execute or silently download either project's code or generated data.
 | Configurable structured labels, ordering, numeric format, tags, and expert templates | **Complete** | G3 schema v2 exposes all nine labels; expert templates remain explicit and sandboxed. |
 | Category-level enhancement toggles | **Planned** | G7 exposes coarse, understandable enable/disable controls while retaining provider-specific capability reporting. |
 | Stat-block placement above or below stock text | **Planned** | G7 adds a typed placement choice; it does not permit arbitrary execution or bypass final validation. |
-| General Tag Builder for component, missile, weapon, commodity, and mission-title formats | **Partial** | Mission-title fields, order, placement, separator, and complete-tag length bounds are implemented; entity/item/commodity/missile rules remain. |
+| General Tag Builder for component, missile, weapon, commodity, and mission-title formats | **Complete** | Mission and entity/item tags are typed, independently selectable, complete-unit bounded, and backed by strict local name/attribute evidence. |
 | Blueprint catalog, owned/unowned search, reward source, category, and acquisition queries | **Complete** | Stable C4 identities and read-only backend queries. |
 | Incremental current/rotated log scan | **Complete** | Bounded, cancellable, rotation/truncation-aware scan with confirmation before cursor/evidence save. |
 | Review both LIVE and HOTFIX logs | **Complete** | New GUI preferences review both production siblings by default; the visible control can separate them, the CLI flag selects the shared scope explicitly, and test channels cannot enter linked discovery. |
@@ -91,7 +91,7 @@ does not execute or silently download either project's code or generated data.
 | Repair names altered by another localization editor | **Complete** | Evidence-backed catalog aliases normalize known bracket markers and whitespace, accept only an unambiguous exact normalized identity, and never fuzzy-mark ownership. |
 | Owned marker in generated blueprint lists | **Complete** | The selected channel-scoped ownership snapshot is joined into a render-only contract copy, leaving cached contract data immutable. |
 | Per-key INI conflict reconciliation | **Complete** | G4 loads bounded imports in a worker, requires reviewable keep/import/append/prepend/custom choices for every conflict, and rechecks the saved baseline before one provenance-aware undoable write. |
-| Ship favorites and explicit ASOP order | **Planned** | G6 persists these as irreplaceable user data, separate from generated caches. |
+| Ship favorites and explicit ASOP order | **Complete** | Evidence-backed vehicle names receive safe `*` and `NN-` prefixes through the existing channel/language-scoped user layer with model undo/redo and reviewed persistence. |
 | Window/splitter/column layout persistence and reset | **Complete** | G4 stores strictly bounded geometry, splitter ratios, and table widths in a separate local-only file; off-screen positions are ignored, hidden-page ratios are deferred safely, invalid files are preserved, and explicit reset never changes portable preferences. |
 
 ## Operational interface
@@ -127,7 +127,7 @@ localization key.
 | Blueprint title markers, pools, component context, ranks, regional variants, and caveats | **Complete** | Existing mission facts/rendering cover the content, and G4 joins exact channel-scoped ownership into the render-only contract copy. |
 | Reputation, direct rewards, and scenario progress in contracts | **Complete** | Existing local provider. |
 | Hauling title overhaul with origin/destination | **Complete** | G6 uses only exact stock route variables shared by contributing description variants. |
-| Asteroid resource-signature values in scan objectives | **Partial** | Stock resource variables are complete; numeric RS values remain for the separately sourced, opt-in legacy pack. |
+| Asteroid resource-signature values in scan objectives | **Complete** | Stock variables are local; numeric RS values are available only through the separately attributed, default-off, exact-build/key/stock legacy pack. |
 | Shorter Hephaestanite and mining UI wording; `(Raw)` normalization | **Planned** | G6 local presentation pack. |
 | Illegal-item warning prefix | **Planned** | G6 item presentation rules. |
 | Component Type/Size/Grade and missile-type prefixes | **Planned** | G5 facts, G6 Tag Builder. |
