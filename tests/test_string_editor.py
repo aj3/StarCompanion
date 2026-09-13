@@ -21,6 +21,7 @@ from starcompanion.gui.string_editor import (
     StringFilterProxyModel,
     StringTableModel,
     build_string_snapshot,
+    visible_rows_tsv,
 )
 from starcompanion.model import (
     Contract,
@@ -173,6 +174,24 @@ def test_table_is_virtualized_and_filters_cached_records(qapp_editor):
     proxy.set_query("")
     proxy.set_provider_filter("local-dataforge-missions")
     assert proxy.rowCount() == 1
+
+
+def test_clipboard_export_contains_only_filtered_safe_columns(qapp_editor):
+    contracts, rendered = corpus(3)
+    rendered.values["Test_00002_title"] = "=unsafe\tvalue\nnext"
+    model = StringTableModel(StringEditorDocument())
+    model.set_inputs(contracts, rendered, "default")
+    proxy = StringFilterProxyModel()
+    proxy.setSourceModel(model)
+    proxy.set_query("00002")
+
+    exported = visible_rows_tsv(proxy)
+
+    assert exported.count("\n") == 2
+    assert "Test_00002_title" in exported
+    assert "Test_00000_title" not in exported
+    assert "'=unsafe value next" in exported
+    assert "record-1" not in exported
 
 
 def test_column_filters_are_cached_batched_and_combined_with_existing_filters(

@@ -114,6 +114,7 @@ class FormattingTab(QWidget):
             self.entity_tag_placement,
             self.entity_tag_max_characters,
             self.wording_order,
+            self.stat_block_placement,
             self.reputation_separator,
             self.thousands_separator,
             *self.wording_labels.values(),
@@ -671,6 +672,20 @@ class FormattingTab(QWidget):
         box.add_layout(order_form)
         box.add_widget(self.wording_order_hint)
 
+        self.stat_block_placement = QComboBox()
+        self.stat_block_placement.addItem("Below the stock mission text", "below")
+        self.stat_block_placement.addItem("Above the stock mission text", "above")
+        self.stat_block_placement.setAccessibleName("Generated stat block placement")
+        self.stat_block_placement.setAccessibleDescription(
+            "Places complete generated mission details and rewards above or below unchanged stock text."
+        )
+        self.stat_block_placement.currentIndexChanged.connect(
+            self._set_stat_block_placement
+        )
+        placement_form = QFormLayout()
+        placement_form.addRow("Stat block", self.stat_block_placement)
+        box.add_layout(placement_form)
+
         self.reputation_separator = QComboBox()
         self.reputation_separator.setAccessibleName("Reputation value separator")
         self.reputation_separator.setAccessibleDescription(
@@ -749,6 +764,13 @@ class FormattingTab(QWidget):
         if self._loading or value is None:
             return
         self.state.profile.wording.reputation_separator = value
+        self.state.touch_profile()
+
+    def _set_stat_block_placement(self, index: int) -> None:
+        value = self.stat_block_placement.itemData(index)
+        if self._loading or value is None:
+            return
+        self.state.profile.wording.stat_block_placement = value
         self.state.touch_profile()
 
     def _set_thousands_separator(self, checked: bool) -> None:
@@ -911,6 +933,10 @@ class FormattingTab(QWidget):
                     "Custom validated order loaded from this profile.",
                 )
             )
+            placement_index = self.stat_block_placement.findData(
+                wording.stat_block_placement
+            )
+            self.stat_block_placement.setCurrentIndex(max(0, placement_index))
             separator_index = self.reputation_separator.findData(
                 wording.reputation_separator
             )

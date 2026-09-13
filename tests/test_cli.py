@@ -935,6 +935,51 @@ def test_c5_channel_language_and_local_pack_workflow(tmp_path, workspace, capsys
     assert "Local_Only" not in json.loads(without.read_text(encoding="utf-8"))
 
 
+def test_g7_language_activation_and_restore_stock_are_preview_first(
+    tmp_path, capsys
+):
+    game = game_install_archive(tmp_path)
+    user_cfg = game / "USER.cfg"
+    user_cfg.write_text("r_displayinfo = 1\r\n", encoding="utf-8", newline="")
+    backups = tmp_path / "backups"
+
+    activate = (
+        "languages", "activate", "--install", game, "--language", "french",
+        "--backup-dir", backups,
+    )
+    assert run(*activate) == EXIT_REFUSED
+    assert "g_language" not in user_cfg.read_text(encoding="utf-8")
+    assert run(*activate, "--confirm") == EXIT_OK
+    activated = user_cfg.read_text(encoding="utf-8")
+    assert "r_displayinfo = 1" in activated
+    assert "g_language = french" in activated
+
+    override = game / "data" / "Localization" / "french" / "global.ini"
+    override.parent.mkdir(parents=True, exist_ok=True)
+    override.write_text("Local=custom\n", encoding="utf-8")
+    restore = (
+        "languages", "restore-stock", "--install", game,
+        "--language", "french", "--backup-dir", backups,
+    )
+    assert run(*restore) == EXIT_REFUSED
+    assert override.exists()
+    assert run(*restore, "--confirm") == EXIT_OK
+    assert not override.exists()
+    assert list((backups / "LIVE" / "french").glob("global.*.ini"))
+
+
+def test_g7_language_controls_refuse_unverified_archive_language(tmp_path):
+    game = game_install_archive(tmp_path)
+
+    assert run(
+        "languages", "activate", "--install", game, "--language", "klingon"
+    ) == EXIT_ERROR
+    assert run(
+        "languages", "restore-stock", "--install", game, "--language", "klingon"
+    ) == EXIT_ERROR
+    assert not (game / "USER.cfg").exists()
+
+
 def test_c5_settings_cli_is_preview_first_and_scope_safe(tmp_path):
     source = tmp_path / "source-data"
     target = tmp_path / "target-data"

@@ -1,6 +1,6 @@
 # StarCompanion known limitations
 
-**Review date:** 2026-09-12
+**Review date:** 2026-09-13
 
 - The v0.2.0 Windows artifacts are intentionally unsigned by explicit
   publication approval. Windows may display Microsoft Defender SmartScreen and
@@ -28,15 +28,14 @@
   engagement fields. Those independent capabilities remain unavailable rather
   than being guessed from record names or shared mission descriptions.
 - New G6 mission-detail, title-tag, route, and mining-label settings default off
-  when profiles migrate to schema 4. Only explicitly enabled evidenced values
+  when profiles migrate to schema 6. Only explicitly enabled evidenced values
   render, and a selected group remains silent when its provider or stock text
   has no evidence for the build.
-- Route and mining labels currently preserve direct stock mission variables.
-  Nested mission-variable indirection is not expanded because the contract
-  cache does not retain the complete localization dictionary. Numeric mining
-  signatures are separately sourced legacy data and remain deferred to the
-  opt-in, exact-build wording pack rather than being presented as CIG data.
-- Cache schema 7 is intentionally incompatible with older generated caches.
+- Route and mining labels preserve direct stock variables and one reviewed
+  level of nested mission-variable indirection. Deeper/cyclic or ambiguous
+  indirection remains suppressed. Numeric mining signatures are separately
+  sourced legacy data and remain opt-in and exact-build/key/stock bounded.
+- Cache schema 9 is intentionally incompatible with older generated caches.
   Re-import the selected local channel to rebuild; personal wording, ownership,
   and settings remain in their separate stores.
 - Frozen Windows and Ubuntu artifacts are built independently because native

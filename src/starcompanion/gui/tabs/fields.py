@@ -7,6 +7,7 @@ ticked and apparently doing nothing.
 
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QCheckBox, QGridLayout, QVBoxLayout, QWidget
 
 from ...features import community_rewards_enabled
@@ -121,6 +122,7 @@ class FieldsTab(QWidget):
         self.boxes: dict[str, QCheckBox] = {}
         self.mission_boxes: dict[str, QCheckBox] = {}
         self.rows: dict[str, ToggleRow] = {}
+        self.category_boxes: dict[str, QCheckBox] = {}
         self.setAccessibleName("Contract content settings")
         self.setAccessibleDescription(
             "Choose which locally derived mission facts are added to contract descriptions."
@@ -142,6 +144,27 @@ class FieldsTab(QWidget):
         summary.setColumnStretch(2, 1)
         layout.addLayout(summary)
 
+        categories = SectionCard(
+            "Enhancement categories",
+            "Coarse controls for related reviewed features; individual controls remain available below and under Presentation.",
+        )
+        for name, label, description in (
+            ("rewards", "Reward intelligence", "Reputation, blueprints, items, event points, and reward qualifiers."),
+            ("tactical", "Tactical intelligence", "Mission type, difficulty, spawns, ace, turret, and engagement facts."),
+            ("routes", "Routes and resource labels", "Hauling route and Battaglia resource additions in mission titles."),
+            ("entities", "Entity and item tags", "Typed vehicle, component, weapon, medical, commodity, and missile tags."),
+            ("legacy", "Reviewed legacy pack", "The default-off exact-build numeric mining-signature pack."),
+        ):
+            check = QCheckBox(label)
+            check.setAccessibleName(f"Enable {label.lower()} category")
+            check.setAccessibleDescription(description)
+            check.clicked.connect(
+                lambda checked, category=name: self._set_category(category, checked)
+            )
+            self.category_boxes[name] = check
+            categories.add_widget(check)
+        layout.addWidget(categories)
+
         core = SectionCard(
             "Core mission intelligence",
             "These facts come from the selected local game build and remain empty when the provider has no evidence.",
@@ -158,7 +181,7 @@ class FieldsTab(QWidget):
         self.core_section = core
         self.extended_section = extended
         self.tactical_section = tactical
-        focus_order: list[QCheckBox] = []
+        focus_order: list[QCheckBox] = list(self.category_boxes.values())
 
         for name, label, hint, needs_rewards in TOGGLES:
             if needs_rewards and not community_rewards_enabled():
@@ -212,6 +235,49 @@ class FieldsTab(QWidget):
         setattr(self.state.profile.mission_presentation.facts, name, checked)
         self.state.touch_profile()
 
+    def _set_category(self, name: str, checked: bool) -> None:
+        if self._loading:
+            return
+        if name == "rewards":
+            for field in self.boxes:
+                setattr(self.state.profile.fields, field, checked)
+        elif name == "tactical":
+            for field in self.mission_boxes:
+                setattr(self.state.profile.mission_presentation.facts, field, checked)
+        elif name == "routes":
+            mission = self.state.profile.mission_presentation
+            mission.route_titles_enabled = checked
+            mission.mining_signature_enabled = checked
+        elif name == "entities":
+            self.state.profile.mission_presentation.entity_tags.enabled = checked
+        elif name == "legacy":
+            self.state.profile.mission_presentation.legacy_mining_pack_enabled = checked
+        self.state.touch_profile()
+
+    def _category_state(self, name: str) -> Qt.CheckState:
+        profile = self.state.profile
+        if name == "rewards":
+            values = [getattr(profile.fields, field) for field in self.boxes]
+        elif name == "tactical":
+            values = [
+                getattr(profile.mission_presentation.facts, field)
+                for field in self.mission_boxes
+            ]
+        elif name == "routes":
+            values = [
+                profile.mission_presentation.route_titles_enabled,
+                profile.mission_presentation.mining_signature_enabled,
+            ]
+        elif name == "entities":
+            values = [profile.mission_presentation.entity_tags.enabled]
+        else:
+            values = [profile.mission_presentation.legacy_mining_pack_enabled]
+        if all(values):
+            return Qt.CheckState.Checked
+        if any(values):
+            return Qt.CheckState.PartiallyChecked
+        return Qt.CheckState.Unchecked
+
     def refresh(self) -> None:
         self._loading = True
         try:
@@ -221,6 +287,8 @@ class FieldsTab(QWidget):
                 check.setChecked(
                     getattr(self.state.profile.mission_presentation.facts, name)
                 )
+            for name, check in self.category_boxes.items():
+                check.setCheckState(self._category_state(name))
         finally:
             self._loading = False
 

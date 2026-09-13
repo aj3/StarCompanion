@@ -28,6 +28,8 @@ COLUMN_FILTER_KEYS = (
 _COLUMN_FILTER_INDEX = {
     name: index for index, name in enumerate(COLUMN_FILTER_KEYS)
 }
+MAX_CLIPBOARD_ROWS = 50_000
+MAX_CLIPBOARD_CHARACTERS = 8 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -528,12 +530,55 @@ class StringFilterProxyModel(QSortFilterProxyModel):
         return True
 
 
+def _clipboard_cell(value: str) -> str:
+    compact = value.replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    return "'" + compact if compact.startswith(("=", "+", "-", "@")) else compact
+
+
+def visible_rows_tsv(proxy: StringFilterProxyModel) -> str:
+    """Serialize the filtered projection without hidden provenance fields."""
+
+    model = proxy.sourceModel()
+    if not isinstance(model, StringTableModel):
+        return ""
+    count = proxy.rowCount()
+    if count > MAX_CLIPBOARD_ROWS:
+        raise ValueError(
+            f"filtered selection exceeds the {MAX_CLIPBOARD_ROWS:,}-row clipboard limit"
+        )
+    lines = ["Key\tCategory\tFinal value\tSource\tOutcome"]
+    total = len(lines[0])
+    for row in range(count):
+        source_index = proxy.mapToSource(proxy.index(row, 0))
+        record = model.record(source_index.row())
+        if record is None:
+            continue
+        line = "\t".join(
+            _clipboard_cell(value)
+            for value in (
+                record.key,
+                record.category,
+                record.merged,
+                f"{record.winner.source_id} ({record.winner.kind.value})",
+                record.operation,
+            )
+        )
+        total += len(line) + 1
+        if total > MAX_CLIPBOARD_CHARACTERS:
+            raise ValueError("filtered clipboard export exceeds the 8 MiB text limit")
+        lines.append(line)
+    return "\n".join(lines) + "\n"
+
+
 __all__ = [
     "COLUMN_FILTER_KEYS",
+    "MAX_CLIPBOARD_CHARACTERS",
+    "MAX_CLIPBOARD_ROWS",
     "StringEditorDocument",
     "StringEditorSnapshot",
     "StringFilterProxyModel",
     "StringRecord",
     "StringTableModel",
     "build_string_snapshot",
+    "visible_rows_tsv",
 ]

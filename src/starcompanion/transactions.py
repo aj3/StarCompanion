@@ -105,7 +105,7 @@ class TransactionJournal:
         plan_id: str,
         target: Path,
         before: FileFingerprint,
-        after_sha256: str,
+        after_sha256: str | None,
     ) -> None:
         self._write(
             {
@@ -154,7 +154,9 @@ class TransactionJournal:
             stage = TransactionStage(data["stage"])
             before = FileFingerprint.from_dict(data["before"])
             after_sha256 = data["after_sha256"]
-            if not isinstance(after_sha256, str) or len(after_sha256) != 64:
+            if after_sha256 is not None and (
+                not isinstance(after_sha256, str) or len(after_sha256) != 64
+            ):
                 raise ValueError("invalid expected final digest")
             current = fingerprint(target)
             backup = Path(data["backup"]) if data.get("backup") else None
@@ -176,7 +178,11 @@ class TransactionJournal:
             if resolve_safe:
                 self.journal_path.unlink(missing_ok=True)
             return report
-        if current.exists and current.sha256 == after_sha256:
+        reached_intended_state = (
+            not current.exists if after_sha256 is None
+            else current.exists and current.sha256 == after_sha256
+        )
+        if reached_intended_state:
             report = RecoveryReport(
                 "applied",
                 "target replacement completed before interruption",

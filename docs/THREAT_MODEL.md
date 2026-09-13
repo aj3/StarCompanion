@@ -1,7 +1,7 @@
 # StarCompanion core threat model
 
-**Version:** 4 (G6 typed route presentation)
-**Review date:** 2026-09-12
+**Version:** 5 (G7 language and portable-data controls)
+**Review date:** 2026-09-13
 
 ## Security objectives
 
@@ -26,12 +26,15 @@ strings, usernames, and absolute paths must not enter diagnostics or releases.
 | Settings ZIP | Fully untrusted portable input | No encrypted/path-traversing input, allowlisted paths/kinds/preferences, count/size/ratio limits, ZIP CRC plus manifest SHA-256, preview, conflict authorization, link/junction revalidation, crash journal and transactional rollback |
 | User fallback JSON | Fully untrusted local input | Exact schema, duplicate-key/depth/count/length/size limits, unresolved-key allowlist, build/language binding, explicit authored text only |
 | Game override | May change outside StarCompanion | Fingerprinted operation plan, pre-write recheck, backup, journal, atomic replacement, verified result and rollback |
+| `USER.cfg` and restore-to-stock | Small game control files may contain unrelated settings, unusual supported encodings, links, or external changes | Exact install-derived targets, 1 MiB cap, ordinary-file check, archive-verified language, last-effective-line update, encoding/newline preservation, reviewed target and hash binding, target-scoped backup/journal, atomic write or intentional removal, and verified final state |
+| Application data root | A custom/synchronized destination may be hostile, linked, replaced, concurrent, or only partly copied after a crash | Absolute non-root validation, link/junction checks before every write, allowlisted count/byte-bounded copy, double hash/conflict review, process lock, activation marker/config written last, source retained, restart-only switch, and synchronization warning |
 | Per-channel data | Different channels/languages must never mix | Supported-channel allowlist and normalized scopes for caches, overrides, language packs, ownership, backups, and transactions; the only cross-channel exception is an explicit LIVE-HOTFIX ownership scope, whose automatic log discovery is limited to those sibling production folders |
 | Local game logs | Logs can be huge, malformed, rapidly rotated, private, linked outside the install, or selected under the wrong channel | Incremental bounded reads, line/file-count limits, cancellation during discovery and scanning, file identities and prefix checks, exact acquisition grammar, scope-matched automatic discovery, link/reparse and non-regular entry rejection, source-channel plus sanitized basename evidence, and path-redacted errors/warnings |
 | Archive helper process | May crash, hang, or be cancelled | Parent-owned file artifacts, bounded cancellation/termination, validated result format, parent cleanup |
 | Diagnostics | Intended to be shareable | Aggregate counts/status only; excludes paths, usernames, values, logs, ownership, and game strings |
 | GUI administration | User-selected paths and long-running local work cross the event loop/worker boundary | Background jobs own discovery, archive reading, ownership scanning, settings portability, and diagnostics I/O; model snapshots cross back to Qt; shutdown requests cancellation and waits boundedly |
 | Advanced string editor | Large local string graphs and bulk edits could freeze, accidentally broaden a write, or lose personal text during replacement | Virtualized projection, debounced in-memory validation, model-level undo/redo, explicit multi-select reset, the unchanged serialized C3 operation plan as the only apply boundary, and separate capped collision-resistant `user.ini` snapshots before changed saves |
+| Clipboard and window close | Filtered exports could leak hidden evidence or trigger spreadsheet formulas; closing could lose a pending debounced edit | Visible-row-only capped TSV, delimiter removal, formula neutralization, excluded provenance, save/discard/cancel prompt, debounce flush before background save, and open-window retention after save failure |
 | Tactical and route presentation | Local fields or stock mission variables may be malformed, ambiguous, unlocalized, oversized, or unsupported by one build | Fixed fact and route-family vocabularies, per-fact type/range checks, exact mission-token parsing, description-variant intersection, existing-route suppression, required source evidence, contradictory-value suppression, control/markup bounds, independent provider status, profile-default off migration, complete-tag length budget, and provenance only for rendered facts or variables |
 | Backup browser | A listed file can be replaced or redirected before restore | Target-scoped ordinary-file filtering, preview fingerprints, pre-write revalidation, preservation of the current target, journaled atomic replacement, and final digest verification |
 | Dependencies/release | Third-party code or signing credentials may be compromised | Exact pins and hashes, offline wheelhouse build, vulnerability audit, CycloneDX SBOM, license/notice verification, frozen offline smoke, protected manual signing environment, thumbprint pin, timestamp and signature verification |

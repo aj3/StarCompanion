@@ -42,6 +42,11 @@ from .inject import (
 )
 from .inject import plan as plan_injection
 from . import install as installs
+from .game_files import (
+    apply_game_file_plan,
+    plan_language_activation,
+    plan_restore_stock,
+)
 from .operations import prepare_update, read_contracts
 from .prepare import stream_stock_localization
 from .source_graph import SourceGraph, SourceKind, SourceLayer, report as source_report
@@ -59,7 +64,7 @@ from .user_edits import (
 )
 from .sharing import load_delta_pack, plan_delta_pack, write_delta_pack
 from .validate import Severity, validate_value
-from .transactions import TransactionJournal, fingerprint
+from .transactions import TransactionJournal, bytes_sha256, fingerprint
 from .ownership import (
     OwnershipDecision,
     OwnershipStore,
@@ -1636,6 +1641,86 @@ def cmd_languages_import(args) -> int:
     return EXIT_OK
 
 
+def _game_file_backup_dir(args, game, language: str, operation: str) -> Path:
+    if args.backup_dir is None:
+        target = (
+            game.user_cfg
+            if operation == "activate-language"
+            else game.localization(language)
+        )
+        return target.parent / "backups"
+    scope = "control" if operation == "activate-language" else language
+    return Path(args.backup_dir) / game.channel / scope
+
+
+def _print_game_file_plan(plan) -> None:
+    before = plan.before.sha256[:12] + "…" if plan.before.sha256 else "missing"
+    after = (
+        bytes_sha256(plan.after)[:12] + "…"
+        if plan.after is not None
+        else "missing (stock archive will be used)"
+    )
+    print(f"operation : {plan.operation}")
+    print(f"target    : {plan.target}")
+    print(f"before    : {before}")
+    print(f"after     : {after}")
+    print(f"plan id   : {plan.plan_id}")
+    print(f"summary   : {plan.summary}")
+
+
+def _apply_language_control_plan(args, game, language: str, plan) -> int:
+    _print_game_file_plan(plan)
+    if not plan.changed:
+        print("nothing needs changing")
+        return EXIT_OK
+    if not args.confirm:
+        print("nothing was written; repeat with --confirm to apply this exact plan")
+        return EXIT_REFUSED
+    backup_dir = _game_file_backup_dir(args, game, language, plan.operation)
+    if plan.operation == "activate-language":
+        journal = TransactionJournal(
+            backup_dir / ".usercfg-journal.json",
+            backup_dir / "last-usercfg-operation.json",
+        )
+    else:
+        journal = _backup_journal(backup_dir)
+    result = apply_game_file_plan(
+        plan,
+        confirmed=True,
+        backup_dir=backup_dir,
+        journal=journal,
+    )
+    print(f"result    : {'present' if result.final.exists else 'removed'}")
+    print(f"backup    : {result.backup or 'not required'}")
+    return EXIT_OK
+
+
+def cmd_languages_activate(args) -> int:
+    game = _resolve_install(args.install)
+    language = installs.normalize_language(args.language)
+    available = game.languages()
+    if language not in available:
+        raise ValueError(
+            f"language {language!r} is not installed in {game.channel}; "
+            f"available: {', '.join(available) or 'none'}"
+        )
+    plan = plan_language_activation(game, language)
+    return _apply_language_control_plan(args, game, language, plan)
+
+
+def cmd_languages_restore_stock(args) -> int:
+    game = _resolve_install(args.install)
+    language = installs.normalize_language(args.language)
+    available = game.languages()
+    if language not in available:
+        raise ValueError(
+            f"language {language!r} has no verified stock localization in "
+            f"{game.channel}; available: {', '.join(available) or 'none'}"
+        )
+    plan = plan_restore_stock(game, language)
+    return _apply_language_control_plan(args, game, language, plan)
+
+
 def cmd_settings_show(args) -> int:
     preferences = PreferencesStore(args.data_root or data_dir()).load()
     print(json.dumps(preferences, indent=2, sort_keys=True))
@@ -2207,6 +2292,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--data-root", type=Path)
     p.add_argument("--confirm", action="store_true")
     p.set_defaults(func=cmd_languages_import)
+
+    p = languages_sub.add_parser(
+        "activate",
+        help="preview/activate an archive-verified language in USER.cfg",
+    )
+    p.add_argument("--install", type=Path)
+    p.add_argument("--language", required=True)
+    p.add_argument("--backup-dir", type=Path)
+    p.add_argument("--confirm", action="store_true")
+    p.set_defaults(func=cmd_languages_activate)
+
+    p = languages_sub.add_parser(
+        "restore-stock",
+        help="preview/remove one loose localization override so stock archive text is used",
+    )
+    p.add_argument("--install", type=Path)
+    p.add_argument("--language", required=True)
+    p.add_argument("--backup-dir", type=Path)
+    p.add_argument("--confirm", action="store_true")
+    p.set_defaults(func=cmd_languages_restore_stock)
 
     settings_parser = sub.add_parser(
         "settings", help="inspect or safely move portable settings between machines"

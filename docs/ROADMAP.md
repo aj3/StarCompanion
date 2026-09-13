@@ -37,8 +37,8 @@ that phase's **Resume prompt**.
 | | 9b. Mission XML layer | ✅ Done — reader shipped, premise disproved |
 | 4 · Ship | 10. Packaging & release | ✅ Done — 292 tests |
 
-The catch-up program has completed C0–C6, G1–G4, and G5. **Sprint G6 — Tag
-Builder and Legacy Presentation** is active. G5's synthetic-first catalog provides typed vehicle,
+The catch-up program has completed C0–C6 and G1–G6. **Sprint G7 — Experience
+Parity** is active. G5's synthetic-first catalog provides typed vehicle,
 component, ship/FPS weapon, medical, commodity, crafting, and journal
 extraction; per-value source evidence; independent capability/drift reports;
 overlap suppression; and exact-build corrections that fail closed while
@@ -52,7 +52,11 @@ labels. The current slice adds nested token intersection, typed entity/item
 tags, user-layer ship favorites/ASOP ordering, and a source-attributed,
 exact-build legacy mining pack. All presentation features remain default-off.
 [G5_LOCAL_PROVIDERS.md](G5_LOCAL_PROVIDERS.md) and
-[G6_PRESENTATION.md](G6_PRESENTATION.md) record those contracts. **Sprint G4 — Ownership and Editor Completion**
+[G6_PRESENTATION.md](G6_PRESENTATION.md) record those contracts. G7's first
+slice adds visible language activation, safe `USER.cfg` and restore-to-stock
+plans, portable/custom data roots, bounded filtered clipboard export,
+unsaved-close protection, category controls, and stat-block placement; see
+[G7_EXPERIENCE_PARITY.md](G7_EXPERIENCE_PARITY.md). **Sprint G4 — Ownership and Editor Completion**
 is complete: revision-bound manual ownership, complete
 tracker operations, exact foreign-name repair, ownership-aware rendering,
 per-key conflict reconciliation, authored-only delta packs, independent column
@@ -61,7 +65,7 @@ persistence, and visible freshest-install evidence.
 
 The project is not yet at complete Smart Citizen plus legacy StarStrings
 feature parity. [FEATURE_PARITY.md](FEATURE_PARITY.md) is the current baseline
-and defines the remaining G6–G7 work without weakening the verified C0–G5
+and defines the remaining G7 work without weakening the verified C0–G6
 safety boundaries.
 
 ---

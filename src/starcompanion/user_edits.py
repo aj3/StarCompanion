@@ -89,17 +89,9 @@ class KeyResolution:
 
 
 def data_dir() -> Path:
-    configured = os.environ.get("STARCOMPANION_DATA")
-    if configured:
-        return Path(configured)
-    if os.name == "nt":
-        root = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
-        if root:
-            return Path(root) / APP_NAME / "data"
-    root = os.environ.get("XDG_DATA_HOME")
-    if root:
-        return Path(root) / APP_NAME
-    return Path.home() / ".local" / "share" / APP_NAME
+    from .data_location import resolve_data_location
+
+    return resolve_data_location().root
 
 
 def _scope(value: str, label: str, *, uppercase: bool = False) -> str:

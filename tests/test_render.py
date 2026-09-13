@@ -336,6 +336,19 @@ def test_structured_number_formatting_is_applied():
     )
 
 
+def test_stat_block_can_be_placed_above_or_below_unchanged_stock_text():
+    contract = make_contract(reward=Reward(reputation=[100]))
+    below = render(contract, stat_block_placement="below")
+    above = render(contract, stat_block_placement="above")
+    assert below.index("Do the thing") < below.index("Reputation Awarded")
+    assert above.index("Reputation Awarded") < above.index("Do the thing")
+
+
+def test_invalid_stat_block_placement_is_rejected():
+    with pytest.raises(ValueError, match="stat-block placement"):
+        RenderOptions(stat_block_placement="middle")
+
+
 def test_render_options_reject_incomplete_section_order():
     with pytest.raises(ValueError, match="exactly once"):
         RenderOptions(section_order=("reputation",))

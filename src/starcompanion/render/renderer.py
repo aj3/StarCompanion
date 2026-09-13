@@ -209,6 +209,7 @@ class RenderOptions:
     labels: RenderLabels = field(default_factory=RenderLabels)
     reputation_separator: str = " / "
     thousands_separator: bool = True
+    stat_block_placement: str = "below"
     mission_fact_groups: frozenset[str] = frozenset()
     show_mission_details: bool = False
     tag_builder_enabled: bool = False
@@ -249,6 +250,8 @@ class RenderOptions:
             )
         if self.reputation_separator not in {" / ", "/", " • "}:
             raise ValueError("unsupported reputation separator")
+        if self.stat_block_placement not in {"below", "above"}:
+            raise ValueError("unsupported stat-block placement")
         unknown_groups = set(self.mission_fact_groups) - set(MISSION_FACT_GROUPS)
         unknown_tags = set(self.tag_builder_fields) - set(MISSION_FACT_GROUPS)
         if unknown_groups or unknown_tags:

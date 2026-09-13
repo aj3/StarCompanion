@@ -37,7 +37,7 @@ from .render.renderer import (
 )
 from .validate import EMPHASIS_TAGS
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 PROFILE_DIR = Path(__file__).parent / "profiles"
 
@@ -149,6 +149,7 @@ class StructuredWording(Strict):
     labels: WordingLabels = Field(default_factory=WordingLabels)
     reputation_separator: Literal[" / ", "/", " • "] = " / "
     thousands_separator: bool = True
+    stat_block_placement: Literal["below", "above"] = "below"
 
     @field_validator("section_order")
     @classmethod
@@ -276,7 +277,7 @@ class Injection(Strict):
 
 
 class Profile(Strict):
-    schema_version: Literal[5] = SCHEMA_VERSION
+    schema_version: Literal[6] = SCHEMA_VERSION
     name: str = "default"
     description: str = ""
     fields: FieldToggles = Field(default_factory=FieldToggles)
@@ -325,8 +326,10 @@ class Profile(Strict):
         if found == 3:
             found = 4
         if found == 4:
-            data["schema_version"] = SCHEMA_VERSION
             found = 5
+        if found == 5:
+            data["schema_version"] = SCHEMA_VERSION
+            found = 6
         if found != SCHEMA_VERSION:
             # Checked before model validation so the message names the real
             # problem instead of a confusing Literal mismatch.
@@ -366,6 +369,7 @@ class Profile(Strict):
             labels=RenderLabels(**self.wording.labels.model_dump()),
             reputation_separator=self.wording.reputation_separator,
             thousands_separator=self.wording.thousands_separator,
+            stat_block_placement=self.wording.stat_block_placement,
             mission_fact_groups=self.mission_presentation.facts.enabled(),
             show_mission_details=self.mission_presentation.description_details,
             tag_builder_enabled=self.mission_presentation.tags.enabled,

@@ -81,8 +81,9 @@ It opens on **Overview**, which is the whole normal workflow:
 Then one button: **Update my game**. It says how many contracts will change,
 takes a backup, and there is an **Undo my last change** button beside it.
 
-It also warns if your `USER.cfg` is missing `g_language`, since without that
-setting the game ignores the override entirely and nothing appears to happen.
+It shows the selected and active game languages, discovers installed languages
+locally, and can preview/confirm a backup-first `USER.cfg` activation. One
+Restore stock action safely removes only the selected loose localization file.
 
 *Contract Content* independently enables each locally evidenced mission fact.
 *Presentation* changes style, generated labels, information order, number
@@ -99,7 +100,8 @@ game logs only after you request it.
 points and known interrupted operations. Its manual-plan tools cover rarer
 cases such as a separately selected localization file or rebuilding from a
 clean copy. *Settings & help* provides output profiles, preview-first portable
-settings, inspect-before-export redacted diagnostics, and bundled searchable
+settings, custom or packaged beside-executable data roots, synchronization
+warnings, inspect-before-export redacted diagnostics, and bundled searchable
 offline guidance.
 
 ### The command line
@@ -257,6 +259,18 @@ explicit older selection instead of silently switching sources.
 starcompanion channels list
 starcompanion languages list --install "Z:\RSI\StarCitizen\LIVE"
 
+# Preview first; --confirm applies the exact reviewed USER.cfg plan.
+starcompanion languages activate --install "Z:\RSI\StarCitizen\LIVE" \
+  --language french
+starcompanion languages activate --install "Z:\RSI\StarCitizen\LIVE" \
+  --language french --confirm
+
+# Preview/remove only french/global.ini so the archive's stock text is used.
+starcompanion languages restore-stock --install "Z:\RSI\StarCitizen\LIVE" \
+  --language french
+starcompanion languages restore-stock --install "Z:\RSI\StarCitizen\LIVE" \
+  --language french --confirm
+
 # Local-only language pack: preview, then persist in LIVE/french scope.
 starcompanion languages import --install "Z:\RSI\StarCitizen\LIVE" \
   --language french --file my-french.ini
@@ -296,7 +310,7 @@ protected manual release operation documented in
 | `rank-first` | Giver and rank lead every title; rep emphasised above gate notes |
 
 Profiles are versioned JSON — save, share, and reload them. Older profiles
-migrate safely to schema 4: ordinary profiles use structured wording, a profile
+migrate safely to schema 6: ordinary profiles use structured wording, a profile
 containing custom templates retains explicit advanced mode, and new tactical,
 route, and mining controls remain off until the user enables them.
 
@@ -371,15 +385,12 @@ explicit opt-ins nobody meets by accident.
 
 ## Current limitations
 
-- **Mission enhancements are the first local provider.** Ship, component,
-  weapon, commodity, and journal providers remain future C2 work. Unsupported
-  DataForge builds degrade independently and report diagnostics instead of
-  blocking stock contract rendering.
 - The application interface and generated enhancement templates are English
-  only. Installed game languages are discovered and isolated correctly, and
-  user-selected local language packs can be imported without a network source.
-  A visible GUI language selector and the preview/backup/confirmation workflow
-  that safely updates `USER.cfg` remain assigned to G7.
+  only. Installed game languages are discovered, visibly selected, isolated,
+  and activated safely without a network source. Application-interface
+  translation remains future G7 work.
+- Richer entity stat blocks, the optional simple mode, coach marks, a redacted
+  event viewer, and two additional themes remain tracked in the parity ledger.
 
 The reviewed Smart Citizen v2.3.1 and current legacy StarStrings outcomes,
 including every known remaining gap and its assigned phase, are tracked in

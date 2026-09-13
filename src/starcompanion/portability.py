@@ -127,9 +127,9 @@ def validate_preferences(value: object) -> dict[str, object]:
     if result.get("theme") not in (None, "light", "dark"):
         raise PortabilityError("theme must be light or dark")
     if "ui_schema" in result and (
-        type(result["ui_schema"]) is not int or result["ui_schema"] != 1
+        type(result["ui_schema"]) is not int or result["ui_schema"] not in {1, 2}
     ):
-        raise PortabilityError("ui_schema must be 1")
+        raise PortabilityError("ui_schema must be 1 or 2")
     if "last_page" in result and (
         not isinstance(result["last_page"], str)
         or not result["last_page"]

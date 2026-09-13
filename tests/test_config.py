@@ -138,6 +138,12 @@ def test_v4_profile_migrates_with_entity_tags_disabled():
     assert not profile.mission_presentation.legacy_mining_pack_enabled
 
 
+def test_v5_profile_migrates_with_stock_first_stat_blocks():
+    profile = Profile.loads('{"schema_version": 5, "name": "v5"}')
+    assert profile.schema_version == SCHEMA_VERSION
+    assert profile.wording.stat_block_placement == "below"
+
+
 def test_route_and_mining_settings_flow_to_typed_render_options():
     profile = Profile.model_validate(
         {
@@ -171,6 +177,13 @@ def test_route_and_mining_settings_flow_to_typed_render_options():
     assert options.entity_tag_fields == ("kind", "size")
     assert options.entity_tag_placement == "suffix"
     assert options.entity_tag_max_characters == 48
+
+
+def test_stat_block_placement_flows_to_render_options():
+    profile = Profile.model_validate(
+        {"wording": {"stat_block_placement": "above"}}
+    )
+    assert profile.to_render_options().stat_block_placement == "above"
 
 
 def test_missing_schema_version_assumes_current():

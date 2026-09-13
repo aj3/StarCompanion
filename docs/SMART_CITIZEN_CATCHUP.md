@@ -944,6 +944,12 @@ and Windows/Ubuntu CI gates passed together on the G3 implementation commit.
   an active-localization indicator, category toggles, and above/below stat-block
   placement. `USER.cfg` changes preserve unrelated settings and encoding and
   use preview, backup, confirmation, atomic replacement, and recovery.
+- **G7 first slice complete (2026-09-13):** the requested language, control-file,
+  data-root, clipboard, close-protection, category, and stat-placement workflows
+  are implemented in the GUI with CLI parity for activation/stock restore.
+  Synthetic security and high-DPI regressions cover the new boundaries; the
+  remaining G7 items are interface localization, optional onboarding polish,
+  a redacted event viewer, and additional accessible themes.
 
 ## Recommended improvements beyond parity
 

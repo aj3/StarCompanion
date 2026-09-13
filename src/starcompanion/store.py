@@ -15,6 +15,7 @@ import re
 from pathlib import Path
 
 from . import cache
+from .data_location import resolve_data_location
 from .install import GameInstall, normalize_language
 from .model import ContractSet
 
@@ -26,6 +27,10 @@ def cache_dir() -> Path:
     base = os.environ.get("STARCOMPANION_CACHE")
     if base:
         return Path(base)
+
+    location = resolve_data_location()
+    if location.mode in {"custom", "environment", "portable"}:
+        return location.root / "cache"
 
     if os.name == "nt":
         root = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")

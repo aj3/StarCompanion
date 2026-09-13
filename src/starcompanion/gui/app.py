@@ -51,6 +51,11 @@ class MainWindow(QMainWindow):
         self._layout_restore_timer = QTimer(self)
         self._layout_restore_timer.setSingleShot(True)
         self._layout_restore_timer.timeout.connect(self._restore_visible_splitter)
+        self._close_after_save_timer = QTimer(self)
+        self._close_after_save_timer.setSingleShot(True)
+        self._close_after_save_timer.timeout.connect(self._finish_close_after_save)
+        self._close_after_editor_save = False
+        self._allow_dirty_close = False
         loaded_preferences = self.ui_preferences_store.load(
             legacy_theme=self.state.profile.appearance.theme
         )
@@ -66,7 +71,12 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1040, 680)
         self.resize(*self.DEFAULT_WINDOW_SIZE)
 
-        self.start = StartTab(self.state)
+        self.start = StartTab(
+            self.state,
+            language=self.ui_preferences.default_language,
+        )
+        self.start.languageChanged.connect(self._set_default_language)
+        self.start.scopeStatusChanged.connect(self._refresh_shell_context)
         self.source = SourceTab(self.state)
         self.fields = FieldsTab(self.state)
         self.formatting = FormattingTab(self.state)
@@ -297,6 +307,13 @@ class MainWindow(QMainWindow):
         self.ui_preferences = updated
         self._save_ui_preferences()
 
+    def _set_default_language(self, language: str) -> None:
+        updated = self.ui_preferences.with_default_language(language)
+        if updated == self.ui_preferences:
+            return
+        self.ui_preferences = updated
+        self._save_ui_preferences()
+
     def _reload_imported_settings(self, values: object) -> None:
         """Publish imported preferences/user values without crossing model boundaries."""
         if not isinstance(values, dict):
@@ -307,6 +324,7 @@ class MainWindow(QMainWindow):
             theme=theme_name if theme_name in {"dark", "light"} else self.ui_preferences.theme,
             last_page=page if page in PAGE_KEYS else "overview",
             link_live_hotfix=bool(values.get("link_live_hotfix", True)),
+            default_language=str(values.get("default_language", "english")),
         )
         self.ui_preference_warning = None
         self._applied_theme = None
@@ -317,6 +335,8 @@ class MainWindow(QMainWindow):
             self.ui_preferences.link_live_hotfix,
             persist=False,
         )
+        if self.start.selected_language != self.ui_preferences.default_language:
+            self.start.set_selected_language(self.ui_preferences.default_language)
         if not self.editor.document.dirty:
             self.editor.load_user_edits()
 
@@ -327,6 +347,10 @@ class MainWindow(QMainWindow):
             game = install.channel
             if install.version:
                 game = f"{game} {install.version}"
+            selected = self.start.selected_language
+            active = self.start.active_language or "not active"
+            override = "custom" if self.start.override_present else "stock"
+            game = f"{game} · {selected} selected · {active} active · {override}"
 
         contracts = self.state.contracts
         data = None
@@ -532,13 +556,65 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"StarCompanion — {self.state.profile.name}")
 
     def closeEvent(self, event) -> None:
+        if (
+            self.isVisible()
+            and self.editor.document.dirty
+            and not self._allow_dirty_close
+        ):
+            choice = QMessageBox.question(
+                self,
+                "Unsaved wording changes",
+                "The String editor has unsaved channel/language-specific changes.\n\n"
+                "Save writes them through the existing background C3 store. "
+                "Discard closes without writing them.",
+                QMessageBox.StandardButton.Save
+                | QMessageBox.StandardButton.Discard
+                | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if choice == QMessageBox.StandardButton.Cancel:
+                event.ignore()
+                return
+            if choice == QMessageBox.StandardButton.Save:
+                self.editor.save_user_edits()
+                if not self.editor.jobs_active:
+                    QMessageBox.warning(
+                        self,
+                        "Could not start save",
+                        "The editor could not start a safe background save. The window remains open.",
+                    )
+                    event.ignore()
+                    return
+                self._close_after_editor_save = True
+                self._close_after_save_timer.start(50)
+                event.ignore()
+                return
+            self._allow_dirty_close = True
         self._layout_restore_timer.stop()
+        self._close_after_save_timer.stop()
         self.start.shutdown_jobs()
         self.editor.shutdown_jobs()
         self.blueprints.shutdown_jobs()
         self.support.shutdown_jobs()
         self._save_layout()
         super().closeEvent(event)
+
+    def _finish_close_after_save(self) -> None:
+        if not self._close_after_editor_save:
+            return
+        if self.editor.jobs_active:
+            self._close_after_save_timer.start(50)
+            return
+        self._close_after_editor_save = False
+        if self.editor.document.dirty:
+            QMessageBox.warning(
+                self,
+                "Unsaved changes remain",
+                "The background save did not complete successfully. The window remains open.",
+            )
+            return
+        self._allow_dirty_close = True
+        self.close()
 
 
 def main(argv: list[str] | None = None) -> int:

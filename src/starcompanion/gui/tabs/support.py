@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
+import sys
 
 from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
@@ -22,6 +24,13 @@ from PySide6.QtWidgets import (
 )
 
 from ...config import builtin_profiles, load_builtin
+from ...data_location import (
+    DataMigrationPlan,
+    apply_data_migration,
+    plan_data_migration,
+    portable_data_root,
+    resolve_data_location,
+)
 from ...diagnostics import build_diagnostics, render_diagnostics, write_diagnostics
 from ...portability import (
     SettingsImportPlan,
@@ -50,7 +59,10 @@ HELP_ARTICLES = (
         "Channels and languages",
         "Localization, user wording, caches, and operation plans stay scoped to the selected "
         "channel and language. Blueprint ownership reviews LIVE and HOTFIX together by default; "
-        "the visible option can separate them, while PTU, EPTU, and TECH-PREVIEW always remain isolated.",
+        "the visible option can separate them, while PTU, EPTU, and TECH-PREVIEW always remain isolated."
+        " Discover installed languages before activation. StarCompanion changes only the effective "
+        "g_language line in USER.cfg after preview, backup, and confirmation. Restore stock removes "
+        "only the selected loose localization override through the same safe plan.",
     ),
     (
         "Blueprint ownership",
@@ -67,7 +79,9 @@ HELP_ARTICLES = (
         "Settings portability",
         "Export creates a bounded manifest-verified archive of interface preferences, user wording, "
         "and language packs. Import is preview-first, rejects unsafe paths and duplicate members, and "
-        "requires explicit replacement approval for conflicts.",
+        "requires explicit replacement approval for conflicts. Application data can also be copied "
+        "to a validated custom or packaged beside-executable root; the source remains untouched and "
+        "the new root activates only after restart.",
     ),
     (
         "Privacy and diagnostics",
@@ -79,7 +93,8 @@ HELP_ARTICLES = (
         "Validation and source precedence",
         "Stock localization is followed by generated profile output and then explicit user wording. "
         "The string editor shows every contribution and blocks invalid operation plans without "
-        "inventing localization text.",
+        "inventing localization text. Copy visible rows exports only the filtered bounded projection "
+        "and excludes hidden provenance.",
     ),
     (
         "Structured presentation",
@@ -126,6 +141,8 @@ class SupportTab(QWidget):
         self._shutting_down = False
         self._diagnostics: dict[str, object] | None = None
         self._import_plan: SettingsImportPlan | None = None
+        self._migration_plan: DataMigrationPlan | None = None
+        self._session_data_root = data_dir()
 
         self.status = NoticeBanner(
             "Profile, portability, diagnostics, and help remain local to this computer.",
@@ -192,6 +209,43 @@ class SupportTab(QWidget):
     def _settings_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
+        self.data_location_detail = QLabel()
+        self.data_location_detail.setWordWrap(True)
+        self.data_location_detail.setProperty("role", "muted")
+        self.data_location_warning = NoticeBanner(tone=Tone.WARNING)
+        self.choose_data_location_button = QPushButton("Choose data directory…")
+        self.choose_data_location_button.setAccessibleName("Choose application data directory")
+        self.choose_data_location_button.setAccessibleDescription(
+            "Preview a bounded copy-only migration; the source remains untouched and the new root activates on restart."
+        )
+        self.choose_data_location_button.clicked.connect(self.choose_data_location)
+        self.portable_mode_button = QPushButton("Use beside-executable data…")
+        self.portable_mode_button.setAccessibleName("Use beside-executable portable data")
+        self.portable_mode_button.setAccessibleDescription(
+            "For packaged builds, preview copying portable state beside StarCompanion and enable it on restart."
+        )
+        self.portable_mode_button.clicked.connect(self.enable_portable_mode)
+        self.apply_data_location_button = QPushButton("Apply reviewed data move…")
+        self.apply_data_location_button.setProperty("role", "danger")
+        self.apply_data_location_button.setAccessibleName("Apply reviewed data-directory migration")
+        self.apply_data_location_button.setAccessibleDescription(
+            "Copy only reviewed allowlisted files, preserve the source, and activate the new root after restart."
+        )
+        self.apply_data_location_button.setEnabled(False)
+        self.apply_data_location_button.clicked.connect(self.apply_data_location)
+        data_actions = QHBoxLayout()
+        data_actions.addWidget(self.choose_data_location_button)
+        data_actions.addWidget(self.portable_mode_button)
+        data_actions.addWidget(self.apply_data_location_button)
+        data_actions.addStretch(1)
+        data_section = SectionCard(
+            "Application data location",
+            "User wording, ownership, settings, and local layout can be copied safely. Cache files are disposable and are not migrated.",
+        )
+        data_section.add_widget(self.data_location_detail)
+        data_section.add_widget(self.data_location_warning)
+        data_section.add_layout(data_actions)
+        layout.addWidget(data_section)
         self.settings_detail = QLabel(
             "Exported archives include allowlisted preferences, channel/language user.ini files, and language packs."
         )
@@ -245,7 +299,105 @@ class SupportTab(QWidget):
         section.add_layout(actions)
         layout.addWidget(section)
         layout.addStretch(1)
+        self._refresh_data_location()
         return page
+
+    def _refresh_data_location(self) -> None:
+        location = resolve_data_location()
+        self.data_location_detail.setText(
+            f"Mode: {location.mode}\nCurrent root: {location.root}\n"
+            "A migration changes future launches only; the current session keeps its opened stores."
+        )
+        self.data_location_warning.setText(location.warning or "")
+        self.data_location_warning.setVisible(bool(location.warning))
+        environment_locked = location.mode == "environment"
+        self.choose_data_location_button.setEnabled(not environment_locked)
+        packaged = bool(getattr(sys, "frozen", False))
+        self.portable_mode_button.setEnabled(packaged and not environment_locked)
+        if environment_locked:
+            self.choose_data_location_button.setToolTip(
+                "STARCOMPANION_DATA controls this process; remove that environment setting first."
+            )
+        elif not packaged:
+            self.portable_mode_button.setToolTip(
+                "Beside-executable mode is enabled only in a packaged StarCompanion build."
+            )
+
+    def choose_data_location(self) -> None:
+        destination = QFileDialog.getExistingDirectory(
+            self, "Choose a new StarCompanion data directory"
+        )
+        if not destination or self._jobs:
+            return
+        self._plan_data_location(Path(destination), "custom")
+
+    def enable_portable_mode(self) -> None:
+        if self._jobs or not getattr(sys, "frozen", False):
+            return
+        self._plan_data_location(portable_data_root(), "portable")
+
+    def _plan_data_location(self, destination: Path, mode: str) -> None:
+        source = self._session_data_root
+        self._migration_plan = None
+        self.apply_data_location_button.setEnabled(False)
+        self._start_job(
+            lambda token, _reporter: (
+                token.checkpoint(),
+                plan_data_migration(source, destination, mode=mode),
+                token.checkpoint(),
+            )[1],
+            self._data_location_planned,
+        )
+
+    def _data_location_planned(self, plan: DataMigrationPlan) -> None:
+        self._migration_plan = plan
+        self.settings_preview.setPlainText(
+            "Data-directory migration preview\n"
+            f"Mode: {plan.mode}\n"
+            f"Source: {plan.source_root}\n"
+            f"Destination: {plan.destination_root}\n\n"
+            + "\n".join(
+                f"{item.outcome.upper():9} {item.relative_path} ({item.size:,} bytes)"
+                for item in plan.entries
+            )
+        )
+        self.apply_data_location_button.setEnabled(True)
+        self.status.set_tone(Tone.SUCCESS)
+        self.status.setText(
+            f"Reviewed {len(plan.entries):,} allowlisted files; {len(plan.changes):,} require copying."
+        )
+
+    def apply_data_location(self) -> None:
+        plan = self._migration_plan
+        if plan is None or self._jobs:
+            return
+        if QMessageBox.question(
+            self,
+            "Apply reviewed data-directory migration?",
+            f"Copy {len(plan.changes):,} file(s) to:\n{plan.destination_root}\n\n"
+            "The source is not deleted. The new location takes effect after restart.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        self._start_job(
+            lambda token, _reporter: (
+                token.checkpoint(),
+                apply_data_migration(plan, confirmed=True),
+            )[1],
+            lambda _result: self._data_location_applied(plan),
+        )
+
+    def _data_location_applied(self, plan: DataMigrationPlan) -> None:
+        self._migration_plan = None
+        self.apply_data_location_button.setEnabled(False)
+        # Freeze new stores on the open root until this process exits. The
+        # process-only override disappears before the next normal launch.
+        os.environ["STARCOMPANION_DATA"] = str(self._session_data_root)
+        self.status.set_tone(Tone.SUCCESS)
+        self.status.setText(
+            f"Data copied safely to {plan.destination_root}. Restart StarCompanion to use it; the original remains recoverable."
+        )
 
     def _diagnostics_page(self) -> QWidget:
         page = QWidget()

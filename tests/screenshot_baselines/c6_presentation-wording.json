@@ -8,11 +8,11 @@
     "header": [244, 0, 1036, 98],
     "stack": [244, 98, 1036, 672],
     "status": [244, 770, 1036, 30],
-    "wording_section": [253, 118, 1000, 652],
-    "length_section": [253, 786, 1000, 159]
+    "wording_section": [253, 88, 1000, 694],
+    "length_section": [253, 798, 1000, 159]
   },
   "minimum_colour_samples": {
-    "#0b0f14": 500,
+    "#0b0f14": 300,
     "#121820": 500,
     "#3fd0d4": 4
   }

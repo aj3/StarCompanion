@@ -11,7 +11,7 @@
     "enabled_metric": [253, 107, 325, 79],
     "coverage_metric": [590, 107, 326, 79],
     "tactical_metric": [928, 107, 325, 79],
-    "core_section": [253, 202, 1000, 278]
+    "core_section": [253, 449, 1000, 278]
   },
   "minimum_colour_samples": {
     "#0b0f14": 500,

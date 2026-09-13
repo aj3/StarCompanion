@@ -6,10 +6,11 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from ..portability import PortabilityError, PreferencesStore
+from ..install import normalize_language
 from ..user_edits import data_dir
 from .theme import DEFAULT_THEME, ThemeName
 
-UI_PREFERENCE_SCHEMA = 1
+UI_PREFERENCE_SCHEMA = 2
 DEFAULT_PAGE = "overview"
 PAGE_KEYS = frozenset(
     {
@@ -31,6 +32,7 @@ class UiPreferences:
     theme: ThemeName = DEFAULT_THEME
     last_page: str = DEFAULT_PAGE
     link_live_hotfix: bool = True
+    default_language: str = "english"
 
     def with_theme(self, value: ThemeName) -> "UiPreferences":
         return replace(self, theme=value)
@@ -40,6 +42,9 @@ class UiPreferences:
 
     def with_live_hotfix_link(self, enabled: bool) -> "UiPreferences":
         return replace(self, link_live_hotfix=bool(enabled))
+
+    def with_default_language(self, value: str) -> "UiPreferences":
+        return replace(self, default_language=normalize_language(value))
 
 
 @dataclass(frozen=True)
@@ -70,7 +75,7 @@ class UiPreferencesStore:
             )
 
         schema = values.get("ui_schema")
-        if schema not in (None, UI_PREFERENCE_SCHEMA):
+        if schema not in (None, 1, UI_PREFERENCE_SCHEMA):
             return PreferenceLoad(
                 UiPreferences(theme=fallback),
                 f"Interface preference schema {schema!r} is newer than this build. "
@@ -79,13 +84,18 @@ class UiPreferencesStore:
 
         theme = values.get("theme", fallback)
         page = values.get("last_page", DEFAULT_PAGE)
+        try:
+            language = normalize_language(str(values.get("default_language", "english")))
+        except ValueError:
+            language = "english"
         preferences = UiPreferences(
             theme=theme if theme in {"dark", "light"} else fallback,
             last_page=page if page in PAGE_KEYS else DEFAULT_PAGE,
             link_live_hotfix=bool(values.get("link_live_hotfix", True)),
+            default_language=language,
         )
 
-        if schema is None:
+        if schema != UI_PREFERENCE_SCHEMA:
             try:
                 self.save(preferences, existing=values)
             except (OSError, PortabilityError) as exc:
@@ -104,7 +114,7 @@ class UiPreferencesStore:
     ) -> None:
         values = dict(self._store.load() if existing is None else existing)
         schema = values.get("ui_schema")
-        if schema not in (None, UI_PREFERENCE_SCHEMA):
+        if schema not in (None, 1, UI_PREFERENCE_SCHEMA):
             raise PortabilityError(
                 f"interface preference schema {schema!r} is newer than this build"
             )
@@ -114,6 +124,7 @@ class UiPreferencesStore:
                 "theme": preferences.theme,
                 "last_page": preferences.last_page,
                 "link_live_hotfix": preferences.link_live_hotfix,
+                "default_language": preferences.default_language,
             }
         )
         self._store.save(values)
