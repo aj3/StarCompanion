@@ -157,6 +157,13 @@ localization key.
    pseudo-locale gates, bounded entity stats, and exact legacy presentation
    rules are complete. Full native-reviewed feature-page translations remain
    external contributor content.
+5. **G8 — Journal and local discovery (in progress):** the first synthetic-first
+   checkpoint resolves journal title/body records against the explicitly selected
+   installed language, suppresses shared-key ambiguity, and reports entity name
+   keys missing from that local language without synthesizing replacement text.
+   Provider health remains independent and discovery output is capped. Typed cache,
+   search UI, graph-backed relationships, authored-fallback application, and
+   redacted LIVE/HOTFIX validation remain later G8 checkpoints.
 
 G4 began only after G3's complete local and hosted gate was green. G5 must not
 start until G4's complete local gate and review are green. Later phases may

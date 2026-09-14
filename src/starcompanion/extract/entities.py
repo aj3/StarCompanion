@@ -1045,3 +1045,17 @@ def presentation_entity_providers(
             )
         )
     return tuple(selected)
+
+
+def runtime_entity_providers(
+    corrections: CorrectionRegistry | None = None,
+) -> tuple[LocalEntityProvider, ...]:
+    """Add journal facts to the bounded presentation-time provider set."""
+
+    return (
+        *presentation_entity_providers(corrections),
+        LocalEntityProvider(
+            replace(JOURNAL_PROVIDER, relationships=()),
+            corrections=corrections,
+        ),
+    )

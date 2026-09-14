@@ -133,10 +133,14 @@ def _read_contracts_local(
         attach_entity_presentation,
         unavailable_entity_capabilities,
     )
+    from .journal_discovery import (
+        attach_journal_discovery,
+        unavailable_journal_discovery_capabilities,
+    )
     from .extract import datacore, dataforge
     from .extract.entities import (
         extract_entity_catalog,
-        presentation_entity_providers,
+        runtime_entity_providers,
     )
     from .extract.mission_tactical import (
         extract_mission_tactical_catalog,
@@ -237,6 +241,10 @@ def _read_contracts_local(
                 install.version or "unknown",
                 reason,
             )
+            entity_capabilities += unavailable_journal_discovery_capabilities(
+                install.version or "unknown",
+                reason,
+            )
         else:
             try:
                 report(
@@ -256,7 +264,7 @@ def _read_contracts_local(
                 entity_catalog = extract_entity_catalog(
                     index,
                     build_version=install.version,
-                    providers=presentation_entity_providers(),
+                    providers=runtime_entity_providers(),
                 )
                 token.checkpoint()
             except datacore.DataCoreError as exc:
@@ -277,6 +285,10 @@ def _read_contracts_local(
                     for provider, version in tactical_specs.items()
                 )
                 entity_capabilities = unavailable_entity_capabilities(
+                    install.version or "unknown",
+                    reason,
+                )
+                entity_capabilities += unavailable_journal_discovery_capabilities(
                     install.version or "unknown",
                     reason,
                 )
@@ -327,6 +339,7 @@ def _read_contracts_local(
         contracts = apply_enhancements(contracts, enhancement_sets)
         if entity_catalog is not None:
             attach_entity_presentation(contracts, entity_catalog, strings)
+            attach_journal_discovery(contracts, entity_catalog, strings)
         else:
             contracts.capabilities.extend(entity_capabilities)
         attach_legacy_mining_pack(
