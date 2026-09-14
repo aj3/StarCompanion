@@ -34,8 +34,9 @@ def main() -> int:
         os.environ["STARCOMPANION_EXPERT"] = "1"
     install.find_default = lambda: None
     install.find_installs = lambda **_kwargs: []
+    interface_locale = os.environ.get("STARCOMPANION_SCREENSHOT_LOCALE", "en-US")
     PreferencesStore(Path(os.environ["STARCOMPANION_DATA"])).save(
-        {"tutorial_completed": True}
+        {"tutorial_completed": True, "interface_locale": interface_locale}
     )
     app = QApplication([])
     window = MainWindow()
@@ -206,6 +207,7 @@ def main() -> int:
 
     metrics = {
         "page": page,
+        "interface_locale": window.translator.locale,
         "logical_size": [window.width(), window.height()],
         "physical_size": [pixmap.width(), pixmap.height()],
         "device_pixel_ratio": pixmap.devicePixelRatio(),

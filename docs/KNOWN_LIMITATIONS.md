@@ -1,6 +1,6 @@
 # StarCompanion known limitations
 
-**Review date:** 2026-09-13
+**Review date:** 2026-09-14
 
 - The v0.2.0 Windows artifacts are intentionally unsigned by explicit
   publication approval. Windows may display Microsoft Defender SmartScreen and
@@ -35,16 +35,20 @@
   level of nested mission-variable indirection. Deeper/cyclic or ambiguous
   indirection remains suppressed. Numeric mining signatures are separately
   sourced legacy data and remain opt-in and exact-build/key/stock bounded.
-- Cache schema 9 is intentionally incompatible with older generated caches.
+- Cache schema 10 is intentionally incompatible with older generated caches.
   Re-import the selected local channel to rebuild; personal wording, ownership,
   and settings remain in their separate stores.
 - Frozen Windows and Ubuntu artifacts are built independently because native
   PyInstaller executables are not cross-platform. Ubuntu CI verifies its own
   artifact; desktop integration is not promised for every Linux distribution.
-- The GUI is English-first. A strict offline catalog, independent locale
-  preference, and French shell preview are present, but complete feature-page
-  translations require native-language review. Installed Star Citizen
+- The GUI is English-first. Every statically visible message is in the
+  translator-review inventory and pseudo-locale gate, but complete feature-page
+  translations still require native-language review. Installed Star Citizen
   languages remain strictly isolated local data sources.
+- G7's legacy presentation rules are reviewed only for build `1.0.191.55227`.
+  A different build or changed stock value suppresses the affected rule. LIVE
+  is currently mid-update on the review host and HOTFIX is not installed, so a
+  fresh local-archive rerun remains externally gated on those archives.
 - Structured wording labels are intentionally limited to 48 trimmed plain-text
   characters. Markup, escapes, controls, and bidirectional overrides are
   rejected; use the explicitly enabled sandboxed template editor only when the

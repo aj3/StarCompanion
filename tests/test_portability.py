@@ -91,6 +91,8 @@ def test_preferences_and_language_packs_are_strictly_scoped(tmp_path):
     assert preferences.load()["default_language"] == "german_(germany)"
     assert preferences.load()["simple_mode"] is True
     assert preferences.load()["interface_locale"] == "fr-FR"
+    preferences.save({"interface_locale": "qps-ploc"})
+    assert preferences.load()["interface_locale"] == "qps-ploc"
     with pytest.raises(PortabilityError, match="non-portable"):
         preferences.save({"last_install_path": "C:/private/game"})
     with pytest.raises(PortabilityError, match="last_page"):

@@ -37,6 +37,7 @@ def test_entity_catalog_joins_only_local_names_and_keeps_typed_evidence():
     assert component.attribute("size").value == 2
     assert component.attribute("grade") is None
     assert component.attribute("class").value == "Military"
+    assert component.attribute("subtype").value == "Power Plant"
     assert all(item.provider == "local-dataforge-components" for item in component.evidence)
     capability = next(
         item for item in contracts.capabilities if item.provider == PRESENTATION_PROVIDER
@@ -76,7 +77,7 @@ def test_entity_tag_builder_is_default_off_typed_bounded_and_provenanced():
     renderer = Renderer(RenderOptions(entity_tag_builder_enabled=True))
     rendered = renderer.render_all(contracts)
     assert rendered.values[component.localization_key] == (
-        "[Component S2 Military] Test Component"
+        "[Component Power Plant S2 Military] Test Component"
     )
     assert {
         item.provider for item in rendered.provenance[component.localization_key]
@@ -153,7 +154,11 @@ def test_missile_classification_is_bounded_to_ship_weapon_record_evidence():
             "ShipWeapon.Test",
             "Data/Libs/Foundry/Records/Entities/SCItem/Weapons/Ship/Missiles/test.xml",
             "10000000-0000-0000-0000-000000000011",
-            {"displayName": "@item_name_missile", "itemSize": 3},
+            {
+                "displayName": "@item_name_missile",
+                "itemSize": 3,
+                "missile": {"trackingSignalType": "Electromagnetic"},
+            },
         )
     )
     source.__post_init__()
@@ -163,6 +168,7 @@ def test_missile_classification_is_bounded_to_ship_weapon_record_evidence():
     )
     contracts = attach_entity_presentation(ContractSet(), catalog, strings)
     missile = next(item for item in contracts.entities if item.kind == "missile")
+    assert missile.attribute("tracking-signal").value == "Electromagnetic"
 
     rendered = Renderer(
         RenderOptions(
@@ -171,4 +177,83 @@ def test_missile_classification_is_bounded_to_ship_weapon_record_evidence():
             entity_tag_placement="suffix",
         )
     ).render_all(contracts)
-    assert rendered.values[missile.localization_key] == "Test Missile [Missile S3]"
+    assert rendered.values[missile.localization_key] == "Test Missile [Missile EM S3]"
+
+
+def test_evidence_bounded_vehicle_weapon_medical_and_commodity_stats_render():
+    catalog = extract_entity_catalog(DataForgeIndex(specialized_fixture()))
+    contracts = attach_entity_presentation(ContractSet(), catalog, localization())
+    options = RenderOptions(
+        entity_tag_builder_enabled=True,
+        entity_tag_fields=(
+            "mass",
+            "cargo-capacity",
+            "crew-min",
+            "crew-max",
+            "damage",
+            "rate-of-fire",
+            "projectile-speed",
+            "range",
+            "magazine-capacity",
+            "effective-range",
+            "health-restored",
+            "overdose-threshold",
+            "toxicity",
+            "base-price",
+            "shop-buy-price",
+            "shop-sell-price",
+        ),
+        entity_tag_max_characters=160,
+    )
+    rendered = Renderer(options).render_all(contracts)
+
+    assert rendered.values["vehicle_name_test"].startswith(
+        "[Mass 25,000 kg Cargo 48 SCU Min crew 1 Max crew 3]"
+    )
+    assert rendered.values["item_name_ship_laser"].startswith(
+        "[Damage 650 Rate 120 RPM Velocity 1,400 m/s Range 3,200 m]"
+    )
+    assert rendered.values["item_name_fps_rifle"].startswith(
+        "[Damage 42 Rate 720 RPM Magazine 30 Range 110 m]"
+    )
+    assert rendered.values["item_name_medpen"].startswith(
+        "[Heal 35 Overdose 4 Toxicity 0.1]"
+    )
+    assert rendered.values["commodity_name_ore"].startswith(
+        "[Base price 12.5 Buy price 10 Sell price 14]"
+    )
+    for key in rendered.values:
+        assert rendered.provenance[key]
+
+
+def test_ambiguous_or_out_of_range_entity_stats_are_suppressed():
+    source = entity_fixture(
+        vehicle_payload={
+            "vehicleName": "@vehicle_name_test",
+            "mass": -1,
+            "cargoCapacity": 48,
+        }
+    )
+    source.entries.append(
+        (
+            "Vehicle.Other",
+            "Data/Libs/Foundry/Records/Entities/Spaceships/Test/other.xml",
+            "10000000-0000-0000-0000-000000000098",
+            {"vehicleName": "@vehicle_name_test", "cargoCapacity": 64},
+        )
+    )
+    source.__post_init__()
+    contracts = attach_entity_presentation(
+        ContractSet(), extract_entity_catalog(DataForgeIndex(source)), localization()
+    )
+    vehicle = next(item for item in contracts.entities if item.kind == "vehicle")
+
+    assert vehicle.attribute("mass") is None
+    assert vehicle.attribute("cargo-capacity") is None
+    rendered = Renderer(
+        RenderOptions(
+            entity_tag_builder_enabled=True,
+            entity_tag_fields=("mass", "cargo-capacity"),
+        )
+    ).render_all(contracts)
+    assert "vehicle_name_test" not in rendered.values

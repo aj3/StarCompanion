@@ -24,6 +24,7 @@ from pydantic import (
 from .inject import DEFAULT_BACKUP_RETENTION, MAX_BACKUP_RETENTION, MergeMode
 from .model import ContractSet
 from .render.renderer import (
+    DEFAULT_ENTITY_TAG_FIELDS,
     ENTITY_TAG_FIELDS,
     ENTITY_TAG_KINDS,
     Field as RenderField,
@@ -220,7 +221,32 @@ EntityTagKind = Literal[
     "commodity",
     "missile",
 ]
-EntityTagField = Literal["kind", "size", "grade", "class"]
+EntityTagField = Literal[
+    "kind",
+    "subtype",
+    "tracking-signal",
+    "size",
+    "grade",
+    "class",
+    "mass",
+    "cargo-capacity",
+    "crew-min",
+    "crew-max",
+    "damage",
+    "rate-of-fire",
+    "projectile-speed",
+    "range",
+    "magazine-capacity",
+    "effective-range",
+    "health-restored",
+    "max-health-repair-rate",
+    "max-auto-dose",
+    "overdose-threshold",
+    "toxicity",
+    "base-price",
+    "shop-buy-price",
+    "shop-sell-price",
+]
 
 
 class EntityTagBuilder(Strict):
@@ -228,7 +254,7 @@ class EntityTagBuilder(Strict):
 
     enabled: bool = False
     kinds: frozenset[EntityTagKind] = frozenset(ENTITY_TAG_KINDS)
-    fields: tuple[EntityTagField, ...] = ENTITY_TAG_FIELDS
+    fields: tuple[EntityTagField, ...] = DEFAULT_ENTITY_TAG_FIELDS
     placement: Literal["prefix", "suffix"] = "prefix"
     max_characters: int = Field(default=72, ge=16, le=160)
 

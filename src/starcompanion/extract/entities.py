@@ -745,7 +745,13 @@ VEHICLE_PROVIDER = ProviderSpec(
             "crew-max",
             ("maxCrew", "crewSize"),
             ScalarKind.INTEGER,
-            path_fragments=("$.maxcrew", "$.crewsize", "staticentityclassdata"),
+            path_fragments=(
+                "$.maxcrew",
+                "$.crewsize",
+                ".maxcrew",
+                ".crewsize",
+                "staticentityclassdata",
+            ),
         ),
     ),
     max_pointer_hops=4,
@@ -793,7 +799,7 @@ COMPONENT_PROVIDER = ProviderSpec(
 
 SHIP_WEAPON_PROVIDER = ProviderSpec(
     "local-dataforge-ship-weapons",
-    "2",
+    "3",
     EntityKind.SHIP_WEAPON,
     (
         "/entities/scitem/ships/weapons/",
@@ -823,6 +829,12 @@ SHIP_WEAPON_PROVIDER = ProviderSpec(
         FieldSpec("rate-of-fire", ("rateOfFire", "roundsPerMinute"), ScalarKind.FLOAT),
         FieldSpec("projectile-speed", ("projectileSpeed", "ammoSpeed"), ScalarKind.FLOAT),
         FieldSpec("range", ("range", "effectiveRange"), ScalarKind.FLOAT),
+        FieldSpec(
+            "tracking-signal",
+            ("trackingSignalType", "seekerType"),
+            ScalarKind.STRING,
+            path_fragments=("missile", "seeker"),
+        ),
     ),
 )
 
@@ -1015,7 +1027,7 @@ def baseline_entity_providers(
 def presentation_entity_providers(
     corrections: CorrectionRegistry | None = None,
 ) -> tuple[LocalEntityProvider, ...]:
-    """Use only name/tag fields; omit unrelated stats and graph relationships."""
+    """Use typed display fields but omit unrelated graph relationships."""
 
     selected = []
     for spec in (
@@ -1026,14 +1038,9 @@ def presentation_entity_providers(
         SHIP_WEAPON_PROVIDER,
         VEHICLE_PROVIDER,
     ):
-        fields = tuple(
-            field
-            for field in spec.fields
-            if field.name in {"name", "size", "grade", "class"}
-        )
         selected.append(
             LocalEntityProvider(
-                replace(spec, fields=fields, relationships=()),
+                replace(spec, relationships=()),
                 corrections=corrections,
             )
         )

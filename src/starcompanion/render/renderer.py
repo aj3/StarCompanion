@@ -57,7 +57,35 @@ ENTITY_TAG_KINDS = (
     "commodity",
     "missile",
 )
-ENTITY_TAG_FIELDS = ("kind", "size", "grade", "class")
+DEFAULT_ENTITY_TAG_FIELDS = (
+    "kind",
+    "subtype",
+    "tracking-signal",
+    "size",
+    "grade",
+    "class",
+)
+ENTITY_TAG_FIELDS = (
+    *DEFAULT_ENTITY_TAG_FIELDS,
+    "mass",
+    "cargo-capacity",
+    "crew-min",
+    "crew-max",
+    "damage",
+    "rate-of-fire",
+    "projectile-speed",
+    "range",
+    "magazine-capacity",
+    "effective-range",
+    "health-restored",
+    "max-health-repair-rate",
+    "max-auto-dose",
+    "overdose-threshold",
+    "toxicity",
+    "base-price",
+    "shop-buy-price",
+    "shop-sell-price",
+)
 _ENTITY_KIND_LABELS = {
     "vehicle": "Vehicle",
     "component": "Component",
@@ -66,6 +94,35 @@ _ENTITY_KIND_LABELS = {
     "medical": "Medical",
     "commodity": "Commodity",
     "missile": "Missile",
+}
+_ENTITY_FIELD_LABELS = {
+    "tracking-signal": "Tracking",
+    "mass": "Mass",
+    "cargo-capacity": "Cargo",
+    "crew-min": "Min crew",
+    "crew-max": "Max crew",
+    "damage": "Damage",
+    "rate-of-fire": "Rate",
+    "projectile-speed": "Velocity",
+    "range": "Range",
+    "magazine-capacity": "Magazine",
+    "effective-range": "Range",
+    "health-restored": "Heal",
+    "max-health-repair-rate": "Repair rate",
+    "max-auto-dose": "Auto dose",
+    "overdose-threshold": "Overdose",
+    "toxicity": "Toxicity",
+    "base-price": "Base price",
+    "shop-buy-price": "Buy price",
+    "shop-sell-price": "Sell price",
+}
+_ENTITY_FIELD_UNITS = {
+    "mass": "kg",
+    "cargo-capacity": "SCU",
+    "rate-of-fire": "RPM",
+    "projectile-speed": "m/s",
+    "range": "m",
+    "effective-range": "m",
 }
 _GROUP_FACTS = {
     "mission_type": ("mission-type",),
@@ -225,7 +282,7 @@ class RenderOptions:
     legacy_mining_pack_enabled: bool = False
     entity_tag_builder_enabled: bool = False
     entity_tag_kinds: frozenset[str] = frozenset(ENTITY_TAG_KINDS)
-    entity_tag_fields: tuple[str, ...] = ENTITY_TAG_FIELDS
+    entity_tag_fields: tuple[str, ...] = DEFAULT_ENTITY_TAG_FIELDS
     entity_tag_placement: str = "prefix"
     entity_tag_max_characters: int = 72
 
@@ -540,12 +597,12 @@ class RenderOptions:
                 attribute = entity.attribute(field_name)
                 if attribute is None:
                     continue
-                if field_name == "size":
-                    text = f"S{attribute.value}"
-                elif field_name == "grade":
-                    text = f"Grade {attribute.value}"
-                else:
-                    text = str(attribute.value)
+                text = self._format_entity_attribute(field_name, attribute.value)
+                if (
+                    field_name == "subtype"
+                    and text.casefold() == _ENTITY_KIND_LABELS[entity.kind].casefold()
+                ):
+                    continue
                 selected = attribute.evidence
             added = len(text) + (1 if parts else 0)
             if current + added > self.entity_tag_max_characters:
@@ -556,6 +613,30 @@ class RenderOptions:
         if not parts:
             return "", ()
         return f"[{' '.join(parts)}]", tuple(dict.fromkeys(evidence))
+
+    @staticmethod
+    def _format_entity_attribute(field_name: str, value: object) -> str:
+        if field_name == "size":
+            return f"S{value}"
+        if field_name == "grade":
+            return f"Grade {value}"
+        if field_name in {"class", "subtype"}:
+            return str(value)
+        if field_name == "tracking-signal":
+            return {
+                "CrossSection": "CS",
+                "Electromagnetic": "EM",
+                "Infrared": "IR",
+            }[str(value)]
+        if type(value) is int:
+            rendered = f"{value:,}"
+        elif type(value) is float:
+            rendered = f"{value:,.2f}".rstrip("0").rstrip(".")
+        else:
+            rendered = str(value)
+        label = _ENTITY_FIELD_LABELS[field_name]
+        unit = _ENTITY_FIELD_UNITS.get(field_name)
+        return f"{label} {rendered}{f' {unit}' if unit else ''}"
 
     def render_entity(
         self,
@@ -738,6 +819,24 @@ class Renderer:
                 errors = [
                     issue for issue in issues if issue.severity is Severity.ERROR
                 ]
+                if errors:
+                    result.skipped.append((key, str(errors[0])))
+                    continue
+                result.values[key] = value
+                result.provenance[key] = item.evidence
+                result.warnings.extend((key, issue) for issue in issues)
+
+            for item in contracts.legacy_presentations:
+                key = item.localization_key
+                value = item.replacement_text
+                if key in result.values:
+                    if result.values[key] != value:
+                        result.skipped.append(
+                            (key, "legacy presentation collides with another generated key")
+                        )
+                    continue
+                issues = validate_value(value)
+                errors = [issue for issue in issues if issue.severity is Severity.ERROR]
                 if errors:
                     result.skipped.append((key, str(errors[0])))
                     continue

@@ -434,13 +434,13 @@ class FormattingTab(QWidget):
         box.add_widget(self.mining_signature_enabled)
 
         self.legacy_mining_pack_enabled = QCheckBox(
-            "Add legacy numeric mining signatures (reviewed build only)"
+            "Add reviewed legacy presentation pack (exact build only)"
         )
         self.legacy_mining_pack_enabled.setAccessibleName(
-            "Enable reviewed legacy numeric mining signatures"
+            "Enable reviewed legacy presentation rules"
         )
         self.legacy_mining_pack_enabled.setAccessibleDescription(
-            "Default-off community data with exact build, key, stock-value, and source checks."
+            "Default-off numeric, item, commodity, and journal rules with exact build, key, stock-value, and source checks."
         )
         self.legacy_mining_pack_enabled.toggled.connect(
             self._set_legacy_mining_pack
@@ -480,9 +480,29 @@ class FormattingTab(QWidget):
 
         field_labels = {
             "kind": "Type",
+            "subtype": "Subtype",
+            "tracking-signal": "Missile tracking signal",
             "size": "Size",
             "grade": "Grade",
             "class": "Class",
+            "mass": "Mass",
+            "cargo-capacity": "Cargo capacity",
+            "crew-min": "Minimum crew",
+            "crew-max": "Maximum crew",
+            "damage": "Damage",
+            "rate-of-fire": "Rate of fire",
+            "projectile-speed": "Projectile speed",
+            "range": "Weapon range",
+            "magazine-capacity": "Magazine capacity",
+            "effective-range": "Effective range",
+            "health-restored": "Health restored",
+            "max-health-repair-rate": "Health repair rate",
+            "max-auto-dose": "Maximum automatic dose",
+            "overdose-threshold": "Overdose threshold",
+            "toxicity": "Toxicity",
+            "base-price": "Base price",
+            "shop-buy-price": "Shop buy price",
+            "shop-sell-price": "Shop sell price",
         }
         self.entity_field_boxes: dict[str, QCheckBox] = {}
         entity_fields = QWidget()
@@ -495,7 +515,7 @@ class FormattingTab(QWidget):
             )
             check.toggled.connect(self._set_entity_tag_fields)
             self.entity_field_boxes[name] = check
-            field_layout.addWidget(check, index // 2, index % 2)
+            field_layout.addWidget(check, index // 4, index % 4)
         box.add_widget(entity_fields)
 
         self.entity_tag_placement = QComboBox()

@@ -12,7 +12,7 @@
     "tag_metric": [1012, 107, 241, 120],
     "style_section": [253, 243, 1000, 286],
     "title_section": [253, 545, 1000, 339],
-    "tag_builder_section": [253, 900, 1000, 900]
+    "tag_builder_section": [253, 900, 1000, 908]
   },
   "minimum_colour_samples": {
     "#0b0f14": 500,

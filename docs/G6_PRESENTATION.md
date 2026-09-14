@@ -18,7 +18,7 @@ and an exact-build legacy numeric mining pack.
    are suppressed and degrade only their provider. Non-finite numbers, unsupported names or types, markup,
    controls, hidden formatting characters, untrimmed strings, and oversized
    strings are rejected.
-4. Cache schema 9 interns tactical, nested-route, entity-tag, and legacy-pack
+4. Cache schema 10 interns tactical, nested-route, entity-tag, and legacy-pack
    evidence with existing provider evidence.
    Loading performs the same type, bounds, enum, and evidence-reference checks.
 5. Profile schema 5 stores independent fact toggles, description-detail
@@ -68,11 +68,20 @@ two-digit `NN-` ASOP order prefixes are restricted to evidence-backed vehicle
 name rows and execute through the existing channel/language-scoped `user.ini`
 command model, including undo/redo and reviewed saving.
 
+G7 extends the same evidence path to bounded vehicle, ship/FPS weapon, medical,
+and commodity statistics. Component type comes only from reviewed record-path
+families; missile seeker type accepts only the three reviewed DataForge enums.
+
 The legacy numeric mining pack is disabled by default. Its 26 factual values
 are attributed to a pinned historical StarStrings commit, accepted only for
 build `1.0.191.55227`, and further require exact localization keys and exact
 stock English names. It never fills unresolved CIG text and fails closed on a
 new build or changed value.
+
+The final default-off legacy presentation pack applies the same checks to 17
+small exact item/commodity rewrites and two whole-hash-bound journal transforms.
+Journal output is constructed from local stock text; the game corpus is not
+stored in source control.
 
 Provider Health remains the source of truth when a build does not expose a
 field. Selecting a presentation option never manufactures a value and never

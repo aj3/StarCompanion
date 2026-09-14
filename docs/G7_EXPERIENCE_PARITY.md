@@ -1,9 +1,8 @@
 # G7 experience-parity architecture
 
-Sprint G7's first slice closes the highest-risk workflow gaps without changing
-the verified C0–G6 extraction, provider, source-graph, or operation-plan logic.
-All filesystem work remains preview-first, confirmation-gated, and off the GUI
-thread.
+Sprint G7 closes the experience-parity workflow while preserving the verified
+C0–G6 write, source-graph, and operation-plan boundaries. All filesystem work
+remains preview-first, confirmation-gated, and off the GUI thread.
 
 ## Language and stock-localization controls
 
@@ -81,14 +80,46 @@ explicit concurrency warning.
   independent from the selected game language. English is complete; the French
   shell preview proves live catalog switching while full feature-page translation
   remains a separately reviewed content task.
+- A deterministic, conservative translator-review catalog inventories 1,323
+  unique messages at 1,513 source locations, including dialogs, accessibility
+  text, helper-rendered labels and status/error text, dynamic format
+  templates, and offline help. Stable IDs, placeholders, file/line context, and
+  review status are stored in `docs/ui-translation-source.json`; CI rejects a
+  stale catalog.
+- The bundled `qps-ploc` pseudo-locale accents and expands text without changing
+  Python-format, printf, or mission-token placeholders. The shell is rendered at
+  100, 150, and 200 percent scale, and every catalog entry includes its pseudo
+  rendering for translator/layout review.
+
+## Evidence-bounded presentation closure
+
+- Entity presentation now carries all already-typed G5 vehicle, ship/FPS weapon,
+  medical, and commodity values through cache schema 10. Each selectable stat
+  has a conservative numeric bound, complete-unit tag budgeting, and per-value
+  evidence. Conflicting shared-name facts remain suppressed.
+- Component subtype is derived only from the provider's reviewed record-path
+  families. Missile seeker notation accepts only `CrossSection`,
+  `Electromagnetic`, or `Infrared` and renders `CS`, `EM`, or `IR`; any other
+  value remains invisible.
+- The legacy presentation pack remains default-off and now contains 19 rules:
+  raw-mineral wording, eight illegal-item warnings, five shortened multi-tool
+  attachments, the mining-compendium grouping, and refueling quick tips. Every
+  rule requires build `1.0.191.55227`, an exact key, and an exact stock value or
+  whole-value SHA-256. The two journal transforms reuse the local stock text, so
+  no journal corpus is embedded in the repository.
+- Independent public-source validation used pinned StarStrings commit
+  `b83d58b` for intended outcomes and pinned stock commit `38dd1cd` for before
+  values. All 19 rules matched the reviewed 4.10 source with no drift. Runtime
+  use remains local and offline.
 
 ## Verification boundary
 
 Synthetic tests cover hostile control-file encodings, external replacement,
 crash recovery after intended deletion, migration conflicts and link insertion,
 clipboard formula injection, channel/language isolation, accessibility metadata,
-close cancellation, event redaction/caps, catalog completeness, simple-mode
-navigation confinement, four-theme contrast, and 100/150/200-percent structural
-screenshots. No local
+close cancellation, event redaction/caps, translator-catalog freshness,
+placeholder-safe pseudo localization, simple-mode navigation confinement,
+four-theme contrast, and 100/150/200-percent English and pseudo-locale
+structural screenshots. No local
 game strings, logs, ownership data, absolute diagnostics paths, or signing
 material are committed.

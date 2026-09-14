@@ -55,18 +55,18 @@ does not execute or silently download either project's code or generated data.
 | Mission reputation amounts and tracks | **Complete** | C1–C3 local mission provider with field evidence. |
 | Blueprint pools, chances, ranks, regional variants, caveats, and title tags | **Complete** | C1–G3 structured mission rendering. |
 | Direct mission item rewards and scenario points | **Complete** | C1–G3 structured mission rendering. |
-| Mission type and difficulty details | **Complete** | Typed G5 facts pass through cache schema 9 to independent G6 title/description controls with rendered-only evidence. LIVE aggregate validation is green. |
+| Mission type and difficulty details | **Complete** | Typed G5 facts pass through cache schema 10 to independent G6 title/description controls with rendered-only evidence. LIVE aggregate validation is green. |
 | Friendly and hostile spawn summaries | **Complete** | Bounded graph joins, independent diagnostics, typed G6 controls, title tags, description details, and LIVE aggregate validation are complete. |
 | Ace-pilot `[ACE]` and uncertain `[ACE?]` markers | **Complete** | Direct booleans and probabilities have distinct typed markers and provenance. The current LIVE build exposes neither, so the control remains silent instead of guessing. |
 | Turret counts and engagement details | **Complete** | Typed controls and bounded presentation cover direct provider facts. The current LIVE build reports the provider unavailable because it has no reviewed fields. |
 | Hauling/delivery/courier routes and title shortening | **Complete** | Exact stock endpoint tokens, description-variant intersection, append/replace modes, typed display choices, bounded whole-unit rendering, and rendered-only provenance are synthetic- and LIVE-validated. |
 | Battaglia/asteroid resource-signature tags | **Complete** | Exact Battaglia resource tokens use local evidence; the separate 26-value numeric pack is default-off, source-attributed, exact-build/key/stock bounded, and fails closed on drift. |
-| Ship statistics and component summaries | **Partial** | Vehicle/component extraction and safe name presentation are LIVE-validated; richer schema-specific statistic rendering remains. |
-| Ship-component and ship-weapon statistics | **Partial** | Dedicated providers and fail-closed typed name/size/grade presentation are LIVE-validated; detailed statistic rendering remains. |
-| FPS-weapon statistics | **Partial** | Dedicated extraction, isolation diagnostics, and safe typed name presentation are LIVE-validated; detailed statistic rendering remains. |
-| Medical-consumable effects | **Partial** | Typed effect extraction and safe name presentation are LIVE-validated; effect presentation remains. |
+| Ship statistics and component summaries | **Complete** | Default-off, bounded vehicle mass/cargo/crew and component type/size/grade/class tags use only unambiguous evidenced G5 values. |
+| Ship-component and ship-weapon statistics | **Complete** | Typed size, damage, rate, projectile speed, range, and strict CS/EM/IR missile notation retain per-value evidence and whole-tag limits. |
+| FPS-weapon statistics | **Complete** | Damage, rate, magazine capacity, and effective range are typed, bounded, independently selectable, and provenance-bearing. |
+| Medical-consumable effects | **Complete** | The reviewed health, repair, dose, overdose, and toxicity fields are typed, bounded, independently selectable, and fail closed when absent. |
 | Commodity and crafting cross-references | **Complete** | Independent providers, real-record resource/output joins, drift diagnostics, and LIVE aggregate regressions are complete. Crafting output labels are deliberately excluded from name mutation. |
-| Journal/discovery enhancements and mining compendium | **Partial** | G5 journal facts are synthetic-tested; cross-references, mining facts, and G6 presentation remain. |
+| Journal/discovery enhancements and mining compendium | **Partial** | G7 completes exact-stock mining-compendium regrouping and refueling tips. Broader evidence-backed journal/discovery record cross-references and presentation remain. |
 | Provider capability, drift, and per-value evidence | **Complete** | Mission rewards, eight entity providers, and three tactical providers have isolated status/drift reporting, evidence-bearing values, LIVE aggregate checks, and fail-closed exact-build corrections. |
 
 ## Editor, presentation, and ownership
@@ -110,7 +110,7 @@ does not execute or silently download either project's code or generated data.
 | Active-localization indication | **Complete** | The persistent shell context and Overview warning show selected language, effective `g_language`, and stock/custom override state. |
 | Replayable coach-mark tutorial | **Complete** | A non-modal focus/navigation tour is replayable from Help and Settings; completion is portable and no tour step reads or writes data. |
 | Redacted real-time application log viewer | **Complete** | A 500-record local ring accepts fixed events, filters levels, redacts identifiers, caps details/exports, and explicitly excludes raw logs, strings, ownership, and exception text. |
-| Localized application interface | **Partial** | G7 now has strict complete offline catalogs, English fallback, an independent portable locale, and a French shell preview. Full feature-page translations require separate native-language review. |
+| Localized application interface | **Safe equivalent** | A conservative inventory covers 1,323 statically identifiable GUI-facing messages/1,513 locations with placeholder-safe pseudo rendering; native feature-page translations remain external reviewed content rather than machine-generated claims. |
 | Four visual themes | **Complete** | Dark, Light, Midnight, and High Contrast share one semantic stylesheet and all pass text/focus contrast gates. |
 | High-DPI, keyboard, focus, contrast, and screen-reader coverage | **Complete** | Structural screenshots at 100/150/200 percent and accessibility regressions. |
 | Windows installer and signed release path | **Partial** | Reproducible Windows/Linux artifacts and SignPath-ready signing workflow exist; certificate approval/signing remains an external release condition. |
@@ -128,11 +128,11 @@ localization key.
 | Reputation, direct rewards, and scenario progress in contracts | **Complete** | Existing local provider. |
 | Hauling title overhaul with origin/destination | **Complete** | G6 uses only exact stock route variables shared by contributing description variants. |
 | Asteroid resource-signature values in scan objectives | **Complete** | Stock variables are local; numeric RS values are available only through the separately attributed, default-off, exact-build/key/stock legacy pack. |
-| Shorter Hephaestanite and mining UI wording; `(Raw)` normalization | **Planned** | G6 local presentation pack. |
-| Illegal-item warning prefix | **Planned** | G6 item presentation rules. |
-| Component Type/Size/Grade and missile-type prefixes | **Partial** | G6 safely renders broad typed component/missile labels plus unambiguous Size/Grade/Class facts. Component-specific type and missile-subtype presentation still require reviewed local fields. |
-| Shorter multi-tool attachment names | **Planned** | G6 local presentation pack. |
-| Mining guide regrouping and refueling quick tips | **Planned** | G5 journal facts, G6 explicitly maintained wording. |
+| Shorter Hephaestanite and mining UI wording; `(Raw)` normalization | **Complete** | Four exact-key/stock rules are default-off, source-attributed, and build-bounded. |
+| Illegal-item warning prefix | **Complete** | Eight exact-key/stock rules add the reviewed warning only on the reviewed build. |
+| Component Type/Size/Grade and missile-type prefixes | **Complete** | Strict component path families plus typed Size/Grade/Class and allowlisted CS/EM/IR seeker facts render with local evidence. |
+| Shorter multi-tool attachment names | **Complete** | Five exact-key/stock rules reproduce the reviewed short attachment outcomes and fail closed on drift. |
+| Mining guide regrouping and refueling quick tips | **Complete** | Whole-value SHA-256 gates transform only local stock text; no journal corpus is committed. |
 
 ## Phase order and remaining work
 
@@ -149,13 +149,14 @@ localization key.
 3. **G6 — Tag Builder and legacy presentation (complete):** tactical and entity
    tags, route-aware titles, resource labels, favorites/ASOP ordering, nested
    mission-token support, and the exact-build legacy mining pack are complete.
-4. **G7 — Experience parity (active):** language selection/activation,
+4. **G7 — Experience parity (complete):** language selection/activation,
    restore-to-stock, portable/custom data roots, synchronization warnings,
    filtered clipboard export, close protection, active-localization context,
    category toggles, stat placement, dedicated simple mode, coach marks, a
-   redacted event viewer, and four themes are complete. The strict offline
-   localization architecture and French shell preview are complete; full
-   native-reviewed feature-page translation remains separately tracked.
+   redacted event viewer, four themes, complete translator inventory,
+   pseudo-locale gates, bounded entity stats, and exact legacy presentation
+   rules are complete. Full native-reviewed feature-page translations remain
+   external contributor content.
 
 G4 began only after G3's complete local and hosted gate was green. G5 must not
 start until G4's complete local gate and review are green. Later phases may

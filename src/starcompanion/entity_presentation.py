@@ -21,8 +21,74 @@ from .model import (
 )
 
 PRESENTATION_PROVIDER = "local-entity-presentation"
-PRESENTATION_VERSION = "1"
-_TAG_ATTRIBUTES = frozenset({"size", "grade", "class"})
+PRESENTATION_VERSION = "2"
+_TAG_ATTRIBUTES = (
+    "subtype",
+    "tracking-signal",
+    "size",
+    "grade",
+    "class",
+    "mass",
+    "cargo-capacity",
+    "crew-min",
+    "crew-max",
+    "damage",
+    "rate-of-fire",
+    "projectile-speed",
+    "range",
+    "magazine-capacity",
+    "effective-range",
+    "health-restored",
+    "max-health-repair-rate",
+    "max-auto-dose",
+    "overdose-threshold",
+    "toxicity",
+    "base-price",
+    "shop-buy-price",
+    "shop-sell-price",
+)
+_NUMERIC_BOUNDS = {
+    "size": (0, 100),
+    "mass": (0, 1_000_000_000_000),
+    "cargo-capacity": (0, 1_000_000_000),
+    "crew-min": (0, 10_000),
+    "crew-max": (0, 10_000),
+    "damage": (0, 1_000_000_000),
+    "rate-of-fire": (0, 1_000_000),
+    "projectile-speed": (0, 1_000_000_000),
+    "range": (0, 1_000_000_000),
+    "magazine-capacity": (0, 1_000_000),
+    "effective-range": (0, 1_000_000_000),
+    "health-restored": (0, 1_000_000_000),
+    "max-health-repair-rate": (0, 1_000_000_000),
+    "max-auto-dose": (0, 1_000_000_000),
+    "overdose-threshold": (0, 1_000_000_000),
+    "toxicity": (0, 1_000_000_000),
+    "base-price": (0, 1_000_000_000_000),
+    "shop-buy-price": (0, 1_000_000_000_000),
+    "shop-sell-price": (0, 1_000_000_000_000),
+}
+_TRACKING_SIGNALS = frozenset({"CrossSection", "Electromagnetic", "Infrared"})
+_PATH_SUBTYPES = {
+    "component": (
+        ("/armor/", "Armor"),
+        ("/cooler/", "Cooler"),
+        ("/fuel_intakes/", "Fuel Intake"),
+        ("/fueltanks/", "Fuel Tank"),
+        ("/jumpdrive/", "Jump Drive"),
+        ("/powerplant/", "Power Plant"),
+        ("/quantumdrive/", "Quantum Drive"),
+        ("/radar/", "Radar"),
+        ("/shieldgenerator/", "Shield Generator"),
+        ("/thrusters/", "Thruster"),
+    ),
+    "missile": (
+        ("/torpedo/", "Torpedo"),
+        ("/torpedoes/", "Torpedo"),
+        ("/missile/", "Missile"),
+        ("/missiles/", "Missile"),
+    ),
+}
 _LOCALIZATION_PREFIXES = {
     "vehicle": ("vehicle_name",),
     "component": ("item_name",),
@@ -67,6 +133,13 @@ def _attribute(
     if len(distinct) != 1:
         return None
     value = values[0].value
+    if name == "tracking-signal" and value not in _TRACKING_SIGNALS:
+        return None
+    bounds = _NUMERIC_BOUNDS.get(name)
+    if bounds is not None and (
+        type(value) not in {int, float} or not bounds[0] <= value <= bounds[1]
+    ):
+        return None
     try:
         return EntityAttribute(
             name,
@@ -81,6 +154,40 @@ def _attribute(
         )
     except ValueError:
         return None
+
+
+def _path_subtype(
+    provider: str,
+    kind: str,
+    grouped: tuple[EntityFact, ...],
+) -> EntityAttribute | None:
+    aliases = _PATH_SUBTYPES.get(kind, ())
+    if not aliases:
+        return None
+    labels: list[str] = []
+    for fact in grouped:
+        matches = {
+            label for fragment, label in aliases if fragment in fact.record_path.casefold()
+        }
+        if len(matches) != 1:
+            return None
+        labels.append(next(iter(matches)))
+    if len(set(labels)) != 1:
+        return None
+    return EntityAttribute(
+        "subtype",
+        labels[0],
+        tuple(
+            Evidence(
+                provider,
+                fact.entity_id,
+                fact.record_path,
+                "$record.file_name",
+                fact.record_path,
+            )
+            for fact in grouped
+        ),
+    )
 
 
 def _provider_status(status: CapabilityStatus) -> ProviderStatus:
@@ -188,14 +295,17 @@ def attach_entity_presentation(
                 if fact.get("name") is not None
             )
         )
+        evidence_provider = (
+            next(iter(providers)) if len(providers) == 1 else PRESENTATION_PROVIDER
+        )
         attributes = tuple(
             attribute
-            for name in sorted(_TAG_ATTRIBUTES)
+            for name in _TAG_ATTRIBUTES
             if (
-                attribute := _attribute(
-                    next(iter(providers)) if len(providers) == 1 else PRESENTATION_PROVIDER,
-                    name,
-                    facts,
+                attribute := (
+                    _path_subtype(evidence_provider, kind, facts)
+                    if name == "subtype"
+                    else _attribute(evidence_provider, name, facts)
                 )
             )
             is not None

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import hashlib
 import math
 import re
 import unicodedata
@@ -246,6 +247,51 @@ class LegacyMiningSignature:
             not isinstance(item, Evidence) for item in self.evidence
         ):
             raise ValueError("legacy mining signatures require source evidence")
+
+
+@dataclass(frozen=True)
+class LegacyPresentationRule:
+    """One exact-build/key/stock wording result with source evidence."""
+
+    rule_id: str
+    supported_build: str
+    localization_key: str
+    base_text: str
+    base_text_sha256: str
+    replacement_text: str
+    evidence: tuple[Evidence, ...]
+
+    def __post_init__(self) -> None:
+        if not _SAFE_ATTRIBUTE.fullmatch(self.rule_id):
+            raise ValueError("invalid legacy presentation rule identity")
+        if (
+            not self.supported_build
+            or len(self.supported_build) > 128
+            or any(character in self.supported_build for character in "\r\n\0")
+        ):
+            raise ValueError("invalid legacy presentation build")
+        if not _SAFE_LOCALIZATION_KEY.fullmatch(self.localization_key):
+            raise ValueError("invalid legacy presentation localization key")
+        if (
+            not self.base_text
+            or len(self.base_text) > 32_768
+            or any(character in self.base_text for character in "\r\n\0")
+        ):
+            raise ValueError("invalid legacy presentation stock value")
+        if not re.fullmatch(r"[0-9a-f]{64}", self.base_text_sha256):
+            raise ValueError("legacy presentation rules require a SHA-256 stock binding")
+        if hashlib.sha256(self.base_text.encode("utf-8")).hexdigest() != self.base_text_sha256:
+            raise ValueError("legacy presentation stock value does not match its SHA-256")
+        if (
+            not self.replacement_text
+            or len(self.replacement_text) > 32_768
+            or any(character in self.replacement_text for character in "\r\n\0")
+        ):
+            raise ValueError("invalid legacy presentation replacement")
+        if not self.evidence or any(
+            not isinstance(item, Evidence) for item in self.evidence
+        ):
+            raise ValueError("legacy presentation rules require source evidence")
 
 
 @dataclass(frozen=True)
@@ -612,6 +658,8 @@ class ContractSet:
     """Strict local entity/name joins retained for opt-in typed presentation."""
     legacy_signatures: list[LegacyMiningSignature] = field(default_factory=list)
     """Exact-build community mining facts retained for explicit opt-in use."""
+    legacy_presentations: list[LegacyPresentationRule] = field(default_factory=list)
+    """Exact-build/key/stock legacy wording retained for explicit opt-in use."""
 
     def by_org(self, org_id: str) -> list[Contract]:
         return [c for c in self.contracts if c.org.id == org_id.casefold()]

@@ -185,6 +185,13 @@ def build_string_snapshot(
         organizations[key] = "Community legacy pack"
         families[key] = item.supported_build
         entity_evidence[key] = item.evidence
+    for item in contracts.legacy_presentations:
+        key = item.localization_key
+        stock[key] = item.base_text
+        categories[key] = "legacy-presentation"
+        organizations[key] = "Community legacy pack"
+        families[key] = item.supported_build
+        entity_evidence[key] = item.evidence
 
     generated_provenance = {
         key: tuple(_evidence_text(item) for item in rendered.provenance.get(key, ()))

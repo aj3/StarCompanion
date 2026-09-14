@@ -25,6 +25,7 @@ from .model import (
     Gate,
     GateKind,
     LegacyMiningSignature,
+    LegacyPresentationRule,
     MissionDetail,
     LocalizedEntity,
     Org,
@@ -37,7 +38,7 @@ from .model import (
     UnresolvedLocalization,
 )
 
-CACHE_VERSION = 9
+CACHE_VERSION = 10
 
 
 class UnsupportedCacheVersion(ValueError):
@@ -188,6 +189,21 @@ def _legacy_signature_to_dict(
     }
 
 
+def _legacy_presentation_to_dict(
+    item: LegacyPresentationRule,
+    evidence_ids: dict[Evidence, int],
+) -> dict[str, Any]:
+    return {
+        "rule_id": item.rule_id,
+        "supported_build": item.supported_build,
+        "localization_key": item.localization_key,
+        "base_text": item.base_text,
+        "base_text_sha256": item.base_text_sha256,
+        "replacement_text": item.replacement_text,
+        "evidence_ids": [evidence_ids[evidence] for evidence in item.evidence],
+    }
+
+
 def _evidence_to_dict(item: Evidence) -> dict[str, Any]:
     return {
         "provider": item.provider,
@@ -305,6 +321,11 @@ def _evidence_table(
             if item not in ids:
                 ids[item] = len(table)
                 table.append(item)
+    for rule in contracts.legacy_presentations:
+        for item in rule.evidence:
+            if item not in ids:
+                ids[item] = len(table)
+                table.append(item)
     return table, ids
 
 
@@ -353,6 +374,15 @@ def dump(contracts: ContractSet, stream, *, source: str = "unknown") -> None:
             stream,
             ensure_ascii=False,
         )
+    stream.write("\n ],\n \"legacy_presentations\": [")
+    for index, item in enumerate(contracts.legacy_presentations):
+        stream.write("," if index else "")
+        stream.write("\n  ")
+        json.dump(
+            _legacy_presentation_to_dict(item, evidence_ids),
+            stream,
+            ensure_ascii=False,
+        )
     stream.write("\n ],\n \"capabilities\": [")
     for index, item in enumerate(contracts.capabilities):
         stream.write("," if index else "")
@@ -395,6 +425,10 @@ def loads(text: str) -> ContractSet:
         _legacy_signature_from_dict(raw, evidence)
         for raw in data.get("legacy_signatures", ())
     ]
+    legacy_presentations = [
+        _legacy_presentation_from_dict(raw, evidence)
+        for raw in data.get("legacy_presentations", ())
+    ]
 
     return ContractSet(
         contracts=contracts,
@@ -405,6 +439,7 @@ def loads(text: str) -> ContractSet:
         ],
         entities=entities,
         legacy_signatures=legacy_signatures,
+        legacy_presentations=legacy_presentations,
     )
 
 
@@ -463,6 +498,14 @@ def dump_lines(
                 "data": _legacy_signature_to_dict(item, evidence_ids),
             },
         )
+    for item in contracts.legacy_presentations:
+        _write_line(
+            stream,
+            {
+                "type": "legacy-presentation",
+                "data": _legacy_presentation_to_dict(item, evidence_ids),
+            },
+        )
     for item in contracts.capabilities:
         _write_line(stream, {"type": "capability", "data": _capability_to_dict(item)})
     for key, reason in contracts.unparsed:
@@ -478,6 +521,7 @@ def load_lines(stream) -> ContractSet:
     capabilities: list[ProviderCapability] = []
     entities: list[LocalizedEntity] = []
     legacy_signatures: list[LegacyMiningSignature] = []
+    legacy_presentations: list[LegacyPresentationRule] = []
     evidence: list[Evidence] = []
     for number, line in enumerate(stream, 1):
         if not line.strip():
@@ -507,6 +551,10 @@ def load_lines(stream) -> ContractSet:
             legacy_signatures.append(
                 _legacy_signature_from_dict(data["data"], evidence)
             )
+        elif kind == "legacy-presentation":
+            legacy_presentations.append(
+                _legacy_presentation_from_dict(data["data"], evidence)
+            )
         elif kind == "capability":
             capabilities.append(_capability_from_dict(data["data"]))
         elif kind == "unparsed":
@@ -522,6 +570,7 @@ def load_lines(stream) -> ContractSet:
         capabilities=capabilities,
         entities=entities,
         legacy_signatures=legacy_signatures,
+        legacy_presentations=legacy_presentations,
     )
 
 
@@ -675,6 +724,29 @@ def _legacy_signature_from_dict(
         ) from exc
 
 
+def _legacy_presentation_from_dict(
+    raw: dict[str, Any],
+    evidence_table: list[Evidence],
+) -> LegacyPresentationRule:
+    try:
+        indices = [int(index) for index in raw.get("evidence_ids", ())]
+        if any(index < 0 or index >= len(evidence_table) for index in indices):
+            raise IndexError("legacy presentation evidence index is outside the cache table")
+        return LegacyPresentationRule(
+            rule_id=str(raw["rule_id"]),
+            supported_build=str(raw["supported_build"]),
+            localization_key=str(raw["localization_key"]),
+            base_text=str(raw["base_text"]),
+            base_text_sha256=str(raw["base_text_sha256"]),
+            replacement_text=str(raw["replacement_text"]),
+            evidence=tuple(evidence_table[index] for index in indices),
+        )
+    except (IndexError, KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            f"legacy presentation rule {raw.get('rule_id')!r} has invalid cached data"
+        ) from exc
+
+
 def _write_line(stream, data: dict[str, Any]) -> None:
     json.dump(data, stream, ensure_ascii=False, separators=(",", ":"))
     stream.write("\n")
@@ -691,6 +763,7 @@ def describe(path: Path) -> dict[str, Any]:
         "providers": len(data.get("capabilities", ())),
         "entities": len(data.get("entities", ())),
         "legacy_signatures": len(data.get("legacy_signatures", ())),
+        "legacy_presentations": len(data.get("legacy_presentations", ())),
         "enhanced_contracts": sum(
             1
             for item in data.get("contracts", ())

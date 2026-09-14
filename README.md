@@ -393,10 +393,11 @@ explicit opt-ins nobody meets by accident.
 ## Current limitations
 
 - The application interface is English-first. Its strict offline catalog and
-  French shell preview are independent from installed game languages; full
-  native-reviewed feature-page translation remains.
-- Richer entity stat blocks and remaining legacy presentation rules remain
-  tracked in the parity ledger.
+  French shell preview are independent from installed game languages. Every
+  visible source message now has translator-review and pseudo-locale coverage;
+  full native-reviewed feature-page translations remain a contributor task.
+- Real HOTFIX archive validation remains blocked until HOTFIX is installed, and
+  the current LIVE archive must finish updating before the next local rerun.
 
 The reviewed Smart Citizen v2.3.1 and current legacy StarStrings outcomes,
 including every known remaining gap and its assigned phase, are tracked in
@@ -457,9 +458,9 @@ discarded without changing `user.ini`.
 The String editor also recognizes locally evidenced vehicle-name rows. Favorite
 and ASOP order actions create one undoable user-layer command, using `*` and an
 unambiguous two-digit `NN-` prefix so numeric ship names such as `300i` are not
-misread. Presentation settings separately expose default-off typed entity tags
-and the exact-build legacy mining-signature pack; rendered provenance identifies
-the local DataForge fields or pinned community source used for each value.
+misread. Presentation settings separately expose default-off typed entity/stat
+tags and the exact-build legacy presentation pack; rendered provenance identifies
+the local DataForge fields or pinned community/stock source used for each value.
 Entity tags accept only reviewed localization-key families for their typed
 domain; generic UI labels, cross-domain names, and crafting outputs fail closed.
 

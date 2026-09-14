@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import MappingProxyType
+import re
 from typing import Mapping
 
 DEFAULT_UI_LOCALE = "en-US"
@@ -77,14 +78,61 @@ _FRENCH = {
     "nav.support": "Paramètres et aide",
 }
 
+_PSEUDO_MAP = str.maketrans(
+    {
+        "A": "Å", "B": "Ɓ", "C": "Ç", "D": "Ð", "E": "É", "F": "Ƒ",
+        "G": "Ĝ", "H": "Ĥ", "I": "Î", "J": "Ĵ", "K": "Ķ", "L": "Ŀ",
+        "M": "Ṁ", "N": "Ñ", "O": "Ö", "P": "Þ", "Q": "Ǫ", "R": "Ŕ",
+        "S": "Š", "T": "Ţ", "U": "Û", "V": "Ṽ", "W": "Ŵ", "X": "Ẋ",
+        "Y": "Ý", "Z": "Ž", "a": "å", "b": "ƀ", "c": "ç", "d": "ð",
+        "e": "é", "f": "ƒ", "g": "ĝ", "h": "ĥ", "i": "î", "j": "ĵ",
+        "k": "ķ", "l": "ŀ", "m": "ṁ", "n": "ñ", "o": "ö", "p": "þ",
+        "q": "ǫ", "r": "ŕ", "s": "š", "t": "ţ", "u": "û", "v": "ṽ",
+        "w": "ŵ", "x": "ẋ", "y": "ý", "z": "ž",
+    }
+)
+_PLACEHOLDER = re.compile(
+    r"(\{[^{}]+\}|%\([^)]+\)[#0\- +]?\d*(?:\.\d+)?[a-zA-Z]"
+    r"|%\d+\$[#0\- +]?\d*(?:\.\d+)?[a-zA-Z]"
+    r"|%[#0\- +]?\d*(?:\.\d+)?[a-zA-Z]|%L?\d+|%%"
+    r"|~mission\([^)]*\))"
+)
+
+
+def pseudo_localize(value: str) -> str:
+    """Accent and expand text while preserving runtime placeholders."""
+
+    rendered = []
+    parts = _PLACEHOLDER.split(value)
+    for index, part in enumerate(parts):
+        if not part:
+            continue
+        if _PLACEHOLDER.fullmatch(part):
+            rendered.append(part)
+            continue
+        accented = part.translate(_PSEUDO_MAP)
+        accented = re.sub(r"(?<=\w)(?=\s)", "··", accented)
+        if index == len(parts) - 1 and re.search(r"\w$", accented):
+            accented += "··"
+        rendered.append(accented)
+    return "⟦" + "".join(rendered) + "⟧"
+
+
+_PSEUDO = {key: pseudo_localize(value) for key, value in _ENGLISH.items()}
+
 CATALOGS: Mapping[str, Mapping[str, str]] = MappingProxyType(
     {
         "en-US": MappingProxyType(_ENGLISH),
         "fr-FR": MappingProxyType(_FRENCH),
+        "qps-ploc": MappingProxyType(_PSEUDO),
     }
 )
 LOCALE_LABELS: Mapping[str, str] = MappingProxyType(
-    {"en-US": "English", "fr-FR": "Français (shell preview)"}
+    {
+        "en-US": "English",
+        "fr-FR": "Français (shell preview)",
+        "qps-ploc": "Pseudo (translator review)",
+    }
 )
 
 
@@ -124,5 +172,6 @@ __all__ = [
     "LOCALE_LABELS",
     "UiTranslator",
     "normalize_ui_locale",
+    "pseudo_localize",
     "validate_catalog",
 ]

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .inject import DEFAULT_BACKUP_RETENTION, InjectionPlan, MergeMode, apply
 from .ini import LocalizationFile
-from .legacy_pack import attach_legacy_mining_pack
+from .legacy_pack import attach_legacy_mining_pack, attach_legacy_presentation_pack
 from .install import DEFAULT_LANGUAGE, GameInstall, normalize_language
 from .model import ContractSet
 from .fallbacks import FallbackDocument
@@ -330,6 +330,11 @@ def _read_contracts_local(
         else:
             contracts.capabilities.extend(entity_capabilities)
         attach_legacy_mining_pack(
+            contracts,
+            strings,
+            data_build,
+        )
+        attach_legacy_presentation_pack(
             contracts,
             strings,
             data_build,

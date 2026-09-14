@@ -912,7 +912,7 @@ and Windows/Ubuntu CI gates passed together on the G3 implementation commit.
   facts remain explicitly unavailable rather than inferred. No HOTFIX archive
   was installed; that real-channel check remains gated on a local installation.
 - **G6 complete (2026-09-13):** tactical mission facts now cross the isolated
-  archive helper, shared bounded graph, typed domain, cache schema 9, profile
+  archive helper, shared bounded graph, typed domain, cache schema 10, profile
   schema 5, and reusable GUI controls. Description details and title tags are
   independently enabled, default off for migrated profiles, bounded, and
   provenance-bearing only when rendered. Conflicting cross-record values are
@@ -944,12 +944,15 @@ and Windows/Ubuntu CI gates passed together on the G3 implementation commit.
   an active-localization indicator, category toggles, and above/below stat-block
   placement. `USER.cfg` changes preserve unrelated settings and encoding and
   use preview, backup, confirmation, atomic replacement, and recovery.
-- **G7 first slice complete (2026-09-13):** the requested language, control-file,
-  data-root, clipboard, close-protection, category, and stat-placement workflows
-  are implemented in the GUI with CLI parity for activation/stock restore.
-  Synthetic security and high-DPI regressions cover the new boundaries; the
-  remaining G7 items are interface localization, optional onboarding polish,
-  a redacted event viewer, and additional accessible themes.
+- **G7 complete (2026-09-14):** language/control-file, portable data-root,
+  clipboard, close-protection, category/stat-placement, Simple mode, coach,
+  redacted events, and four-theme workflows are implemented. The final gate
+  catalogs 1,323 GUI-facing messages at 1,513 locations, adds placeholder-safe
+  pseudo-localization and 100/150/200-percent screenshots, carries bounded
+  evidenced entity stats and missile seeker notation, and adds 19 exact-build,
+  key/stock-bound legacy rules. Full native feature-page translations, a fresh
+  post-update LIVE rerun, and a first installed-HOTFIX run remain external
+  content/environment gates rather than silently inferred completion.
 
 ## Recommended improvements beyond parity
 

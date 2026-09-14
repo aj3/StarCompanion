@@ -1,7 +1,7 @@
 # StarCompanion core threat model
 
-**Version:** 5 (G7 language and portable-data controls)
-**Review date:** 2026-09-13
+**Version:** 6 (G7 translation and evidence-bound presentation closure)
+**Review date:** 2026-09-14
 
 ## Security objectives
 
@@ -35,8 +35,9 @@ strings, usernames, and absolute paths must not enter diagnostics or releases.
 | GUI administration | User-selected paths and long-running local work cross the event loop/worker boundary | Background jobs own discovery, archive reading, ownership scanning, settings portability, and diagnostics I/O; model snapshots cross back to Qt; shutdown requests cancellation and waits boundedly |
 | Advanced string editor | Large local string graphs and bulk edits could freeze, accidentally broaden a write, or lose personal text during replacement | Virtualized projection, debounced in-memory validation, model-level undo/redo, explicit multi-select reset, the unchanged serialized C3 operation plan as the only apply boundary, and separate capped collision-resistant `user.ini` snapshots before changed saves |
 | Clipboard and window close | Filtered exports could leak hidden evidence or trigger spreadsheet formulas; closing could lose a pending debounced edit | Visible-row-only capped TSV, delimiter removal, formula neutralization, excluded provenance, save/discard/cancel prompt, debounce flush before background save, and open-window retention after save failure |
-| Event viewer and interface catalogs | Diagnostic UI could retain private paths/values; translated text could be incomplete, oversized, hostile, or silently fetched | Fixed-level/key 500-record memory ring, pre-storage identifier redaction, per-detail/export caps, explicit raw-log/string/value exclusions, atomic reviewed export, complete bounded bundled catalogs, English fallback, no catalog discovery/network, and game-language independence |
+| Event viewer and interface catalogs | Diagnostic UI could retain private paths/values; translated text could be incomplete, oversized, hostile, or silently fetched | Fixed-level/key 500-record memory ring, pre-storage identifier redaction, per-detail/export caps, explicit raw-log/string/value exclusions, atomic reviewed export, deterministic conservative source inventory, placeholder-safe pseudo rendering, complete bounded bundled catalogs, English fallback, no catalog discovery/network, and game-language independence |
 | Tactical and route presentation | Local fields or stock mission variables may be malformed, ambiguous, unlocalized, oversized, or unsupported by one build | Fixed fact and route-family vocabularies, per-fact type/range checks, exact mission-token parsing, description-variant intersection, existing-route suppression, required source evidence, contradictory-value suppression, control/markup bounds, independent provider status, profile-default off migration, complete-tag length budget, and provenance only for rendered facts or variables |
+| Legacy presentation pack | Historical public wording may be stale, ambiguous, changed upstream, or inappropriate for another build | Default-off activation, pinned review commits recorded as evidence only, no runtime network access, exact build/key/stock-value or whole-value SHA-256 gates, local-stock journal transforms, collision/validation suppression, and cache-schema invalidation |
 | Backup browser | A listed file can be replaced or redirected before restore | Target-scoped ordinary-file filtering, preview fingerprints, pre-write revalidation, preservation of the current target, journaled atomic replacement, and final digest verification |
 | Dependencies/release | Third-party code or signing credentials may be compromised | Exact pins and hashes, offline wheelhouse build, vulnerability audit, CycloneDX SBOM, license/notice verification, frozen offline smoke, protected manual signing environment, thumbprint pin, timestamp and signature verification |
 

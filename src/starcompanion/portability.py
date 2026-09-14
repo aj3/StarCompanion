@@ -156,7 +156,11 @@ def validate_preferences(value: object) -> dict[str, object]:
             raise PortabilityError(f"{key} must be true or false")
     if "interface_locale" in result:
         locale = result["interface_locale"]
-        if not isinstance(locale, str) or locale not in {"en-US", "fr-FR"}:
+        if not isinstance(locale, str) or locale not in {
+            "en-US",
+            "fr-FR",
+            "qps-ploc",
+        }:
             raise PortabilityError("interface_locale is not a bundled locale")
     return result
 

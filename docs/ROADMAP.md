@@ -45,7 +45,7 @@ overlap suppression; and exact-build corrections that fail closed while
 preserving the original value. Synthetic mission classification, spawn/ace,
 and engagement/turret providers now add bounded reference joins and suppress
 shared-description matching. G6's first completed slice carries the tactical
-facts through cache schema 9 into independent GUI controls, description
+facts through cache schema 10 into independent GUI controls, description
 details, bounded typed title tags, and rendered-only provenance. Its second
 slice adds exact-token hauling routes, title shortening, and Battaglia resource
 labels. The current slice adds nested token intersection, typed entity/item
@@ -58,7 +58,9 @@ plans, portable/custom data roots, bounded filtered clipboard export,
 unsaved-close protection, category controls, and stat-block placement. Its
 second slice adds dedicated Simple mode, a bounded redacted event viewer,
 replayable coach marks, four accessible themes, and a strict offline interface
-catalog with a French shell preview; see
+catalog with a French shell preview. Its final slice catalogs 1,323 GUI-facing
+messages, adds placeholder-safe pseudo-locale DPI gates, presents bounded
+entity statistics, and completes 19 exact legacy wording rules; see
 [G7_EXPERIENCE_PARITY.md](G7_EXPERIENCE_PARITY.md). **Sprint G4 — Ownership and Editor Completion**
 is complete: revision-bound manual ownership, complete
 tracker operations, exact foreign-name repair, ownership-aware rendering,
@@ -68,8 +70,8 @@ persistence, and visible freshest-install evidence.
 
 The project is not yet at complete Smart Citizen plus legacy StarStrings
 feature parity. [FEATURE_PARITY.md](FEATURE_PARITY.md) is the current baseline
-and defines the remaining G7 work without weakening the verified C0–G6
-safety boundaries.
+and defines the remaining post-G7 product and external-validation work without
+weakening the verified C0–G7 safety boundaries.
 
 ---
 
