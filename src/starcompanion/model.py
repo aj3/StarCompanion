@@ -12,6 +12,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import hashlib
+import math
+import re
+import unicodedata
 
 
 class Difficulty(Enum):
@@ -76,6 +80,15 @@ class ProviderStatus(Enum):
     DISABLED = "disabled"
 
 
+class FactConfidence(Enum):
+    """Presentation confidence copied from one reviewed local provider fact."""
+
+    NONE = "none"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 @dataclass(frozen=True)
 class UnresolvedLocalization:
     """One provider fact that could not join because localization is absent."""
@@ -94,6 +107,300 @@ class Evidence:
     record_path: str
     field_path: str
     value: str | int | float | bool | None = None
+
+
+ENTITY_DISPLAY_KINDS = frozenset(
+    {
+        "vehicle",
+        "component",
+        "ship-weapon",
+        "fps-weapon",
+        "medical",
+        "commodity",
+        "crafting",
+        "missile",
+    }
+)
+_SAFE_ATTRIBUTE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
+_SAFE_LOCALIZATION_KEY = re.compile(r"^[^\s=\x00-\x1f\x7f]{1,512}$")
+_SAFE_MISSION_VARIABLE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,127}$")
+_SAFE_MISSION_TOKEN = re.compile(
+    r"^~mission\([A-Za-z][A-Za-z0-9_]*(?:\|[^)\r\n\x00]{1,128})?\)$"
+)
+
+
+def _safe_evidenced_scalar(value: object) -> bool:
+    if type(value) is bool:
+        return True
+    if type(value) is int:
+        return -1_000_000_000_000 <= value <= 1_000_000_000_000
+    if type(value) is float:
+        return math.isfinite(value) and abs(value) <= 1_000_000_000_000
+    if isinstance(value, str):
+        return (
+            bool(value)
+            and value == value.strip()
+            and len(value) <= 256
+            and not any(character in value for character in "<>\r\n\0")
+            and not any(
+                unicodedata.category(character) in {"Cc", "Cf", "Cs", "Zl", "Zp"}
+                for character in value
+            )
+        )
+    return False
+
+
+@dataclass(frozen=True)
+class EntityAttribute:
+    """One typed entity value retained specifically for local presentation."""
+
+    name: str
+    value: str | int | float | bool
+    evidence: tuple[Evidence, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not _SAFE_ATTRIBUTE.fullmatch(self.name):
+            raise ValueError("invalid entity attribute name")
+        if not _safe_evidenced_scalar(self.value):
+            raise ValueError("entity attribute value is unsafe or outside bounds")
+        if not self.evidence or any(
+            not isinstance(item, Evidence) for item in self.evidence
+        ):
+            raise ValueError("entity attributes require evidence")
+
+
+@dataclass(frozen=True)
+class LocalizedEntity:
+    """A strict local entity-to-display-name join used by the Tag Builder."""
+
+    entity_id: str
+    kind: str
+    localization_key: str
+    base_text: str
+    attributes: tuple[EntityAttribute, ...]
+    evidence: tuple[Evidence, ...]
+
+    def __post_init__(self) -> None:
+        if not self.entity_id or len(self.entity_id) > 512:
+            raise ValueError("invalid localized entity identity")
+        if any(unicodedata.category(character) in {"Cc", "Cf", "Cs"} for character in self.entity_id):
+            raise ValueError("invalid localized entity identity")
+        if self.kind not in ENTITY_DISPLAY_KINDS:
+            raise ValueError("unsupported localized entity kind")
+        if not _SAFE_LOCALIZATION_KEY.fullmatch(self.localization_key):
+            raise ValueError("invalid entity localization key")
+        if (
+            not isinstance(self.base_text, str)
+            or not self.base_text
+            or len(self.base_text) > 32_768
+            or any(character in self.base_text for character in "\r\n\0")
+        ):
+            raise ValueError("invalid entity localization value")
+        if not self.evidence or any(
+            not isinstance(item, Evidence) for item in self.evidence
+        ):
+            raise ValueError("localized entities require join evidence")
+        names = [item.name for item in self.attributes]
+        if len(names) != len(set(names)):
+            raise ValueError("localized entity attributes must be unique")
+
+    def attribute(self, name: str) -> EntityAttribute | None:
+        wanted = name.casefold()
+        return next(
+            (item for item in self.attributes if item.name.casefold() == wanted),
+            None,
+        )
+
+
+@dataclass(frozen=True)
+class LegacyMiningSignature:
+    """One exact-key community signature accepted for one reviewed build."""
+
+    rule_id: str
+    supported_build: str
+    localization_key: str
+    base_text: str
+    signature: int
+    evidence: tuple[Evidence, ...]
+
+    def __post_init__(self) -> None:
+        if not _SAFE_ATTRIBUTE.fullmatch(self.rule_id):
+            raise ValueError("invalid legacy rule identity")
+        if (
+            not self.supported_build
+            or len(self.supported_build) > 128
+            or any(character in self.supported_build for character in "\r\n\0")
+        ):
+            raise ValueError("invalid legacy rule build")
+        if not _SAFE_LOCALIZATION_KEY.fullmatch(self.localization_key):
+            raise ValueError("invalid legacy localization key")
+        if (
+            not self.base_text
+            or len(self.base_text) > 256
+            or self.base_text != self.base_text.strip()
+            or any(character in self.base_text for character in "<>\r\n\0")
+        ):
+            raise ValueError("invalid legacy base text")
+        if type(self.signature) is not int or not 1 <= self.signature <= 999_999:
+            raise ValueError("legacy mining signature is outside its reviewed range")
+        if not self.evidence or any(
+            not isinstance(item, Evidence) for item in self.evidence
+        ):
+            raise ValueError("legacy mining signatures require source evidence")
+
+
+@dataclass(frozen=True)
+class LegacyPresentationRule:
+    """One exact-build/key/stock wording result with source evidence."""
+
+    rule_id: str
+    supported_build: str
+    localization_key: str
+    base_text: str
+    base_text_sha256: str
+    replacement_text: str
+    evidence: tuple[Evidence, ...]
+
+    def __post_init__(self) -> None:
+        if not _SAFE_ATTRIBUTE.fullmatch(self.rule_id):
+            raise ValueError("invalid legacy presentation rule identity")
+        if (
+            not self.supported_build
+            or len(self.supported_build) > 128
+            or any(character in self.supported_build for character in "\r\n\0")
+        ):
+            raise ValueError("invalid legacy presentation build")
+        if not _SAFE_LOCALIZATION_KEY.fullmatch(self.localization_key):
+            raise ValueError("invalid legacy presentation localization key")
+        if (
+            not self.base_text
+            or len(self.base_text) > 32_768
+            or any(character in self.base_text for character in "\r\n\0")
+        ):
+            raise ValueError("invalid legacy presentation stock value")
+        if not re.fullmatch(r"[0-9a-f]{64}", self.base_text_sha256):
+            raise ValueError("legacy presentation rules require a SHA-256 stock binding")
+        if hashlib.sha256(self.base_text.encode("utf-8")).hexdigest() != self.base_text_sha256:
+            raise ValueError("legacy presentation stock value does not match its SHA-256")
+        if (
+            not self.replacement_text
+            or len(self.replacement_text) > 32_768
+            or any(character in self.replacement_text for character in "\r\n\0")
+        ):
+            raise ValueError("invalid legacy presentation replacement")
+        if not self.evidence or any(
+            not isinstance(item, Evidence) for item in self.evidence
+        ):
+            raise ValueError("legacy presentation rules require source evidence")
+
+
+@dataclass(frozen=True)
+class RouteExpansion:
+    """One bounded, one-level stock localization expansion for a mission token."""
+
+    variable: str
+    tokens: tuple[str, ...]
+    evidence: tuple[Evidence, ...]
+
+    def __post_init__(self) -> None:
+        if not _SAFE_MISSION_VARIABLE.fullmatch(self.variable):
+            raise ValueError("invalid nested mission variable")
+        if (
+            not self.tokens
+            or len(self.tokens) > 64
+            or len(self.tokens) != len(set(self.tokens))
+            or any(not _SAFE_MISSION_TOKEN.fullmatch(item) for item in self.tokens)
+        ):
+            raise ValueError("invalid nested mission-token expansion")
+        if (
+            not self.evidence
+            or len(self.evidence) > 4_096
+            or any(not isinstance(item, Evidence) for item in self.evidence)
+        ):
+            raise ValueError("nested mission-token expansion requires bounded evidence")
+
+
+MISSION_DETAIL_NAMES = frozenset(
+    {
+        "mission-type",
+        "difficulty",
+        "difficulty-risk",
+        "difficulty-knowledge",
+        "difficulty-mental-load",
+        "difficulty-mechanical-skill",
+        "friendly-spawns",
+        "hostile-spawns",
+        "ace-pilot",
+        "ace-probability",
+        "turret-count",
+        "engagement-distance",
+        "engagement-type",
+    }
+)
+_TEXT_MISSION_DETAILS = MISSION_DETAIL_NAMES - {
+    "friendly-spawns",
+    "hostile-spawns",
+    "ace-pilot",
+    "ace-probability",
+    "turret-count",
+    "engagement-distance",
+}
+_COUNT_MISSION_DETAILS = frozenset(
+    {"friendly-spawns", "hostile-spawns", "turret-count"}
+)
+
+
+@dataclass(frozen=True)
+class MissionDetail:
+    """One safe, typed mission fact with its complete local evidence."""
+
+    name: str
+    value: str | int | float | bool
+    confidence: FactConfidence
+    evidence: tuple[Evidence, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or self.name not in MISSION_DETAIL_NAMES:
+            raise ValueError(f"unsupported mission detail {self.name!r}")
+        if not isinstance(self.confidence, FactConfidence):
+            raise ValueError("mission detail confidence must be typed")
+        if not self.evidence or any(
+            not isinstance(item, Evidence) for item in self.evidence
+        ):
+            raise ValueError("mission details require provenance evidence")
+        if self.name in _TEXT_MISSION_DETAILS:
+            if not isinstance(self.value, str):
+                raise ValueError("text mission details require text values")
+            if (
+                not self.value.strip()
+                or self.value != self.value.strip()
+                or len(self.value) > 256
+                or any(character in self.value for character in "<>\r\n\0")
+                or any(
+                    unicodedata.category(character) in {"Cc", "Cf", "Cs", "Zl", "Zp"}
+                    for character in self.value
+                )
+            ):
+                raise ValueError("mission detail text is empty, unsafe, or oversized")
+        elif self.name in _COUNT_MISSION_DETAILS:
+            if type(self.value) is not int or not 0 <= self.value <= 100_000:
+                raise ValueError("mission detail count is outside its reviewed range")
+        elif self.name == "ace-pilot":
+            if type(self.value) is not bool:
+                raise ValueError("ace-pilot mission detail must be boolean")
+        elif self.name == "ace-probability":
+            if (
+                type(self.value) is not float
+                or not math.isfinite(self.value)
+                or not 0 <= self.value <= 1
+            ):
+                raise ValueError("ace probability is outside its reviewed range")
+        elif (
+            type(self.value) is not float
+            or not math.isfinite(self.value)
+            or not 0 <= self.value <= 1_000_000_000
+        ):
+            raise ValueError("engagement distance is outside its reviewed range")
 
 
 @dataclass(frozen=True)
@@ -271,6 +578,10 @@ class Contract:
     reward: Reward = field(default_factory=Reward)
     evidence: list[Evidence] = field(default_factory=list)
     """Provider evidence contributing generated fields on this contract."""
+    mission_details: list[MissionDetail] = field(default_factory=list)
+    """Independent G5 tactical facts; presentation remains profile-controlled."""
+    route_expansions: list[RouteExpansion] = field(default_factory=list)
+    """One-level stock token indirections retained without caching all strings."""
 
     @property
     def rank(self) -> int | None:
@@ -300,6 +611,24 @@ class Contract:
     def kind_of(self, key: str) -> StringKind | None:
         return next((kind for kind, keys in self.keys.items() if key in keys), None)
 
+    def mission_detail(self, name: str) -> MissionDetail | None:
+        wanted = name.casefold()
+        return next(
+            (item for item in self.mission_details if item.name.casefold() == wanted),
+            None,
+        )
+
+    def route_expansion(self, variable: str) -> RouteExpansion | None:
+        wanted = variable.casefold()
+        return next(
+            (
+                item
+                for item in self.route_expansions
+                if item.variable.casefold() == wanted
+            ),
+            None,
+        )
+
     @property
     def title(self) -> str | None:
         key = self.key(StringKind.TITLE)
@@ -325,6 +654,12 @@ class ContractSet:
     """(key, reason) — surfaced, never silently dropped."""
     capabilities: list[ProviderCapability] = field(default_factory=list)
     """Independent enhancement-provider health reports for this build."""
+    entities: list[LocalizedEntity] = field(default_factory=list)
+    """Strict local entity/name joins retained for opt-in typed presentation."""
+    legacy_signatures: list[LegacyMiningSignature] = field(default_factory=list)
+    """Exact-build community mining facts retained for explicit opt-in use."""
+    legacy_presentations: list[LegacyPresentationRule] = field(default_factory=list)
+    """Exact-build/key/stock legacy wording retained for explicit opt-in use."""
 
     def by_org(self, org_id: str) -> list[Contract]:
         return [c for c in self.contracts if c.org.id == org_id.casefold()]

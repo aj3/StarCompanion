@@ -24,6 +24,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...render.renderer import (
+    ENTITY_TAG_FIELDS,
+    ENTITY_TAG_KINDS,
+    MISSION_FACT_GROUPS,
+)
 from ..components import MetricTile, NoticeBanner, SectionCard, Tone
 from ..labels import (
     FIELD_NAMES,
@@ -60,10 +65,12 @@ class FormattingTab(QWidget):
         self.style_metric = MetricTile("Text style")
         self.prefix_metric = MetricTile("Title prefix")
         self.length_metric = MetricTile("Blueprint list")
+        self.tag_metric = MetricTile("Mission tags")
         metrics.addWidget(self.style_metric, 0, 0)
         metrics.addWidget(self.prefix_metric, 0, 1)
         metrics.addWidget(self.length_metric, 0, 2)
-        for column in range(3):
+        metrics.addWidget(self.tag_metric, 0, 3)
+        for column in range(4):
             metrics.setColumnStretch(column, 1)
         layout.addLayout(metrics)
 
@@ -73,6 +80,8 @@ class FormattingTab(QWidget):
         self.title_section = self._build_title_box()
         sections.addWidget(self.style_section)
         sections.addWidget(self.title_section)
+        self.tag_builder_section = self._build_tag_builder_box()
+        sections.addWidget(self.tag_builder_section)
         self.wording_section = self._build_wording_box()
         sections.addWidget(self.wording_section)
         self.length_box = self._build_length_box()
@@ -87,7 +96,25 @@ class FormattingTab(QWidget):
             self.prefix,
             self.bracket_rep,
             self.bracket_bp,
+            self.mission_details,
+            self.tag_builder_enabled,
+            *self.tag_field_boxes.values(),
+            self.tag_placement,
+            self.tag_separator,
+            self.tag_max_characters,
+            self.route_titles_enabled,
+            self.route_title_mode,
+            self.route_arrow,
+            self.route_location_detail,
+            self.mining_signature_enabled,
+            self.legacy_mining_pack_enabled,
+            self.entity_tag_builder_enabled,
+            *self.entity_kind_boxes.values(),
+            *self.entity_field_boxes.values(),
+            self.entity_tag_placement,
+            self.entity_tag_max_characters,
             self.wording_order,
+            self.stat_block_placement,
             self.reputation_separator,
             self.thousands_separator,
             *self.wording_labels.values(),
@@ -288,6 +315,360 @@ class FormattingTab(QWidget):
         setattr(self.state.profile.formatting.title, name, value)
         self.state.touch_profile()
 
+    # --- mission presentation -----------------------------------------------
+
+    def _build_tag_builder_box(self) -> SectionCard:
+        box = SectionCard(
+            "Mission Tag Builder",
+            "Build bounded title tags from cached G5 facts. Missing or disabled facts add nothing.",
+        )
+
+        self.mission_details = QCheckBox(
+            "Add enabled mission facts to contract descriptions"
+        )
+        self.mission_details.setAccessibleDescription(
+            "Adds a structured Mission Details block using only enabled local facts."
+        )
+        self.mission_details.toggled.connect(self._set_mission_details)
+        box.add_widget(self.mission_details)
+
+        self.tag_builder_enabled = QCheckBox(
+            "Add selected mission facts to contract titles"
+        )
+        self.tag_builder_enabled.setAccessibleDescription(
+            "Enables typed title tags; it does not enable advanced templates."
+        )
+        self.tag_builder_enabled.toggled.connect(self._set_tag_builder_enabled)
+        box.add_widget(self.tag_builder_enabled)
+
+        labels = {
+            "mission_type": "Mission type",
+            "difficulty": "Difficulty",
+            "friendly_spawns": "Friendly spawns",
+            "hostile_spawns": "Hostile spawns",
+            "ace": "Ace marker",
+            "turrets": "Turrets",
+            "engagement": "Engagement",
+        }
+        self.tag_field_boxes: dict[str, QCheckBox] = {}
+        fields = QWidget()
+        field_layout = QGridLayout(fields)
+        field_layout.setContentsMargins(24, 0, 0, 0)
+        for index, name in enumerate(MISSION_FACT_GROUPS):
+            check = QCheckBox(labels[name])
+            check.setAccessibleName(f"Use {labels[name].lower()} in mission title tags")
+            check.toggled.connect(
+                lambda _checked, field=name: self._set_tag_builder_fields(field)
+            )
+            self.tag_field_boxes[name] = check
+            field_layout.addWidget(check, index // 2, index % 2)
+        box.add_widget(fields)
+
+        self.tag_placement = QComboBox()
+        self.tag_placement.addItem("Before the original title", "prefix")
+        self.tag_placement.addItem("After the original title", "suffix")
+        self.tag_placement.setAccessibleName("Mission tag placement")
+        self.tag_placement.currentIndexChanged.connect(self._set_tag_placement)
+
+        self.tag_separator = QComboBox()
+        self.tag_separator.addItem("Spaces", " ")
+        self.tag_separator.addItem("Bullets", " • ")
+        self.tag_separator.setAccessibleName("Mission tag separator")
+        self.tag_separator.currentIndexChanged.connect(self._set_tag_separator)
+
+        self.tag_max_characters = QSpinBox()
+        self.tag_max_characters.setRange(16, 160)
+        self.tag_max_characters.setAccessibleName("Maximum mission tag characters")
+        self.tag_max_characters.setAccessibleDescription(
+            "Whole tags that exceed the cap are omitted; they are never truncated mid-value."
+        )
+        self.tag_max_characters.valueChanged.connect(self._set_tag_max_characters)
+
+        form = QFormLayout()
+        form.addRow("Placement", self.tag_placement)
+        form.addRow("Between tags", self.tag_separator)
+        form.addRow("Maximum tag characters", self.tag_max_characters)
+        box.add_layout(form)
+
+        self.route_titles_enabled = QCheckBox(
+            "Add evidence-backed routes to hauling titles"
+        )
+        self.route_titles_enabled.setAccessibleDescription(
+            "Uses only endpoint tokens present in the stock mission descriptions."
+        )
+        self.route_titles_enabled.toggled.connect(self._set_route_enabled)
+        box.add_widget(self.route_titles_enabled)
+
+        self.route_title_mode = QComboBox()
+        self.route_title_mode.addItem("Keep title and append route", "append")
+        self.route_title_mode.addItem("Replace eligible title with route", "replace")
+        self.route_title_mode.setAccessibleName("Hauling route title behavior")
+        self.route_title_mode.currentIndexChanged.connect(self._set_route_mode)
+        self.route_arrow = QComboBox()
+        for label, value in (
+            ("Greater-than (>)", ">"),
+            ("ASCII arrow (->)", "->"),
+            ("Word (to)", "to"),
+        ):
+            self.route_arrow.addItem(label, value)
+        self.route_arrow.setAccessibleName("Hauling route separator")
+        self.route_arrow.currentIndexChanged.connect(self._set_route_arrow)
+        self.route_location_detail = QComboBox()
+        self.route_location_detail.addItem("Full address", "address")
+        self.route_location_detail.addItem("Short name", "name")
+        self.route_location_detail.setAccessibleName("Hauling location detail")
+        self.route_location_detail.currentIndexChanged.connect(self._set_route_detail)
+        route_form = QFormLayout()
+        route_form.addRow("Route behavior", self.route_title_mode)
+        route_form.addRow("Route separator", self.route_arrow)
+        route_form.addRow("Location detail", self.route_location_detail)
+        box.add_layout(route_form)
+
+        self.mining_signature_enabled = QCheckBox(
+            "Append Battaglia mining resource tokens"
+        )
+        self.mining_signature_enabled.setAccessibleDescription(
+            "Uses exact Resources and MineableType tokens from reviewed scan mission descriptions."
+        )
+        self.mining_signature_enabled.toggled.connect(self._set_mining_signature)
+        box.add_widget(self.mining_signature_enabled)
+
+        self.legacy_mining_pack_enabled = QCheckBox(
+            "Add reviewed legacy presentation pack (exact build only)"
+        )
+        self.legacy_mining_pack_enabled.setAccessibleName(
+            "Enable reviewed legacy presentation rules"
+        )
+        self.legacy_mining_pack_enabled.setAccessibleDescription(
+            "Default-off numeric, item, commodity, and journal rules with exact build, key, stock-value, and source checks."
+        )
+        self.legacy_mining_pack_enabled.toggled.connect(
+            self._set_legacy_mining_pack
+        )
+        box.add_widget(self.legacy_mining_pack_enabled)
+
+        self.entity_tag_builder_enabled = QCheckBox(
+            "Add typed tags to local entity and item names"
+        )
+        self.entity_tag_builder_enabled.setAccessibleDescription(
+            "Uses only unambiguous local DataForge name joins and typed attributes."
+        )
+        self.entity_tag_builder_enabled.toggled.connect(self._set_entity_tags_enabled)
+        box.add_widget(self.entity_tag_builder_enabled)
+
+        kind_labels = {
+            "vehicle": "Vehicles",
+            "component": "Components",
+            "ship-weapon": "Ship weapons",
+            "fps-weapon": "FPS weapons",
+            "medical": "Medical items",
+            "commodity": "Commodities",
+            "crafting": "Crafting recipes",
+            "missile": "Missiles",
+        }
+        self.entity_kind_boxes: dict[str, QCheckBox] = {}
+        entity_kinds = QWidget()
+        kind_layout = QGridLayout(entity_kinds)
+        kind_layout.setContentsMargins(24, 0, 0, 0)
+        for index, name in enumerate(ENTITY_TAG_KINDS):
+            check = QCheckBox(kind_labels[name])
+            check.setAccessibleName(f"Tag {kind_labels[name].lower()}")
+            check.toggled.connect(self._set_entity_tag_kinds)
+            self.entity_kind_boxes[name] = check
+            kind_layout.addWidget(check, index // 2, index % 2)
+        box.add_widget(entity_kinds)
+
+        field_labels = {
+            "kind": "Type",
+            "subtype": "Subtype",
+            "tracking-signal": "Missile tracking signal",
+            "size": "Size",
+            "grade": "Grade",
+            "class": "Class",
+            "mass": "Mass",
+            "cargo-capacity": "Cargo capacity",
+            "crew-min": "Minimum crew",
+            "crew-max": "Maximum crew",
+            "damage": "Damage",
+            "rate-of-fire": "Rate of fire",
+            "projectile-speed": "Projectile speed",
+            "range": "Weapon range",
+            "magazine-capacity": "Magazine capacity",
+            "effective-range": "Effective range",
+            "health-restored": "Health restored",
+            "max-health-repair-rate": "Health repair rate",
+            "max-auto-dose": "Maximum automatic dose",
+            "overdose-threshold": "Overdose threshold",
+            "toxicity": "Toxicity",
+            "base-price": "Base price",
+            "shop-buy-price": "Shop buy price",
+            "shop-sell-price": "Shop sell price",
+        }
+        self.entity_field_boxes: dict[str, QCheckBox] = {}
+        entity_fields = QWidget()
+        field_layout = QGridLayout(entity_fields)
+        field_layout.setContentsMargins(24, 0, 0, 0)
+        for index, name in enumerate(ENTITY_TAG_FIELDS):
+            check = QCheckBox(field_labels[name])
+            check.setAccessibleName(
+                f"Use {field_labels[name].lower()} in entity tags"
+            )
+            check.toggled.connect(self._set_entity_tag_fields)
+            self.entity_field_boxes[name] = check
+            field_layout.addWidget(check, index // 4, index % 4)
+        box.add_widget(entity_fields)
+
+        self.entity_tag_placement = QComboBox()
+        self.entity_tag_placement.addItem("Before the stock name", "prefix")
+        self.entity_tag_placement.addItem("After the stock name", "suffix")
+        self.entity_tag_placement.setAccessibleName("Entity tag placement")
+        self.entity_tag_placement.currentIndexChanged.connect(
+            self._set_entity_tag_placement
+        )
+        self.entity_tag_max_characters = QSpinBox()
+        self.entity_tag_max_characters.setRange(16, 160)
+        self.entity_tag_max_characters.setAccessibleName(
+            "Maximum entity tag characters"
+        )
+        self.entity_tag_max_characters.setAccessibleDescription(
+            "Attributes that do not fit are omitted as complete units."
+        )
+        self.entity_tag_max_characters.valueChanged.connect(
+            self._set_entity_tag_max_characters
+        )
+        entity_form = QFormLayout()
+        entity_form.addRow("Entity placement", self.entity_tag_placement)
+        entity_form.addRow("Maximum entity tag characters", self.entity_tag_max_characters)
+        box.add_layout(entity_form)
+
+        self.entity_tag_preview = QLabel(
+            "No locally joined entity names are loaded for preview."
+        )
+        self.entity_tag_preview.setWordWrap(True)
+        self.entity_tag_preview.setProperty("component", "preview")
+        self.entity_tag_preview.setAccessibleName("Entity title tag preview")
+        box.add_widget(self.entity_tag_preview)
+
+        self.tag_preview = QLabel("No evidenced mission facts are loaded for preview.")
+        self.tag_preview.setWordWrap(True)
+        self.tag_preview.setProperty("component", "preview")
+        self.tag_preview.setAccessibleName("Mission title tag preview")
+        box.add_widget(self.tag_preview)
+        return box
+
+    def _set_mission_details(self, checked: bool) -> None:
+        if self._loading:
+            return
+        self.state.profile.mission_presentation.description_details = checked
+        self.state.touch_profile()
+
+    def _set_tag_builder_enabled(self, checked: bool) -> None:
+        if self._loading:
+            return
+        self.state.profile.mission_presentation.tags.enabled = checked
+        self.state.touch_profile()
+
+    def _set_tag_builder_fields(self, _field: str) -> None:
+        if self._loading:
+            return
+        self.state.profile.mission_presentation.tags.fields = tuple(
+            name for name in MISSION_FACT_GROUPS if self.tag_field_boxes[name].isChecked()
+        )
+        self.state.touch_profile()
+
+    def _set_tag_placement(self, index: int) -> None:
+        if self._loading:
+            return
+        self.state.profile.mission_presentation.tags.placement = (
+            self.tag_placement.itemData(index)
+        )
+        self.state.touch_profile()
+
+    def _set_tag_separator(self, index: int) -> None:
+        if self._loading:
+            return
+        self.state.profile.mission_presentation.tags.separator = (
+            self.tag_separator.itemData(index)
+        )
+        self.state.touch_profile()
+
+    def _set_tag_max_characters(self, value: int) -> None:
+        if self._loading:
+            return
+        self.state.profile.mission_presentation.tags.max_characters = value
+        self.state.touch_profile()
+
+    def _set_route_enabled(self, checked: bool) -> None:
+        if not self._loading:
+            self.state.profile.mission_presentation.route_titles_enabled = checked
+            self.state.touch_profile()
+
+    def _set_route_mode(self, index: int) -> None:
+        if not self._loading:
+            self.state.profile.mission_presentation.route_title_mode = (
+                self.route_title_mode.itemData(index)
+            )
+            self.state.touch_profile()
+
+    def _set_route_arrow(self, index: int) -> None:
+        if not self._loading:
+            self.state.profile.mission_presentation.route_arrow = (
+                self.route_arrow.itemData(index)
+            )
+            self.state.touch_profile()
+
+    def _set_route_detail(self, index: int) -> None:
+        if not self._loading:
+            self.state.profile.mission_presentation.route_location_detail = (
+                self.route_location_detail.itemData(index)
+            )
+            self.state.touch_profile()
+
+    def _set_mining_signature(self, checked: bool) -> None:
+        if not self._loading:
+            self.state.profile.mission_presentation.mining_signature_enabled = checked
+            self.state.touch_profile()
+
+    def _set_legacy_mining_pack(self, checked: bool) -> None:
+        if not self._loading:
+            self.state.profile.mission_presentation.legacy_mining_pack_enabled = checked
+            self.state.touch_profile()
+
+    def _set_entity_tags_enabled(self, checked: bool) -> None:
+        if not self._loading:
+            self.state.profile.mission_presentation.entity_tags.enabled = checked
+            self.state.touch_profile()
+
+    def _set_entity_tag_kinds(self, _checked: bool) -> None:
+        if not self._loading:
+            self.state.profile.mission_presentation.entity_tags.kinds = frozenset(
+                name
+                for name in ENTITY_TAG_KINDS
+                if self.entity_kind_boxes[name].isChecked()
+            )
+            self.state.touch_profile()
+
+    def _set_entity_tag_fields(self, _checked: bool) -> None:
+        if not self._loading:
+            self.state.profile.mission_presentation.entity_tags.fields = tuple(
+                name
+                for name in ENTITY_TAG_FIELDS
+                if self.entity_field_boxes[name].isChecked()
+            )
+            self.state.touch_profile()
+
+    def _set_entity_tag_placement(self, index: int) -> None:
+        if not self._loading:
+            self.state.profile.mission_presentation.entity_tags.placement = (
+                self.entity_tag_placement.itemData(index)
+            )
+            self.state.touch_profile()
+
+    def _set_entity_tag_max_characters(self, value: int) -> None:
+        if not self._loading:
+            self.state.profile.mission_presentation.entity_tags.max_characters = value
+            self.state.touch_profile()
+
     # --- structured wording -------------------------------------------------
 
     def _build_wording_box(self) -> SectionCard:
@@ -310,6 +691,20 @@ class FormattingTab(QWidget):
         order_form.addRow("Information order", self.wording_order)
         box.add_layout(order_form)
         box.add_widget(self.wording_order_hint)
+
+        self.stat_block_placement = QComboBox()
+        self.stat_block_placement.addItem("Below the stock mission text", "below")
+        self.stat_block_placement.addItem("Above the stock mission text", "above")
+        self.stat_block_placement.setAccessibleName("Generated stat block placement")
+        self.stat_block_placement.setAccessibleDescription(
+            "Places complete generated mission details and rewards above or below unchanged stock text."
+        )
+        self.stat_block_placement.currentIndexChanged.connect(
+            self._set_stat_block_placement
+        )
+        placement_form = QFormLayout()
+        placement_form.addRow("Stat block", self.stat_block_placement)
+        box.add_layout(placement_form)
 
         self.reputation_separator = QComboBox()
         self.reputation_separator.setAccessibleName("Reputation value separator")
@@ -389,6 +784,13 @@ class FormattingTab(QWidget):
         if self._loading or value is None:
             return
         self.state.profile.wording.reputation_separator = value
+        self.state.touch_profile()
+
+    def _set_stat_block_placement(self, index: int) -> None:
+        value = self.stat_block_placement.itemData(index)
+        if self._loading or value is None:
+            return
+        self.state.profile.wording.stat_block_placement = value
         self.state.touch_profile()
 
     def _set_thousands_separator(self, checked: bool) -> None:
@@ -484,6 +886,54 @@ class FormattingTab(QWidget):
             self.bracket_rep.setChecked(formatting.title.bracket_rep)
             self.bracket_bp.setChecked(formatting.title.bracket_bp)
 
+            mission = self.state.profile.mission_presentation
+            self.mission_details.setChecked(mission.description_details)
+            self.tag_builder_enabled.setChecked(mission.tags.enabled)
+            for name, check in self.tag_field_boxes.items():
+                check.setChecked(name in mission.tags.fields)
+            self.tag_placement.setCurrentIndex(
+                max(0, self.tag_placement.findData(mission.tags.placement))
+            )
+            self.tag_separator.setCurrentIndex(
+                max(0, self.tag_separator.findData(mission.tags.separator))
+            )
+            self.tag_max_characters.setValue(mission.tags.max_characters)
+            self.route_titles_enabled.setChecked(mission.route_titles_enabled)
+            self.route_title_mode.setCurrentIndex(
+                max(0, self.route_title_mode.findData(mission.route_title_mode))
+            )
+            self.route_arrow.setCurrentIndex(
+                max(0, self.route_arrow.findData(mission.route_arrow))
+            )
+            self.route_location_detail.setCurrentIndex(
+                max(
+                    0,
+                    self.route_location_detail.findData(
+                        mission.route_location_detail
+                    ),
+                )
+            )
+            self.mining_signature_enabled.setChecked(mission.mining_signature_enabled)
+            self.legacy_mining_pack_enabled.setChecked(
+                mission.legacy_mining_pack_enabled
+            )
+            self.entity_tag_builder_enabled.setChecked(mission.entity_tags.enabled)
+            for name, check in self.entity_kind_boxes.items():
+                check.setChecked(name in mission.entity_tags.kinds)
+            for name, check in self.entity_field_boxes.items():
+                check.setChecked(name in mission.entity_tags.fields)
+            self.entity_tag_placement.setCurrentIndex(
+                max(
+                    0,
+                    self.entity_tag_placement.findData(
+                        mission.entity_tags.placement
+                    ),
+                )
+            )
+            self.entity_tag_max_characters.setValue(
+                mission.entity_tags.max_characters
+            )
+
             wording = self.state.profile.wording
             while self.wording_order.count() > len(WORDING_ORDERS):
                 self.wording_order.removeItem(self.wording_order.count() - 1)
@@ -503,6 +953,10 @@ class FormattingTab(QWidget):
                     "Custom validated order loaded from this profile.",
                 )
             )
+            placement_index = self.stat_block_placement.findData(
+                wording.stat_block_placement
+            )
+            self.stat_block_placement.setCurrentIndex(max(0, placement_index))
             separator_index = self.reputation_separator.findData(
                 wording.reputation_separator
             )
@@ -519,7 +973,56 @@ class FormattingTab(QWidget):
         self.length_metric.set_value(
             str(self.max_items.value()) if self.max_items.value() else "All"
         )
+        self._refresh_tag_preview()
         self._update_reward_note()
+
+    def _refresh_tag_preview(self) -> None:
+        contract = self.state.sample_contract()
+        if contract is None:
+            preview = "No evidenced mission facts are loaded for preview."
+        else:
+            options = self.state.profile.to_render_options()
+            tags = " ".join(
+                filter(
+                    None,
+                    (
+                        options.title_fact_tags(contract),
+                        options.mission_title_suffix(contract),
+                    ),
+                )
+            )
+            preview = tags or "No enabled title tags match this contract."
+        self.tag_preview.setText(preview)
+        entity = next(iter(self.state.contracts.entities), None) if self.state.contracts else None
+        if entity is None:
+            entity_preview = "No locally joined entity names are loaded for preview."
+        else:
+            entity_preview = self.state.profile.to_render_options().entity_tag(entity)[0]
+            if not entity_preview:
+                entity_preview = "No enabled entity tag matches the preview item."
+        self.entity_tag_preview.setText(entity_preview)
+        mission = self.state.profile.mission_presentation
+        enabled = (
+            mission.tags.enabled
+            or mission.route_titles_enabled
+            or mission.mining_signature_enabled
+            or mission.legacy_mining_pack_enabled
+            or mission.entity_tags.enabled
+        )
+        for control in (
+            self.route_title_mode,
+            self.route_arrow,
+            self.route_location_detail,
+        ):
+            control.setEnabled(mission.route_titles_enabled)
+        for control in (
+            *self.entity_kind_boxes.values(),
+            *self.entity_field_boxes.values(),
+            self.entity_tag_placement,
+            self.entity_tag_max_characters,
+        ):
+            control.setEnabled(mission.entity_tags.enabled)
+        self.tag_metric.set_value("Enabled" if enabled else "Off", preview)
 
     def _update_reward_note(self) -> None:
         """Say when a setting cannot do anything yet, rather than letting it

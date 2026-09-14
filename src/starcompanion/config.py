@@ -24,17 +24,21 @@ from pydantic import (
 from .inject import DEFAULT_BACKUP_RETENTION, MAX_BACKUP_RETENTION, MergeMode
 from .model import ContractSet
 from .render.renderer import (
+    DEFAULT_ENTITY_TAG_FIELDS,
+    ENTITY_TAG_FIELDS,
+    ENTITY_TAG_KINDS,
     Field as RenderField,
     RenderLabels,
     RenderOptions,
     Renderer,
+    MISSION_FACT_GROUPS,
     Section,
     TitlePrefix,
     validate_wording_label,
 )
 from .validate import EMPHASIS_TAGS
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 6
 
 PROFILE_DIR = Path(__file__).parent / "profiles"
 
@@ -146,6 +150,7 @@ class StructuredWording(Strict):
     labels: WordingLabels = Field(default_factory=WordingLabels)
     reputation_separator: Literal[" / ", "/", " • "] = " / "
     thousands_separator: bool = True
+    stat_block_placement: Literal["below", "above"] = "below"
 
     @field_validator("section_order")
     @classmethod
@@ -160,6 +165,120 @@ class Appearance(Strict):
     before this existed still load."""
 
     theme: Literal["dark", "light"] = "dark"
+
+
+MissionFactGroup = Literal[
+    "mission_type",
+    "difficulty",
+    "friendly_spawns",
+    "hostile_spawns",
+    "ace",
+    "turrets",
+    "engagement",
+]
+
+
+class MissionFactToggles(Strict):
+    """Independent opt-in controls for locally evidenced tactical facts."""
+
+    mission_type: bool = False
+    difficulty: bool = False
+    friendly_spawns: bool = False
+    hostile_spawns: bool = False
+    ace: bool = False
+    turrets: bool = False
+    engagement: bool = False
+
+    def enabled(self) -> frozenset[str]:
+        return frozenset(
+            name for name in MISSION_FACT_GROUPS if getattr(self, name)
+        )
+
+
+class MissionTagBuilder(Strict):
+    """Typed mission-title tags; arbitrary template execution is not allowed."""
+
+    enabled: bool = False
+    fields: tuple[MissionFactGroup, ...] = MISSION_FACT_GROUPS
+    placement: Literal["prefix", "suffix"] = "prefix"
+    separator: Literal[" ", " • "] = " "
+    max_characters: int = Field(default=72, ge=16, le=160)
+
+    @field_validator("fields")
+    @classmethod
+    def _unique_fields(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("tag builder fields must be unique")
+        return value
+
+
+EntityTagKind = Literal[
+    "vehicle",
+    "component",
+    "ship-weapon",
+    "fps-weapon",
+    "medical",
+    "commodity",
+    "missile",
+]
+EntityTagField = Literal[
+    "kind",
+    "subtype",
+    "tracking-signal",
+    "size",
+    "grade",
+    "class",
+    "mass",
+    "cargo-capacity",
+    "crew-min",
+    "crew-max",
+    "damage",
+    "rate-of-fire",
+    "projectile-speed",
+    "range",
+    "magazine-capacity",
+    "effective-range",
+    "health-restored",
+    "max-health-repair-rate",
+    "max-auto-dose",
+    "overdose-threshold",
+    "toxicity",
+    "base-price",
+    "shop-buy-price",
+    "shop-sell-price",
+]
+
+
+class EntityTagBuilder(Strict):
+    """Typed, bounded labels over unambiguous G5 entity/name joins."""
+
+    enabled: bool = False
+    kinds: frozenset[EntityTagKind] = frozenset(ENTITY_TAG_KINDS)
+    fields: tuple[EntityTagField, ...] = DEFAULT_ENTITY_TAG_FIELDS
+    placement: Literal["prefix", "suffix"] = "prefix"
+    max_characters: int = Field(default=72, ge=16, le=160)
+
+    @field_validator("fields")
+    @classmethod
+    def _unique_fields(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("entity tag fields must be unique")
+        return value
+
+
+class MissionPresentation(Strict):
+    """Presentation-only settings over cached G5 facts."""
+
+    facts: MissionFactToggles = Field(default_factory=MissionFactToggles)
+    description_details: bool = False
+    tags: MissionTagBuilder = Field(default_factory=MissionTagBuilder)
+    route_titles_enabled: bool = False
+    route_title_mode: Literal["append", "replace"] = "append"
+    route_arrow: Literal[">", "->", "to"] = ">"
+    route_location_detail: Literal["address", "name"] = "address"
+    mining_signature_enabled: bool = False
+    legacy_mining_pack_enabled: bool = False
+    entity_tags: EntityTagBuilder = Field(default_factory=EntityTagBuilder)
 
 
 class OrgTemplates(Strict):
@@ -184,13 +303,16 @@ class Injection(Strict):
 
 
 class Profile(Strict):
-    schema_version: Literal[2] = SCHEMA_VERSION
+    schema_version: Literal[6] = SCHEMA_VERSION
     name: str = "default"
     description: str = ""
     fields: FieldToggles = Field(default_factory=FieldToggles)
     formatting: Formatting = Field(default_factory=Formatting)
     wording: StructuredWording = Field(default_factory=StructuredWording)
     appearance: Appearance = Field(default_factory=Appearance)
+    mission_presentation: MissionPresentation = Field(
+        default_factory=MissionPresentation
+    )
     templates: dict[str, OrgTemplates] = Field(default_factory=dict)
     """Keyed by org id (casefolded), matching `Org.id`."""
     injection: Injection = Field(default_factory=Injection)
@@ -220,11 +342,20 @@ class Profile(Strict):
             raise ValueError("profile JSON must contain one object")
         found = data.get("schema_version", SCHEMA_VERSION)
         if found == 1:
-            data["schema_version"] = SCHEMA_VERSION
             data["wording"] = {
                 "mode": "advanced" if data.get("templates") else "structured"
             }
-            found = SCHEMA_VERSION
+            found = 2
+        if found == 2:
+            data.setdefault("mission_presentation", {})
+            found = 3
+        if found == 3:
+            found = 4
+        if found == 4:
+            found = 5
+        if found == 5:
+            data["schema_version"] = SCHEMA_VERSION
+            found = 6
         if found != SCHEMA_VERSION:
             # Checked before model validation so the message names the real
             # problem instead of a confusing Literal mismatch.
@@ -264,6 +395,27 @@ class Profile(Strict):
             labels=RenderLabels(**self.wording.labels.model_dump()),
             reputation_separator=self.wording.reputation_separator,
             thousands_separator=self.wording.thousands_separator,
+            stat_block_placement=self.wording.stat_block_placement,
+            mission_fact_groups=self.mission_presentation.facts.enabled(),
+            show_mission_details=self.mission_presentation.description_details,
+            tag_builder_enabled=self.mission_presentation.tags.enabled,
+            tag_builder_fields=tuple(self.mission_presentation.tags.fields),
+            tag_builder_placement=self.mission_presentation.tags.placement,
+            tag_builder_separator=self.mission_presentation.tags.separator,
+            tag_builder_max_characters=self.mission_presentation.tags.max_characters,
+            route_titles_enabled=self.mission_presentation.route_titles_enabled,
+            route_title_mode=self.mission_presentation.route_title_mode,
+            route_arrow=self.mission_presentation.route_arrow,
+            route_location_detail=self.mission_presentation.route_location_detail,
+            mining_signature_enabled=self.mission_presentation.mining_signature_enabled,
+            legacy_mining_pack_enabled=(
+                self.mission_presentation.legacy_mining_pack_enabled
+            ),
+            entity_tag_builder_enabled=self.mission_presentation.entity_tags.enabled,
+            entity_tag_kinds=frozenset(self.mission_presentation.entity_tags.kinds),
+            entity_tag_fields=tuple(self.mission_presentation.entity_tags.fields),
+            entity_tag_placement=self.mission_presentation.entity_tags.placement,
+            entity_tag_max_characters=self.mission_presentation.entity_tags.max_characters,
         )
 
     def template_overrides(self) -> dict[str, str]:
@@ -310,9 +462,13 @@ def load_builtin(name: str) -> Profile:
 __all__ = [
     "SCHEMA_VERSION",
     "Appearance",
+    "EntityTagBuilder",
     "Formatting",
     "FieldToggles",
     "Injection",
+    "MissionFactToggles",
+    "MissionPresentation",
+    "MissionTagBuilder",
     "OrgTemplates",
     "Profile",
     "StructuredWording",

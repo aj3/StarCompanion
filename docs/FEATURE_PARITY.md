@@ -34,15 +34,15 @@ does not execute or silently download either project's code or generated data.
 |---|---|---|
 | Read stock localization and DataForge data from the installed `Data.p4k` | **Complete** | Pure-Python, read-only streaming reader; cancellable helper process; build-scoped cache. |
 | LIVE, HOTFIX, PTU, EPTU, and TECH-PREVIEW support | **Complete** | Installed-channel discovery and normalized per-channel state. |
-| Installed game-language discovery and selection | **Partial** | C5 discovers local archive languages and isolates their caches/edits; G7 adds a visible GUI selector and explicit activation workflow. |
+| Installed game-language discovery and selection | **Complete** | Overview discovers archive languages in a cancellable worker, visibly selects one, and scopes caches, edits, plans, and overrides by channel/language. |
 | Community game-language overlays | **Safe equivalent** | User-selected local INI import only; no background download or trust-on-first-use remote data. |
 | Multi-source merge with personal edits last | **Safe equivalent** | Fixed, inspectable `stock → language → ordered imports → generated → user.ini` precedence, conflict report, and provenance. The safety-critical user layer cannot be dragged below another source. |
 | Per-channel persistent edits across game patches | **Complete** | Per-channel/per-language `user.ini`, transactional save, import/export, and bounded model history. |
 | Preview, validate, apply, backup, rollback, and crash recovery | **Complete** | One fingerprint-bound C3 operation plan drives CLI and GUI; writes are confirmed, atomic, and journaled. |
 | Capped localization-backup retention and separate rotating `user.ini` snapshots | **Complete** | Profile/CLI-configurable target backup retention is exposed in the GUI and prunes only recognized unchanged restore points after verified writes. Every changed `user.ini` gets a separate bounded collision-resistant snapshot; no-op saves create none, and cleanup failure is reported without misreporting the committed edit as failed. |
-| Clear the loose localization override to return to stock | **Planned** | G7 adds a one-action, backup-first, confirmation-gated vanilla workflow instead of asking users to delete a file. |
-| Safely activate the chosen game language in `USER.cfg` | **Planned** | G7 adds preview, backup, confirmation, atomic recovery, unrelated-setting preservation, and encoding preservation. |
-| Declarative fixes for known CIG data defects | **Planned** | G5 adds build-bounded, evidence-bearing patch records with synthetic drift tests and an audit view. |
+| Clear the loose localization override to return to stock | **Complete** | G7 provides one-action preview and confirmation, target fingerprinting, backup, journaled removal, crash recovery, and final absence verification. |
+| Safely activate the chosen game language in `USER.cfg` | **Complete** | G7 verifies the language from the archive, preserves unrelated settings/encoding/line endings, and uses a fingerprint-bound backup-first atomic plan in GUI and CLI. |
+| Declarative fixes for known CIG data defects | **Partial** | G5 provides exact-build/provider/record/field/value correction records with provenance and fail-closed drift tests. No real-build correction is shipped until a specific defect and replacement are independently evidenced. |
 | Freshest valid `Data.p4k` when several installs are present | **Complete** | Discovery ignores inaccessible, empty, and non-regular archives, ranks each channel by captured archive modification time with deterministic size/path tie-breaks, and visibly explains both the automatic winner and any explicit older selection. |
 | Shareable localization pack | **Complete** | G4 exports and imports a bounded authored-only ZIP with a validated profile and offline rebuild instructions. The GUI keeps source scope advisory, never activates the bundled profile automatically, and never redistributes stock game strings. |
 | Automatic application updater | **Safe equivalent** | Intentionally no startup network request or self-replacing installer. Releases remain user-initiated and hash/signature verified; any future update check must be opt-in and signed before it can be enabled. |
@@ -55,19 +55,19 @@ does not execute or silently download either project's code or generated data.
 | Mission reputation amounts and tracks | **Complete** | C1–C3 local mission provider with field evidence. |
 | Blueprint pools, chances, ranks, regional variants, caveats, and title tags | **Complete** | C1–G3 structured mission rendering. |
 | Direct mission item rewards and scenario points | **Complete** | C1–G3 structured mission rendering. |
-| Mission type and difficulty details | **Planned** | G5 extracts independently evidenced facts; G6 adds independent presentation toggles. Shared-description ambiguity must suppress uncertain output rather than copy it across missions. |
-| Friendly and hostile spawn summaries | **Planned** | G5 extracts per-value evidence; G6 controls concise presentation independently. |
-| Ace-pilot `[ACE]` and uncertain `[ACE?]` markers | **Planned** | G5 distinguishes direct evidence from uncertainty; G6 exposes an independent title-marker toggle. |
-| Turret counts and engagement details | **Planned** | G5 extracts typed, per-value evidence; G6 adds independently controlled formatting. |
-| Hauling/delivery/courier routes and title shortening | **Planned** | G6 presentation provider and Tag Builder. |
-| Battaglia/asteroid resource-signature tags | **Planned** | G6 mission/mining provider. |
-| Ship statistics and component summaries | **Planned** | G5 vehicle provider. |
-| Ship-component and ship-weapon statistics | **Planned** | G5 item providers. |
-| FPS-weapon statistics | **Planned** | G5 item providers. |
-| Medical-consumable effects | **Planned** | G5 medical provider. |
-| Commodity and crafting cross-references | **Planned** | G5 commodity/crafting provider. |
-| Journal/discovery enhancements and mining compendium | **Planned** | G5 facts plus G6 presentation pack. |
-| Provider capability, drift, and per-value evidence | **Partial** | Complete for the current mission reward facts; every new G5 fact/provider must fail independently and meet the existing evidence contract. |
+| Mission type and difficulty details | **Complete** | Typed G5 facts pass through cache schema 10 to independent G6 title/description controls with rendered-only evidence. LIVE aggregate validation is green. |
+| Friendly and hostile spawn summaries | **Complete** | Bounded graph joins, independent diagnostics, typed G6 controls, title tags, description details, and LIVE aggregate validation are complete. |
+| Ace-pilot `[ACE]` and uncertain `[ACE?]` markers | **Complete** | Direct booleans and probabilities have distinct typed markers and provenance. The current LIVE build exposes neither, so the control remains silent instead of guessing. |
+| Turret counts and engagement details | **Complete** | Typed controls and bounded presentation cover direct provider facts. The current LIVE build reports the provider unavailable because it has no reviewed fields. |
+| Hauling/delivery/courier routes and title shortening | **Complete** | Exact stock endpoint tokens, description-variant intersection, append/replace modes, typed display choices, bounded whole-unit rendering, and rendered-only provenance are synthetic- and LIVE-validated. |
+| Battaglia/asteroid resource-signature tags | **Complete** | Exact Battaglia resource tokens use local evidence; the separate 26-value numeric pack is default-off, source-attributed, exact-build/key/stock bounded, and fails closed on drift. |
+| Ship statistics and component summaries | **Complete** | Default-off, bounded vehicle mass/cargo/crew and component type/size/grade/class tags use only unambiguous evidenced G5 values. |
+| Ship-component and ship-weapon statistics | **Complete** | Typed size, damage, rate, projectile speed, range, and strict CS/EM/IR missile notation retain per-value evidence and whole-tag limits. |
+| FPS-weapon statistics | **Complete** | Damage, rate, magazine capacity, and effective range are typed, bounded, independently selectable, and provenance-bearing. |
+| Medical-consumable effects | **Complete** | The reviewed health, repair, dose, overdose, and toxicity fields are typed, bounded, independently selectable, and fail closed when absent. |
+| Commodity and crafting cross-references | **Complete** | Independent providers, real-record resource/output joins, drift diagnostics, and LIVE aggregate regressions are complete. Crafting output labels are deliberately excluded from name mutation. |
+| Journal/discovery enhancements and mining compendium | **Partial** | G7 completes exact-stock mining-compendium regrouping and refueling tips. Broader evidence-backed journal/discovery record cross-references and presentation remain. |
+| Provider capability, drift, and per-value evidence | **Complete** | Mission rewards, eight entity providers, and three tactical providers have isolated status/drift reporting, evidence-bearing values, LIVE aggregate checks, and fail-closed exact-build corrections. |
 
 ## Editor, presentation, and ownership
 
@@ -76,12 +76,12 @@ does not execute or silently download either project's code or generated data.
 | Fast full-string search, sorting, and domain/source/state/provider filters | **Complete** | Virtual model/view table and cached search projection; 50,000-row regression. |
 | Per-column filters | **Complete** | Seven independent cached column filters combine in one proxy invalidation without creating widgets per row; the 50,000-row regression remains bounded. |
 | Inline custom edit with stock/merged/rendered provenance | **Safe equivalent** | Complete values are edited in a debounced inspector instead of a narrow table cell; model undo/redo and safe multi-reset are already present. |
-| Filtered-row clipboard export | **Planned** | G7 adds explicit, bounded copy of the visible projection without hidden rows or private provenance fields. |
+| Filtered-row clipboard export | **Complete** | G7 copies only the bounded visible projection, excludes private provenance/hidden rows, removes row delimiters, and neutralizes spreadsheet formulas. |
 | Styled loc-token/markup preview | **Complete** | The visual renderer strictly escapes untrusted text, interprets only balanced allowlisted game tags and recognized mission tokens, creates no links/resources, and caps previews at 32 KiB. |
 | Configurable structured labels, ordering, numeric format, tags, and expert templates | **Complete** | G3 schema v2 exposes all nine labels; expert templates remain explicit and sandboxed. |
-| Category-level enhancement toggles | **Planned** | G7 exposes coarse, understandable enable/disable controls while retaining provider-specific capability reporting. |
-| Stat-block placement above or below stock text | **Planned** | G7 adds a typed placement choice; it does not permit arbitrary execution or bypass final validation. |
-| General Tag Builder for component, missile, weapon, commodity, and mission-title formats | **Planned** | G6 builds typed rules over provider facts; do not reintroduce template-first configuration. |
+| Category-level enhancement toggles | **Complete** | G7 coarse controls update the existing typed reward, tactical, route/resource, entity, and legacy fields while individual controls and diagnostics remain available. |
+| Stat-block placement above or below stock text | **Complete** | Profile schema 6 exposes a strict above/below choice; rendered output still passes final validation. |
+| General Tag Builder for component, missile, weapon, commodity, and mission-title formats | **Complete** | Mission and entity/item tags are typed, independently selectable, complete-unit bounded, and backed by strict local name/attribute evidence. |
 | Blueprint catalog, owned/unowned search, reward source, category, and acquisition queries | **Complete** | Stable C4 identities and read-only backend queries. |
 | Incremental current/rotated log scan | **Complete** | Bounded, cancellable, rotation/truncation-aware scan with confirmation before cursor/evidence save. |
 | Review both LIVE and HOTFIX logs | **Complete** | New GUI preferences review both production siblings by default; the visible control can separate them, the CLI flag selects the shared scope explicitly, and test channels cannot enter linked discovery. |
@@ -91,7 +91,7 @@ does not execute or silently download either project's code or generated data.
 | Repair names altered by another localization editor | **Complete** | Evidence-backed catalog aliases normalize known bracket markers and whitespace, accept only an unambiguous exact normalized identity, and never fuzzy-mark ownership. |
 | Owned marker in generated blueprint lists | **Complete** | The selected channel-scoped ownership snapshot is joined into a render-only contract copy, leaving cached contract data immutable. |
 | Per-key INI conflict reconciliation | **Complete** | G4 loads bounded imports in a worker, requires reviewable keep/import/append/prepend/custom choices for every conflict, and rechecks the saved baseline before one provenance-aware undoable write. |
-| Ship favorites and explicit ASOP order | **Planned** | G6 persists these as irreplaceable user data, separate from generated caches. |
+| Ship favorites and explicit ASOP order | **Complete** | Evidence-backed vehicle names receive safe `*` and `NN-` prefixes through the existing channel/language-scoped user layer with model undo/redo and reviewed persistence. |
 | Window/splitter/column layout persistence and reset | **Complete** | G4 stores strictly bounded geometry, splitter ratios, and table widths in a separate local-only file; off-screen positions are ignored, hidden-page ratios are deferred safely, invalid files are preserved, and explicit reset never changes portable preferences. |
 
 ## Operational interface
@@ -99,19 +99,19 @@ does not execute or silently download either project's code or generated data.
 | Reference outcome | StarCompanion status | Evidence or remaining work |
 |---|---|---|
 | Guided install/channel onboarding | **Complete** | Overview discovers channels in a worker and explains readiness, trust, and next actions. |
-| Two-button simple mode | **Partial** | Overview is the simplified workflow, but G7 still needs a dedicated minimal mode. |
+| Two-button simple mode | **Complete** | G7 hides all detailed cards/pages and disables their shortcuts, leaving the existing Update and Undo actions plus a persistent exit to Full mode. |
 | Backup browser and guarded restore | **Complete** | Target-scoped listing, fingerprint recheck, recovery backup, journal, and final verification. |
 | Portable settings backup | **Safe equivalent** | Manifest- and SHA-256-verified ZIP for portable preferences and edits. Ownership has its own explicit JSON/CSV transfer instead of leaking into a general settings bundle. |
-| Portable ZIP mode with beside-executable data | **Planned** | G7 adds an explicit mode and keeps installed-mode defaults unchanged. |
-| Configurable application-data directory | **Planned** | G7 adds a validated, migration-aware selector instead of requiring an environment variable. |
-| OneDrive/synchronization warning and migration | **Planned** | G7 detects risky synchronized roots, explains lock/revision hazards, and offers a recoverable move without deleting the source. |
+| Portable ZIP mode with beside-executable data | **Complete** | Packaged builds can preview and activate a fixed beside-executable marker/data root; installed defaults remain unchanged and cache is rebuilt locally. |
+| Configurable application-data directory | **Complete** | G7 validates an absolute non-root destination and performs a bounded, allowlisted, copy-only, conflict-safe migration that activates after restart. |
+| OneDrive/synchronization warning and migration | **Complete** | Synchronized roots are detected and explained; migration rejects links/concurrency, writes activation last, and never deletes the original. |
 | Searchable offline FAQ/help and privacy explanation | **Complete** | Bundled help plus redacted diagnostics preview/export. |
-| Unsaved-change warning on close | **Planned** | G7 distinguishes model edits from background jobs and offers save/discard/cancel without performing hidden writes. |
-| Active-localization indication | **Planned** | G7 adds a persistent channel/language/override indicator or watermark so users can tell what the game will load. |
-| Replayable coach-mark tutorial | **Planned** | G7 adds this only after the final workflow and controls stabilize. |
-| Redacted real-time application log viewer | **Planned** | Diagnostics exist; G7 adds a bounded in-memory event log with level filter and redacted export. |
-| Localized application interface | **Planned** | Game-language handling exists; G7 bundles and reviews UI translations rather than fetching them silently. |
-| Four visual themes | **Partial** | Accessible dark and light themes exist; G7 adds two reviewed variants without weakening contrast/focus gates. |
+| Unsaved-change warning on close | **Complete** | G7 offers save/discard/cancel, flushes pending debounced text before background save, and leaves the window open on save failure. |
+| Active-localization indication | **Complete** | The persistent shell context and Overview warning show selected language, effective `g_language`, and stock/custom override state. |
+| Replayable coach-mark tutorial | **Complete** | A non-modal focus/navigation tour is replayable from Help and Settings; completion is portable and no tour step reads or writes data. |
+| Redacted real-time application log viewer | **Complete** | A 500-record local ring accepts fixed events, filters levels, redacts identifiers, caps details/exports, and explicitly excludes raw logs, strings, ownership, and exception text. |
+| Localized application interface | **Safe equivalent** | A conservative inventory covers 1,323 statically identifiable GUI-facing messages/1,513 locations with placeholder-safe pseudo rendering; native feature-page translations remain external reviewed content rather than machine-generated claims. |
+| Four visual themes | **Complete** | Dark, Light, Midnight, and High Contrast share one semantic stylesheet and all pass text/focus contrast gates. |
 | High-DPI, keyboard, focus, contrast, and screen-reader coverage | **Complete** | Structural screenshots at 100/150/200 percent and accessibility regressions. |
 | Windows installer and signed release path | **Partial** | Reproducible Windows/Linux artifacts and SignPath-ready signing workflow exist; certificate approval/signing remains an external release condition. |
 
@@ -126,13 +126,13 @@ localization key.
 |---|---|---|
 | Blueprint title markers, pools, component context, ranks, regional variants, and caveats | **Complete** | Existing mission facts/rendering cover the content, and G4 joins exact channel-scoped ownership into the render-only contract copy. |
 | Reputation, direct rewards, and scenario progress in contracts | **Complete** | Existing local provider. |
-| Hauling title overhaul with origin/destination | **Planned** | G6. |
-| Asteroid resource-signature values in scan objectives | **Planned** | G6. |
-| Shorter Hephaestanite and mining UI wording; `(Raw)` normalization | **Planned** | G6 local presentation pack. |
-| Illegal-item warning prefix | **Planned** | G6 item presentation rules. |
-| Component Type/Size/Grade and missile-type prefixes | **Planned** | G5 facts, G6 Tag Builder. |
-| Shorter multi-tool attachment names | **Planned** | G6 local presentation pack. |
-| Mining guide regrouping and refueling quick tips | **Planned** | G5 journal facts, G6 explicitly maintained wording. |
+| Hauling title overhaul with origin/destination | **Complete** | G6 uses only exact stock route variables shared by contributing description variants. |
+| Asteroid resource-signature values in scan objectives | **Complete** | Stock variables are local; numeric RS values are available only through the separately attributed, default-off, exact-build/key/stock legacy pack. |
+| Shorter Hephaestanite and mining UI wording; `(Raw)` normalization | **Complete** | Four exact-key/stock rules are default-off, source-attributed, and build-bounded. |
+| Illegal-item warning prefix | **Complete** | Eight exact-key/stock rules add the reviewed warning only on the reviewed build. |
+| Component Type/Size/Grade and missile-type prefixes | **Complete** | Strict component path families plus typed Size/Grade/Class and allowlisted CS/EM/IR seeker facts render with local evidence. |
+| Shorter multi-tool attachment names | **Complete** | Five exact-key/stock rules reproduce the reviewed short attachment outcomes and fail closed on drift. |
+| Mining guide regrouping and refueling quick tips | **Complete** | Whole-value SHA-256 gates transform only local stock text; no journal corpus is committed. |
 
 ## Phase order and remaining work
 
@@ -141,21 +141,22 @@ localization key.
    ownership wiring, per-key INI reconciliation, safe shareable-pack export,
    per-column filters, safe markup preview, backup retention and user-edit
    snapshots, layout persistence, and freshest-install evidence.
-2. **G5 — Local entity providers:** ships, components, ship/FPS weapons,
+2. **G5 — Local entity providers (complete):** ships, components, ship/FPS weapons,
    medical, commodities/crafting, journal facts, mission type/difficulty,
    spawn/ace/turret/engagement facts, and declarative build-scoped data fixes.
    Synthetic fixtures come first; every value has evidence and every provider
    has independent capability and drift diagnostics.
-3. **G6 — Tag Builder and legacy presentation:** route-aware mission titles,
-   independently controlled mission detail presentation, configurable
-   item/commodity/missile tags, favorites, mining/resource-signature features,
-   and the remaining legacy wording pack under the strict boundary above.
-4. **G7 — Experience parity:** dedicated simple mode, clear-localization flow,
-   GUI language selection and safe `USER.cfg` activation, portable/data-root
-   management with OneDrive guidance, filtered clipboard export, close-dirty
-   warning, active-localization indication, category toggles, stat placement,
-   localized UI, coach marks, redacted event-log viewer, and two additional
-   accessible themes.
+3. **G6 — Tag Builder and legacy presentation (complete):** tactical and entity
+   tags, route-aware titles, resource labels, favorites/ASOP ordering, nested
+   mission-token support, and the exact-build legacy mining pack are complete.
+4. **G7 — Experience parity (complete):** language selection/activation,
+   restore-to-stock, portable/custom data roots, synchronization warnings,
+   filtered clipboard export, close protection, active-localization context,
+   category toggles, stat placement, dedicated simple mode, coach marks, a
+   redacted event viewer, four themes, complete translator inventory,
+   pseudo-locale gates, bounded entity stats, and exact legacy presentation
+   rules are complete. Full native-reviewed feature-page translations remain
+   external contributor content.
 
 G4 began only after G3's complete local and hosted gate was green. G5 must not
 start until G4's complete local gate and review are green. Later phases may

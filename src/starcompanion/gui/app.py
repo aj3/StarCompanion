@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QRect, QTimer, Qt
+from PySide6.QtGui import QActionGroup
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -17,10 +18,13 @@ from PySide6.QtWidgets import (
 from ..config import Profile, UnsupportedProfileVersion, builtin_profiles, load_builtin
 from ..features import community_rewards_enabled
 from . import theme
+from .coach import CoachStep, CoachTour
+from .event_log import EventLog
 from .layout import LayoutError, LayoutState, LocalLayoutStore, WindowGeometry
 from .preferences import PAGE_KEYS, UiPreferences, UiPreferencesStore
 from .shell import ApplicationShell, PageSpec
 from .state import AppState
+from .ui_text import UiTranslator, normalize_ui_locale
 from .tabs import (
     AdvancedStringEditorTab,
     ApplyTab,
@@ -51,11 +55,20 @@ class MainWindow(QMainWindow):
         self._layout_restore_timer = QTimer(self)
         self._layout_restore_timer.setSingleShot(True)
         self._layout_restore_timer.timeout.connect(self._restore_visible_splitter)
+        self._close_after_save_timer = QTimer(self)
+        self._close_after_save_timer.setSingleShot(True)
+        self._close_after_save_timer.timeout.connect(self._finish_close_after_save)
+        self._close_after_editor_save = False
+        self._allow_dirty_close = False
+        self._tour: CoachTour | None = None
         loaded_preferences = self.ui_preferences_store.load(
             legacy_theme=self.state.profile.appearance.theme
         )
         loaded_layout = self.layout_store.load()
         self.ui_preferences = loaded_preferences.preferences
+        self.translator = UiTranslator(self.ui_preferences.interface_locale)
+        self.events = EventLog(parent=self)
+        self.events.publish("info", "application-started")
         self.ui_preference_warning = loaded_preferences.warning
         self.layout_warning = loaded_layout.warning
         self.setWindowTitle("StarCompanion")
@@ -66,7 +79,12 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1040, 680)
         self.resize(*self.DEFAULT_WINDOW_SIZE)
 
-        self.start = StartTab(self.state)
+        self.start = StartTab(
+            self.state,
+            language=self.ui_preferences.default_language,
+        )
+        self.start.languageChanged.connect(self._set_default_language)
+        self.start.scopeStatusChanged.connect(self._refresh_shell_context)
         self.source = SourceTab(self.state)
         self.fields = FieldsTab(self.state)
         self.formatting = FormattingTab(self.state)
@@ -85,9 +103,12 @@ class MainWindow(QMainWindow):
             installs_provider=lambda: self.start.installs,
             open_profile=self.open_profile,
             save_profile=self.save_profile,
+            event_log=self.events,
+            interface_locale=self.ui_preferences.interface_locale,
         )
 
         self.shell = ApplicationShell()
+        self.shell.set_translator(self.translator)
         # The underlying pages and order are unchanged. PageSpec only gives
         # the new shell clearer workflow language and layout metadata.
         self.shell.add_page(
@@ -194,6 +215,7 @@ class MainWindow(QMainWindow):
                 scrollable=False,
             ),
         )
+        self.shell.set_translator(self.translator)
         self.setCentralWidget(self.shell)
         # Keep the narrow tab-like API used by older GUI integration tests and
         # extensions while navigation is now rendered by ApplicationShell.
@@ -206,8 +228,14 @@ class MainWindow(QMainWindow):
         self.state.contractsChanged.connect(self._refresh_shell_context)
         self.state.pathsChanged.connect(self._refresh_shell_context)
         self.shell.themeRequested.connect(self.toggle_theme)
+        self.shell.simpleModeRequested.connect(
+            lambda: self.set_simple_mode(not self.ui_preferences.simple_mode)
+        )
         self.shell.pageChanged.connect(self._page_changed)
         self.support.settingsImported.connect(self._reload_imported_settings)
+        self.support.interfaceLocaleChanged.connect(self.set_interface_locale)
+        self.support.tourRequested.connect(self.start_guided_tour)
+        self.set_simple_mode(self.ui_preferences.simple_mode, persist=False)
         if not self.shell.set_current_key(self.ui_preferences.last_page):
             self.shell.set_current_key("overview")
             self.ui_preferences = self.ui_preferences.with_page("overview")
@@ -231,11 +259,49 @@ class MainWindow(QMainWindow):
 
     def toggle_theme(self) -> None:
         current = self.ui_preferences.theme
-        selected = "light" if current == "dark" else "dark"
+        index = theme.THEME_ORDER.index(current) if current in theme.THEME_ORDER else 0
+        selected = theme.THEME_ORDER[(index + 1) % len(theme.THEME_ORDER)]
+        self.select_theme(selected)
+
+    def select_theme(self, selected: str) -> None:
+        if selected not in theme.PALETTES:
+            return
         self.ui_preferences = self.ui_preferences.with_theme(selected)
         self.apply_theme()
         self._update_theme_action()
         self._save_ui_preferences()
+        self.events.publish("info", "interface-theme-changed", selected)
+
+    def set_simple_mode(self, enabled: bool, *, persist: bool = True) -> None:
+        enabled = bool(enabled)
+        self.shell.set_simple_mode(enabled)
+        self.start.set_simple_mode(enabled)
+        if hasattr(self, "simple_mode_action"):
+            self.simple_mode_action.setChecked(enabled)
+        if persist:
+            self.ui_preferences = self.ui_preferences.with_simple_mode(enabled)
+            self._save_ui_preferences()
+            self.events.publish(
+                "info", "workspace-mode-changed", "simple" if enabled else "full"
+            )
+
+    def set_interface_locale(self, locale: str, *, persist: bool = True) -> None:
+        selected = normalize_ui_locale(locale)
+        self.translator = UiTranslator(selected)
+        self.shell.set_translator(self.translator)
+        self.shell.set_theme_name(self.ui_preferences.theme)
+        self._refresh_shell_context()
+        if self.support.interface_language.currentData() != selected:
+            self.support.interface_language.blockSignals(True)
+            self.support.interface_language.setCurrentIndex(
+                self.support.interface_language.findData(selected)
+            )
+            self.support.interface_language.blockSignals(False)
+        self.support.interface_locale = selected
+        self.ui_preferences = self.ui_preferences.with_interface_locale(selected)
+        if persist:
+            self._save_ui_preferences()
+        self.events.publish("info", "interface-language-changed", selected)
 
     def _build_menu(self) -> None:
         menu = self.menuBar().addMenu("&Profile")
@@ -246,9 +312,26 @@ class MainWindow(QMainWindow):
         self.shell.profile_button.setMenu(shell_menu)
 
         view = self.menuBar().addMenu("&View")
-        self.theme_action = view.addAction("Switch to light theme", self.toggle_theme)
+        self.theme_action = view.addAction("Next theme", self.toggle_theme)
+        self.theme_menu = view.addMenu("Choose theme")
+        self.theme_group = QActionGroup(self)
+        self.theme_group.setExclusive(True)
+        self.theme_actions = {}
+        for name in theme.THEME_ORDER:
+            action = self.theme_menu.addAction(name.replace("-", " ").title())
+            action.setCheckable(True)
+            action.triggered.connect(lambda _checked=False, value=name: self.select_theme(value))
+            self.theme_group.addAction(action)
+            self.theme_actions[name] = action
+        self.simple_mode_action = view.addAction("Simple mode")
+        self.simple_mode_action.setCheckable(True)
+        self.simple_mode_action.triggered.connect(self.set_simple_mode)
         self.reset_layout_action = view.addAction(
             "Reset window layout…", self.reset_window_layout
+        )
+        help_menu = self.menuBar().addMenu("&Help")
+        self.guided_tour_action = help_menu.addAction(
+            "Guided tour…", self.start_guided_tour
         )
         self._update_theme_action()
 
@@ -262,8 +345,11 @@ class MainWindow(QMainWindow):
         menu.addAction("Save as…", self.save_profile)
 
     def _update_theme_action(self) -> None:
-        going_to = "light" if self.ui_preferences.theme == "dark" else "dark"
-        self.theme_action.setText(f"Switch to {going_to} theme")
+        index = theme.THEME_ORDER.index(self.ui_preferences.theme)
+        going_to = theme.THEME_ORDER[(index + 1) % len(theme.THEME_ORDER)]
+        self.theme_action.setText(f"Next theme: {going_to.replace('-', ' ').title()}")
+        for name, action in self.theme_actions.items():
+            action.setChecked(name == self.ui_preferences.theme)
         self.shell.set_theme_name(self.ui_preferences.theme)
 
     def _page_changed(self, key: str) -> None:
@@ -273,6 +359,7 @@ class MainWindow(QMainWindow):
             return
         self.ui_preferences = updated
         self._save_ui_preferences()
+        self.events.publish("info", "workspace-page-changed", key)
 
     def _open_recovery(self) -> None:
         self.shell.set_current_key("manual-apply")
@@ -297,6 +384,13 @@ class MainWindow(QMainWindow):
         self.ui_preferences = updated
         self._save_ui_preferences()
 
+    def _set_default_language(self, language: str) -> None:
+        updated = self.ui_preferences.with_default_language(language)
+        if updated == self.ui_preferences:
+            return
+        self.ui_preferences = updated
+        self._save_ui_preferences()
+
     def _reload_imported_settings(self, values: object) -> None:
         """Publish imported preferences/user values without crossing model boundaries."""
         if not isinstance(values, dict):
@@ -304,19 +398,27 @@ class MainWindow(QMainWindow):
         theme_name = values.get("theme", self.ui_preferences.theme)
         page = values.get("last_page", "overview")
         self.ui_preferences = UiPreferences(
-            theme=theme_name if theme_name in {"dark", "light"} else self.ui_preferences.theme,
+            theme=theme_name if theme_name in theme.PALETTES else self.ui_preferences.theme,
             last_page=page if page in PAGE_KEYS else "overview",
             link_live_hotfix=bool(values.get("link_live_hotfix", True)),
+            default_language=str(values.get("default_language", "english")),
+            simple_mode=bool(values.get("simple_mode", False)),
+            tutorial_completed=bool(values.get("tutorial_completed", False)),
+            interface_locale=normalize_ui_locale(values.get("interface_locale", "en-US")),
         )
         self.ui_preference_warning = None
         self._applied_theme = None
         self.apply_theme()
         self._update_theme_action()
+        self.set_interface_locale(self.ui_preferences.interface_locale, persist=False)
+        self.set_simple_mode(self.ui_preferences.simple_mode, persist=False)
         self._publish_interface_warning()
         self.blueprints.set_link_live_hotfix(
             self.ui_preferences.link_live_hotfix,
             persist=False,
         )
+        if self.start.selected_language != self.ui_preferences.default_language:
+            self.start.set_selected_language(self.ui_preferences.default_language)
         if not self.editor.document.dirty:
             self.editor.load_user_edits()
 
@@ -327,6 +429,10 @@ class MainWindow(QMainWindow):
             game = install.channel
             if install.version:
                 game = f"{game} {install.version}"
+            selected = self.start.selected_language
+            active = self.start.active_language or "not active"
+            override = "custom" if self.start.override_present else "stock"
+            game = f"{game} · {selected} selected · {active} active · {override}"
 
         contracts = self.state.contracts
         data = None
@@ -390,6 +496,70 @@ class MainWindow(QMainWindow):
     def showEvent(self, event) -> None:  # noqa: N802 - Qt API
         super().showEvent(event)
         self._schedule_pending_splitter_restore()
+
+    def start_guided_tour(self) -> None:
+        if self._tour is not None:
+            self._tour.raise_()
+            self._tour.activateWindow()
+            return
+        if self.ui_preferences.simple_mode:
+            steps = (
+                CoachStep(
+                    "overview",
+                    "Update safely",
+                    "This action reads local data when needed, prepares a preview, and asks before writing.",
+                    self.start.go,
+                ),
+                CoachStep(
+                    "overview",
+                    "Undo from a backup",
+                    "Undo uses the existing verified backup and confirmation workflow.",
+                    self.start.undo,
+                ),
+                CoachStep(
+                    "overview",
+                    "Open the full workspace",
+                    "Use Full mode when you want detailed presentation, provenance, ownership, and recovery tools.",
+                    self.shell.mode_button,
+                ),
+            )
+        else:
+            steps = (
+                CoachStep(
+                    "overview",
+                    "Start with one safe update",
+                    "StarCompanion reads local files, prepares an exact plan, and asks before every write.",
+                    self.start.go,
+                ),
+                CoachStep(
+                    "content",
+                    "Choose evidenced content",
+                    "Category controls enable only locally supported facts; individual controls remain available.",
+                    self.fields.category_boxes["rewards"],
+                ),
+                CoachStep(
+                    "string-editor",
+                    "Inspect every final string",
+                    "Search and edit the virtualized source graph with provenance and model-level undo.",
+                    self.editor.search,
+                ),
+                CoachStep(
+                    "support",
+                    "Review privacy and recovery",
+                    "Settings, diagnostics, events, and help remain local and inspectable.",
+                    self.support.pages,
+                ),
+            )
+        self._tour = CoachTour(steps, self.shell.set_current_key, self)
+        self._tour.completed.connect(self._guided_tour_completed)
+        self._tour.finished.connect(lambda _result: setattr(self, "_tour", None))
+        self._tour.show()
+        self.events.publish("info", "guided-tour-opened")
+
+    def _guided_tour_completed(self) -> None:
+        self.ui_preferences = self.ui_preferences.with_tutorial_completed()
+        self._save_ui_preferences()
+        self.events.publish("info", "guided-tour-completed")
 
     def _schedule_pending_splitter_restore(self) -> None:
         self._layout_restore_timer.start(0)
@@ -532,13 +702,65 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"StarCompanion — {self.state.profile.name}")
 
     def closeEvent(self, event) -> None:
+        if (
+            self.isVisible()
+            and self.editor.document.dirty
+            and not self._allow_dirty_close
+        ):
+            choice = QMessageBox.question(
+                self,
+                "Unsaved wording changes",
+                "The String editor has unsaved channel/language-specific changes.\n\n"
+                "Save writes them through the existing background C3 store. "
+                "Discard closes without writing them.",
+                QMessageBox.StandardButton.Save
+                | QMessageBox.StandardButton.Discard
+                | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if choice == QMessageBox.StandardButton.Cancel:
+                event.ignore()
+                return
+            if choice == QMessageBox.StandardButton.Save:
+                self.editor.save_user_edits()
+                if not self.editor.jobs_active:
+                    QMessageBox.warning(
+                        self,
+                        "Could not start save",
+                        "The editor could not start a safe background save. The window remains open.",
+                    )
+                    event.ignore()
+                    return
+                self._close_after_editor_save = True
+                self._close_after_save_timer.start(50)
+                event.ignore()
+                return
+            self._allow_dirty_close = True
         self._layout_restore_timer.stop()
+        self._close_after_save_timer.stop()
         self.start.shutdown_jobs()
         self.editor.shutdown_jobs()
         self.blueprints.shutdown_jobs()
         self.support.shutdown_jobs()
         self._save_layout()
         super().closeEvent(event)
+
+    def _finish_close_after_save(self) -> None:
+        if not self._close_after_editor_save:
+            return
+        if self.editor.jobs_active:
+            self._close_after_save_timer.start(50)
+            return
+        self._close_after_editor_save = False
+        if self.editor.document.dirty:
+            QMessageBox.warning(
+                self,
+                "Unsaved changes remain",
+                "The background save did not complete successfully. The window remains open.",
+            )
+            return
+        self._allow_dirty_close = True
+        self.close()
 
 
 def main(argv: list[str] | None = None) -> int:

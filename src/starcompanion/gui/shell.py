@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from .theme import SPACING
+from .ui_text import UiTranslator
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,7 @@ class ApplicationShell(QWidget):
 
     pageChanged = Signal(str)
     themeRequested = Signal()
+    simpleModeRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -110,6 +112,9 @@ class ApplicationShell(QWidget):
         self._nav_buttons: list[QPushButton] = []
         self._shortcuts: list[QShortcut] = []
         self._sections: set[str] = set()
+        self._section_labels: dict[str, QLabel] = {}
+        self._translator = UiTranslator()
+        self.simple_mode = False
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -136,10 +141,10 @@ class ApplicationShell(QWidget):
         brand_text.setSpacing(0)
         brand = QLabel("STARCOMPANION")
         brand.setProperty("role", "brand")
-        strapline = QLabel("LOCAL CONTRACT INTELLIGENCE")
-        strapline.setProperty("role", "overline")
+        self.strapline = QLabel(self._translator.text("app.strapline"))
+        self.strapline.setProperty("role", "overline")
         brand_text.addWidget(brand)
-        brand_text.addWidget(strapline)
+        brand_text.addWidget(self.strapline)
         brand_row.addLayout(brand_text, 1)
         side.addLayout(brand_row)
         side.addSpacing(SPACING.xlarge)
@@ -151,10 +156,10 @@ class ApplicationShell(QWidget):
         side.addLayout(self.nav_layout)
         side.addStretch(1)
 
-        local = QLabel("LOCAL-FIRST / NO TELEMETRY")
-        local.setProperty("role", "security")
-        local.setWordWrap(True)
-        side.addWidget(local)
+        self.local_label = QLabel(self._translator.text("app.local-first"))
+        self.local_label.setProperty("role", "security")
+        self.local_label.setWordWrap(True)
+        side.addWidget(self.local_label)
 
         main = QWidget()
         main.setObjectName("AppMain")
@@ -211,8 +216,16 @@ class ApplicationShell(QWidget):
             "Changes only the application appearance, not rendered game output."
         )
         self.theme_button.clicked.connect(self.themeRequested)
+        self.mode_button = QPushButton("SIMPLE MODE")
+        self.mode_button.setProperty("role", "compact")
+        self.mode_button.setAccessibleName("Switch simple or full workspace mode")
+        self.mode_button.setAccessibleDescription(
+            "Simple mode keeps the existing safe Update and Undo workflow; full mode restores every workspace page."
+        )
+        self.mode_button.clicked.connect(self.simpleModeRequested)
         action_row.addWidget(self.profile_button)
         action_row.addWidget(self.theme_button)
+        action_row.addWidget(self.mode_button)
         context.addLayout(action_row)
         header_layout.addLayout(context)
 
@@ -228,9 +241,7 @@ class ApplicationShell(QWidget):
             SPACING.xlarge,
             SPACING.small,
         )
-        self.status_text = QLabel(
-            "OFFLINE BY DESIGN   |   NO TELEMETRY   |   WRITES REQUIRE CONFIRMATION"
-        )
+        self.status_text = QLabel(self._translator.text("app.privacy"))
         self.status_text.setProperty("role", "security")
         self.status_text.setAccessibleName("Privacy and write-safety status")
         self.status_text.setAccessibleDescription(self.status_text.text())
@@ -262,6 +273,7 @@ class ApplicationShell(QWidget):
             section.setProperty("role", "nav-section")
             self.nav_layout.addWidget(section)
             self._sections.add(spec.section)
+            self._section_labels[spec.section] = section
 
         index = self.stack.add_page(
             page,
@@ -300,32 +312,45 @@ class ApplicationShell(QWidget):
     def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt API
         if watched in self._nav_buttons and event.type() == QEvent.Type.KeyPress:
             index = self._nav_buttons.index(watched)
+            visible = [
+                position
+                for position, button in enumerate(self._nav_buttons)
+                if not button.isHidden()
+            ]
+            position = visible.index(index) if index in visible else 0
             key = event.key()
             if key in (Qt.Key.Key_Down, Qt.Key.Key_Right):
-                self._activate_navigation((index + 1) % len(self._nav_buttons))
+                self._activate_navigation(visible[(position + 1) % len(visible)])
                 return True
             if key in (Qt.Key.Key_Up, Qt.Key.Key_Left):
-                self._activate_navigation((index - 1) % len(self._nav_buttons))
+                self._activate_navigation(visible[(position - 1) % len(visible)])
                 return True
             if key == Qt.Key.Key_Home:
-                self._activate_navigation(0)
+                self._activate_navigation(visible[0])
                 return True
             if key == Qt.Key.Key_End:
-                self._activate_navigation(len(self._nav_buttons) - 1)
+                self._activate_navigation(visible[-1])
                 return True
         return super().eventFilter(watched, event)
 
     def _activate_navigation(self, index: int) -> None:
+        if self._nav_buttons[index].isHidden():
+            return
         self.set_current_page(index)
         self._nav_buttons[index].setFocus(Qt.FocusReason.ShortcutFocusReason)
 
     def set_current_page(self, index: int) -> None:
-        if 0 <= index < self.stack.count():
+        if (
+            0 <= index < self.stack.count()
+            and (not self.simple_mode or self._specs[index].key == "overview")
+        ):
             self.stack.setCurrentIndex(index)
 
     def set_current_key(self, key: str) -> bool:
         for index, spec in enumerate(self._specs):
             if spec.key == key:
+                if self.simple_mode and key != "overview":
+                    return False
                 self.set_current_page(index)
                 return True
         return False
@@ -343,13 +368,55 @@ class ApplicationShell(QWidget):
         game: str | None,
         data: str | None,
     ) -> None:
-        self.profile_button.setText(f"PROFILE / {profile.upper()}")
-        self.game_badge.setText(f"GAME / {(game or 'NOT FOUND').upper()}")
-        self.data_badge.setText(f"DATA / {(data or 'NOT LOADED').upper()}")
+        text = self._translator.text
+        self.profile_button.setText(f"{text('app.profile')} / {profile.upper()}")
+        self.game_badge.setText(
+            f"{text('app.game')} / {(game or text('app.not-found')).upper()}"
+        )
+        self.data_badge.setText(
+            f"{text('app.data')} / {(data or text('app.not-loaded')).upper()}"
+        )
 
     def set_theme_name(self, current: str) -> None:
-        destination = "LIGHT" if current == "dark" else "DARK"
-        self.theme_button.setText(f"{destination} THEME")
+        self.theme_button.setText(
+            f"{self._translator.text('app.theme')} / {current.replace('-', ' ').upper()}"
+        )
+
+    def set_simple_mode(self, enabled: bool) -> None:
+        self.simple_mode = bool(enabled)
+        if self.simple_mode and self.current_key() != "overview":
+            self.set_current_page(0)
+        for index, button in enumerate(self._nav_buttons):
+            visible = not self.simple_mode or self._specs[index].key == "overview"
+            button.setVisible(visible)
+            self._shortcuts[index].setEnabled(visible)
+        for section, label in self._section_labels.items():
+            label.setVisible(
+                any(
+                    not button.isHidden() and spec.section == section
+                    for button, spec in zip(self._nav_buttons, self._specs)
+                )
+            )
+        key = "app.mode.full" if self.simple_mode else "app.mode.simple"
+        self.mode_button.setText(self._translator.text(key))
+
+    def set_translator(self, translator: UiTranslator) -> None:
+        self._translator = translator
+        text = translator.text
+        self.strapline.setText(text("app.strapline"))
+        self.local_label.setText(text("app.local-first"))
+        self.status_text.setText(text("app.privacy"))
+        self.status_text.setAccessibleDescription(self.status_text.text())
+        for spec, button in zip(self._specs, self._nav_buttons):
+            label = text(f"nav.{spec.key}", spec.nav_label)
+            button.setText(label.replace("&", "&&"))
+            button.setProperty("navigationLabel", label)
+            button.setAccessibleName(f"Open {label}")
+        for section, label in self._section_labels.items():
+            label.setText(text(f"section.{section.casefold()}", section.upper()))
+        if self._specs:
+            self._show_spec(self._specs[self.stack.currentIndex()])
+        self.set_simple_mode(self.simple_mode)
 
     def _current_changed(self, index: int) -> None:
         if not 0 <= index < len(self._specs):
@@ -360,5 +427,9 @@ class ApplicationShell(QWidget):
         self.pageChanged.emit(spec.key)
 
     def _show_spec(self, spec: PageSpec) -> None:
-        self.page_title.setText(spec.title)
-        self.page_description.setText(spec.description)
+        self.page_title.setText(
+            self._translator.text(f"page.{spec.key}.title", spec.title)
+        )
+        self.page_description.setText(
+            self._translator.text(f"page.{spec.key}.description", spec.description)
+        )

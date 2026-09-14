@@ -1,0 +1,157 @@
+{
+  "1.0.191.55227": {
+    "LIVE": {
+      "channel": "LIVE",
+      "datacore_version": 8,
+      "entities": {
+        "local-dataforge-commodities": {
+          "corrections_applied": 0,
+          "diagnostic_counts": {},
+          "evidence_links": 403,
+          "facts_emitted": 135,
+          "records_examined": 135,
+          "relationship_counts": {"composed-of-resource": 134},
+          "status": "available",
+          "value_counts": {"name": 135},
+          "version": "2"
+        },
+        "local-dataforge-components": {
+          "corrections_applied": 0,
+          "diagnostic_counts": {"component-field-missing": 12},
+          "evidence_links": 7308,
+          "facts_emitted": 2436,
+          "records_examined": 2448,
+          "relationship_counts": {},
+          "status": "available",
+          "value_counts": {"grade": 2436, "name": 2436, "size": 2436},
+          "version": "2"
+        },
+        "local-dataforge-crafting": {
+          "corrections_applied": 0,
+          "diagnostic_counts": {"missing-reference-target": 1},
+          "evidence_links": 23273,
+          "facts_emitted": 1641,
+          "records_examined": 1641,
+          "relationship_counts": {
+            "blueprint-category": 1607,
+            "produces-entity": 1637,
+            "requires-entity": 298,
+            "requires-resource": 4043
+          },
+          "status": "available",
+          "value_counts": {
+            "craft-days": 1607,
+            "craft-hours": 1607,
+            "craft-minutes": 1607,
+            "craft-seconds": 1607,
+            "craft-time": 34,
+            "name": 1641
+          },
+          "version": "2"
+        },
+        "local-dataforge-fps-weapons": {
+          "corrections_applied": 0,
+          "diagnostic_counts": {"fps-weapon-field-missing": 13},
+          "evidence_links": 392,
+          "facts_emitted": 392,
+          "records_examined": 405,
+          "relationship_counts": {},
+          "status": "available",
+          "value_counts": {"name": 392},
+          "version": "2"
+        },
+        "local-dataforge-journal": {
+          "corrections_applied": 0,
+          "diagnostic_counts": {"journal-field-missing": 1},
+          "evidence_links": 217,
+          "facts_emitted": 199,
+          "records_examined": 200,
+          "relationship_counts": {},
+          "status": "available",
+          "value_counts": {"body": 18, "title": 199},
+          "version": "2"
+        },
+        "local-dataforge-medical": {
+          "corrections_applied": 0,
+          "diagnostic_counts": {"medical-field-missing": 1},
+          "evidence_links": 25,
+          "facts_emitted": 16,
+          "records_examined": 17,
+          "relationship_counts": {},
+          "status": "available",
+          "value_counts": {"max-auto-dose": 9, "name": 16},
+          "version": "2"
+        },
+        "local-dataforge-ship-weapons": {
+          "corrections_applied": 0,
+          "diagnostic_counts": {"ship-weapon-field-missing": 13},
+          "evidence_links": 1333,
+          "facts_emitted": 633,
+          "records_examined": 646,
+          "relationship_counts": {},
+          "status": "available",
+          "value_counts": {"name": 633, "range": 67, "size": 633},
+          "version": "2"
+        },
+        "local-dataforge-vehicles": {
+          "corrections_applied": 0,
+          "diagnostic_counts": {},
+          "evidence_links": 2202,
+          "facts_emitted": 1101,
+          "records_examined": 1101,
+          "relationship_counts": {},
+          "status": "available",
+          "value_counts": {"crew-max": 1101, "name": 1101},
+          "version": "2"
+        }
+      },
+      "game_version": "1.0.191.55227",
+      "index_diagnostic_counts": {"pointer-cycle": 744},
+      "mission_tactical": {
+        "local-dataforge-mission-classification": {
+          "diagnostic_counts": {"shared-description-ambiguous": 1940},
+          "evidence_links": 9594,
+          "facts_emitted": 2364,
+          "records_examined": 108,
+          "status": "available",
+          "value_counts": {
+            "difficulty-knowledge": 2360,
+            "difficulty-mechanical-skill": 2360,
+            "difficulty-mental-load": 2360,
+            "difficulty-risk": 2360,
+            "mission-type": 77
+          },
+          "version": "2"
+        },
+        "local-dataforge-mission-engagement": {
+          "diagnostic_counts": {
+            "local-dataforge-mission-engagement-evidence-unavailable": 1
+          },
+          "evidence_links": 0,
+          "facts_emitted": 0,
+          "records_examined": 108,
+          "status": "unavailable",
+          "value_counts": {},
+          "version": "2"
+        },
+        "local-dataforge-mission-spawns": {
+          "diagnostic_counts": {
+            "ace-pilot-evidence-unavailable": 1,
+            "shared-description-ambiguous": 120,
+            "spawn-limit-unbounded": 1
+          },
+          "evidence_links": 6310,
+          "facts_emitted": 228,
+          "records_examined": 108,
+          "status": "available",
+          "value_counts": {"friendly-spawns": 8, "hostile-spawns": 228},
+          "version": "2"
+        }
+      },
+      "record_count": 116921,
+      "redaction": "aggregate-only",
+      "schema_sha256": "6ba64058346978718cd91bc048e956e6e465c0a99f0cdc0200948317b2b96c35",
+      "snapshot_version": 1
+    }
+  }
+}

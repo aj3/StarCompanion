@@ -9,6 +9,7 @@ from PySide6.QtCore import QItemSelection, QItemSelectionModel, QTimer, Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSpinBox,
     QSplitter,
     QTabWidget,
     QTableView,
@@ -38,7 +40,9 @@ from ...sharing import (
     plan_delta_pack,
     write_delta_pack,
 )
+from ...ship_presentation import set_ship_favorite, set_ship_order
 from ...user_edits import (
+    Change,
     EditCommand,
     EditSession,
     KeyResolution,
@@ -57,6 +61,7 @@ from ..string_editor import (
     StringFilterProxyModel,
     StringRecord,
     StringTableModel,
+    visible_rows_tsv,
 )
 
 
@@ -276,6 +281,15 @@ class AdvancedStringEditorTab(QWidget):
         self.export_pack_button = QPushButton("Export authored pack…")
         self.save_button = QPushButton("Save user edits")
         self.reload_button = QPushButton("Reload saved edits")
+        self.copy_visible_button = QPushButton("Copy visible rows")
+        self.favorite_button = QPushButton("★ Favorite")
+        self.unfavorite_button = QPushButton("Remove favorite")
+        self.asop_order = QSpinBox()
+        self.asop_order.setRange(1, 99)
+        self.asop_order.setValue(1)
+        self.asop_order.setPrefix("Start ")
+        self.order_button = QPushButton("Order selected")
+        self.clear_order_button = QPushButton("Clear order")
         self.save_button.setProperty("role", "primary")
         for button, name, description in (
             (self.undo_button, "Undo editor command", "Undo the previous in-memory edit command."),
@@ -313,6 +327,31 @@ class AdvancedStringEditorTab(QWidget):
                 "Reload saved user edits",
                 "Read the channel-scoped user.ini and history in a background worker.",
             ),
+            (
+                self.copy_visible_button,
+                "Copy visible string rows",
+                "Copy only the filtered projection without hidden rows or private provenance fields.",
+            ),
+            (
+                self.favorite_button,
+                "Favorite selected ships",
+                "Prepend the safe favorite marker to selected evidence-backed ship names.",
+            ),
+            (
+                self.unfavorite_button,
+                "Remove selected ship favorites",
+                "Remove only the recognized favorite marker from selected ship names.",
+            ),
+            (
+                self.order_button,
+                "Set selected ASOP order",
+                "Assign sequential two-digit ASOP prefixes to selected ship names.",
+            ),
+            (
+                self.clear_order_button,
+                "Clear selected ASOP order",
+                "Remove only recognized two-digit ASOP prefixes from selected ship names.",
+            ),
         ):
             button.setAccessibleName(name)
             button.setAccessibleDescription(description)
@@ -324,6 +363,26 @@ class AdvancedStringEditorTab(QWidget):
         self.export_pack_button.clicked.connect(self.export_delta_pack)
         self.save_button.clicked.connect(self.save_user_edits)
         self.reload_button.clicked.connect(lambda: self.load_user_edits(explicit=True))
+        self.copy_visible_button.clicked.connect(self.copy_visible_rows)
+        self.favorite_button.clicked.connect(lambda: self.favorite_selected(True))
+        self.unfavorite_button.clicked.connect(lambda: self.favorite_selected(False))
+        self.order_button.clicked.connect(self.order_selected)
+        self.clear_order_button.clicked.connect(self.clear_order_selected)
+
+        self.asop_order.setAccessibleName("First ASOP order number")
+        self.asop_order.setAccessibleDescription(
+            "Selected ships receive sequential order numbers beginning here."
+        )
+
+        ship_actions = QHBoxLayout()
+        ship_actions.addWidget(QLabel("Evidence-backed ship names:"))
+        ship_actions.addWidget(self.favorite_button)
+        ship_actions.addWidget(self.unfavorite_button)
+        ship_actions.addSpacing(12)
+        ship_actions.addWidget(self.asop_order)
+        ship_actions.addWidget(self.order_button)
+        ship_actions.addWidget(self.clear_order_button)
+        ship_actions.addStretch(1)
 
         history_actions = QHBoxLayout()
         history_actions.addWidget(self.undo_button)
@@ -334,6 +393,7 @@ class AdvancedStringEditorTab(QWidget):
         history_actions.addWidget(self.import_pack_button)
         history_actions.addWidget(self.export_pack_button)
         history_actions.addWidget(self.reload_button)
+        history_actions.addWidget(self.copy_visible_button)
         history_actions.addWidget(self.save_button)
 
         detail = SectionCard(
@@ -363,6 +423,7 @@ class AdvancedStringEditorTab(QWidget):
         layout.addWidget(self.filter_section)
         layout.addWidget(self.empty)
         layout.addWidget(self.workspace, 1)
+        layout.addLayout(ship_actions)
         layout.addLayout(history_actions)
 
         self.search_timer = QTimer(self)
@@ -399,6 +460,11 @@ class AdvancedStringEditorTab(QWidget):
             self.merged_editor,
             self.provenance_view,
             self.preview_view,
+            self.favorite_button,
+            self.unfavorite_button,
+            self.asop_order,
+            self.order_button,
+            self.clear_order_button,
             self.undo_button,
             self.redo_button,
             self.reset_button,
@@ -406,6 +472,7 @@ class AdvancedStringEditorTab(QWidget):
             self.import_pack_button,
             self.export_pack_button,
             self.reload_button,
+            self.copy_visible_button,
             self.save_button,
         ]
         for current, following in zip(focus_order, focus_order[1:]):
@@ -730,6 +797,81 @@ class AdvancedStringEditorTab(QWidget):
         self._after_model_change()
         self._restore_selection(keys)
 
+    def _selected_ships(self) -> list[StringRecord]:
+        return [
+            record
+            for record in self._selected_records()
+            if record.category == "vehicle"
+            and (record.rendered is not None or record.stock is not None)
+        ]
+
+    def _apply_ship_command(self, label: str, changes: list[Change]) -> None:
+        effective = tuple(
+            change for change in changes if change.before != change.after
+        )
+        if not effective:
+            return
+        keys = self.document.execute(EditCommand(label, effective))
+        self.model.rebuild()
+        self._after_model_change()
+        self._restore_selection(keys)
+
+    @staticmethod
+    def _ship_source(record: StringRecord) -> str:
+        return record.rendered if record.rendered is not None else record.stock or ""
+
+    def favorite_selected(self, enabled: bool) -> None:
+        changes = []
+        for record in self._selected_ships():
+            before = self.document.values.get(record.key)
+            after = set_ship_favorite(
+                self._ship_source(record), before, enabled
+            )
+            changes.append(Change(record.key, before, after))
+        self._apply_ship_command(
+            "favorite selected ships" if enabled else "remove selected ship favorites",
+            changes,
+        )
+
+    def order_selected(self) -> None:
+        records = self._selected_ships()
+        first = self.asop_order.value()
+        if records and first + len(records) - 1 > 99:
+            self.status.set_tone(Tone.WARNING)
+            self.status.setText(
+                "The selected ships do not fit in ASOP positions 01–99 from that start."
+            )
+            return
+        changes = []
+        for offset, record in enumerate(records):
+            before = self.document.values.get(record.key)
+            after = set_ship_order(
+                self._ship_source(record), before, first + offset
+            )
+            changes.append(Change(record.key, before, after))
+        self._apply_ship_command("order selected ships for ASOP", changes)
+
+    def clear_order_selected(self) -> None:
+        changes = []
+        for record in self._selected_ships():
+            before = self.document.values.get(record.key)
+            after = set_ship_order(self._ship_source(record), before, None)
+            changes.append(Change(record.key, before, after))
+        self._apply_ship_command("clear selected ASOP order", changes)
+
+    def copy_visible_rows(self) -> None:
+        try:
+            payload = visible_rows_tsv(self.proxy)
+        except ValueError as exc:
+            self.status.set_tone(Tone.WARNING)
+            self.status.setText(str(exc))
+            return
+        QApplication.clipboard().setText(payload)
+        self.status.set_tone(Tone.SUCCESS)
+        self.status.setText(
+            f"Copied {self.proxy.rowCount():,} visible rows without hidden provenance."
+        )
+
     def _restore_selection(self, keys: tuple[str, ...]) -> None:
         if not keys or self.model.snapshot is None:
             return
@@ -761,6 +903,12 @@ class AdvancedStringEditorTab(QWidget):
         self.reset_button.setEnabled(
             any(record.key in self.document.values for record in self._selected_records())
         )
+        ships = self._selected_ships()
+        self.favorite_button.setEnabled(bool(ships))
+        self.unfavorite_button.setEnabled(bool(ships))
+        self.asop_order.setEnabled(bool(ships))
+        self.order_button.setEnabled(bool(ships))
+        self.clear_order_button.setEnabled(bool(ships))
         self.save_button.setEnabled(
             scope is not None
             and scope == self._scope_key
@@ -788,6 +936,7 @@ class AdvancedStringEditorTab(QWidget):
             and not self._jobs
         )
         self.reload_button.setEnabled(scope is not None and not self._jobs)
+        self.copy_visible_button.setEnabled(self.proxy.rowCount() > 0)
 
     # --- background C3 persistence -------------------------------------
 
@@ -1230,6 +1379,12 @@ class AdvancedStringEditorTab(QWidget):
         )
 
     def save_user_edits(self) -> None:
+        # Fold the final visible keystroke into the command before the worker
+        # snapshots it; otherwise the debounce can race save completion.
+        if self.edit_timer.isActive():
+            self.edit_timer.stop()
+            self._apply_value_edit()
+        self.rebuild_timer.stop()
         scope = self._scope()
         snapshot = self.model.snapshot
         command = self.document.save_command()
@@ -1320,6 +1475,10 @@ class AdvancedStringEditorTab(QWidget):
         for job in tuple(self._jobs):
             job.shutdown(5000)
         self._jobs.clear()
+
+    @property
+    def jobs_active(self) -> bool:
+        return bool(self._jobs)
 
 
 __all__ = [

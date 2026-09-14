@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
+import sys
 
 from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
@@ -22,6 +24,13 @@ from PySide6.QtWidgets import (
 )
 
 from ...config import builtin_profiles, load_builtin
+from ...data_location import (
+    DataMigrationPlan,
+    apply_data_migration,
+    plan_data_migration,
+    portable_data_root,
+    resolve_data_location,
+)
 from ...diagnostics import build_diagnostics, render_diagnostics, write_diagnostics
 from ...portability import (
     SettingsImportPlan,
@@ -35,8 +44,10 @@ from ...portability import (
 )
 from ...user_edits import data_dir
 from ..components import NoticeBanner, SectionCard, Tone
+from ..event_log import EventLog, LEVELS, write_event_export
 from ..jobs import QtOperationJob
 from ..state import AppState
+from ..ui_text import LOCALE_LABELS, normalize_ui_locale
 
 
 HELP_ARTICLES = (
@@ -50,7 +61,10 @@ HELP_ARTICLES = (
         "Channels and languages",
         "Localization, user wording, caches, and operation plans stay scoped to the selected "
         "channel and language. Blueprint ownership reviews LIVE and HOTFIX together by default; "
-        "the visible option can separate them, while PTU, EPTU, and TECH-PREVIEW always remain isolated.",
+        "the visible option can separate them, while PTU, EPTU, and TECH-PREVIEW always remain isolated."
+        " Discover installed languages before activation. StarCompanion changes only the effective "
+        "g_language line in USER.cfg after preview, backup, and confirmation. Restore stock removes "
+        "only the selected loose localization override through the same safe plan.",
     ),
     (
         "Blueprint ownership",
@@ -67,7 +81,9 @@ HELP_ARTICLES = (
         "Settings portability",
         "Export creates a bounded manifest-verified archive of interface preferences, user wording, "
         "and language packs. Import is preview-first, rejects unsafe paths and duplicate members, and "
-        "requires explicit replacement approval for conflicts.",
+        "requires explicit replacement approval for conflicts. Application data can also be copied "
+        "to a validated custom or packaged beside-executable root; the source remains untouched and "
+        "the new root activates only after restart.",
     ),
     (
         "Privacy and diagnostics",
@@ -76,10 +92,18 @@ HELP_ARTICLES = (
         "strings, and user-authored values are redacted or excluded.",
     ),
     (
+        "Interface modes, tour, themes, and events",
+        "Simple mode keeps only the existing Update and Undo workflow visible; Full mode restores every "
+        "workspace. The replayable guided tour changes focus only. Four bundled themes share one reviewed "
+        "stylesheet. Interface catalogs are bundled and independent from the game language. The event viewer "
+        "stores at most 500 redacted interface events and never reads Game.log.",
+    ),
+    (
         "Validation and source precedence",
         "Stock localization is followed by generated profile output and then explicit user wording. "
         "The string editor shows every contribution and blocks invalid operation plans without "
-        "inventing localization text.",
+        "inventing localization text. Copy visible rows exports only the filtered bounded projection "
+        "and excludes hidden provenance.",
     ),
     (
         "Structured presentation",
@@ -107,6 +131,8 @@ class SupportTab(QWidget):
     """Local administration tools with all filesystem work in Qt jobs."""
 
     settingsImported = Signal(object)
+    interfaceLocaleChanged = Signal(str)
+    tourRequested = Signal()
 
     def __init__(
         self,
@@ -115,6 +141,8 @@ class SupportTab(QWidget):
         installs_provider=lambda: (),
         open_profile=None,
         save_profile=None,
+        event_log: EventLog | None = None,
+        interface_locale: str = "en-US",
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
@@ -122,10 +150,14 @@ class SupportTab(QWidget):
         self.installs_provider = installs_provider
         self.open_profile_action = open_profile
         self.save_profile_action = save_profile
+        self.event_log = event_log if event_log is not None else EventLog(parent=self)
+        self.interface_locale = normalize_ui_locale(interface_locale)
         self._jobs: set[QtOperationJob] = set()
         self._shutting_down = False
         self._diagnostics: dict[str, object] | None = None
         self._import_plan: SettingsImportPlan | None = None
+        self._migration_plan: DataMigrationPlan | None = None
+        self._session_data_root = data_dir()
 
         self.status = NoticeBanner(
             "Profile, portability, diagnostics, and help remain local to this computer.",
@@ -136,6 +168,7 @@ class SupportTab(QWidget):
         self.pages.addTab(self._profile_page(), "Profile")
         self.pages.addTab(self._settings_page(), "Portability")
         self.pages.addTab(self._diagnostics_page(), "Diagnostics")
+        self.pages.addTab(self._events_page(), "Event viewer")
         self.pages.addTab(self._help_page(), "Offline help")
 
         layout = QVBoxLayout(self)
@@ -145,6 +178,8 @@ class SupportTab(QWidget):
         state.profileChanged.connect(self._profile_changed)
         self._profile_changed()
         self._filter_help()
+        self.event_log.changed.connect(self._refresh_events)
+        self._refresh_events()
 
     def _profile_page(self) -> QWidget:
         page = QWidget()
@@ -186,12 +221,81 @@ class SupportTab(QWidget):
         section.add_widget(self.profile_builtin)
         section.add_layout(actions)
         layout.addWidget(section)
+        self.interface_language = QComboBox()
+        self.interface_language.setAccessibleName("Application interface language")
+        self.interface_language.setAccessibleDescription(
+            "Choose a bundled offline interface catalog independently from the selected game language."
+        )
+        for locale, label in LOCALE_LABELS.items():
+            self.interface_language.addItem(label, locale)
+        self.interface_language.setCurrentIndex(
+            max(0, self.interface_language.findData(self.interface_locale))
+        )
+        self.interface_language.currentIndexChanged.connect(
+            self._interface_language_selected
+        )
+        self.replay_tour_button = QPushButton("Replay guided tour")
+        self.replay_tour_button.setAccessibleName("Replay the guided interface tour")
+        self.replay_tour_button.setAccessibleDescription(
+            "Walk through existing controls without reading, changing, or transmitting data."
+        )
+        self.replay_tour_button.clicked.connect(self.tourRequested)
+        experience = SectionCard(
+            "Interface experience",
+            "Simple/full mode, theme, and interface language are portable UI preferences and never change generated game text.",
+        )
+        experience.add_widget(self.interface_language)
+        experience.add_widget(self.replay_tour_button)
+        layout.addWidget(experience)
         layout.addStretch(1)
         return page
+
+    def _interface_language_selected(self, index: int) -> None:
+        locale = self.interface_language.itemData(index)
+        if isinstance(locale, str):
+            self.interface_locale = normalize_ui_locale(locale)
+            self.interfaceLocaleChanged.emit(self.interface_locale)
 
     def _settings_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
+        self.data_location_detail = QLabel()
+        self.data_location_detail.setWordWrap(True)
+        self.data_location_detail.setProperty("role", "muted")
+        self.data_location_warning = NoticeBanner(tone=Tone.WARNING)
+        self.choose_data_location_button = QPushButton("Choose data directory…")
+        self.choose_data_location_button.setAccessibleName("Choose application data directory")
+        self.choose_data_location_button.setAccessibleDescription(
+            "Preview a bounded copy-only migration; the source remains untouched and the new root activates on restart."
+        )
+        self.choose_data_location_button.clicked.connect(self.choose_data_location)
+        self.portable_mode_button = QPushButton("Use beside-executable data…")
+        self.portable_mode_button.setAccessibleName("Use beside-executable portable data")
+        self.portable_mode_button.setAccessibleDescription(
+            "For packaged builds, preview copying portable state beside StarCompanion and enable it on restart."
+        )
+        self.portable_mode_button.clicked.connect(self.enable_portable_mode)
+        self.apply_data_location_button = QPushButton("Apply reviewed data move…")
+        self.apply_data_location_button.setProperty("role", "danger")
+        self.apply_data_location_button.setAccessibleName("Apply reviewed data-directory migration")
+        self.apply_data_location_button.setAccessibleDescription(
+            "Copy only reviewed allowlisted files, preserve the source, and activate the new root after restart."
+        )
+        self.apply_data_location_button.setEnabled(False)
+        self.apply_data_location_button.clicked.connect(self.apply_data_location)
+        data_actions = QHBoxLayout()
+        data_actions.addWidget(self.choose_data_location_button)
+        data_actions.addWidget(self.portable_mode_button)
+        data_actions.addWidget(self.apply_data_location_button)
+        data_actions.addStretch(1)
+        data_section = SectionCard(
+            "Application data location",
+            "User wording, ownership, settings, and local layout can be copied safely. Cache files are disposable and are not migrated.",
+        )
+        data_section.add_widget(self.data_location_detail)
+        data_section.add_widget(self.data_location_warning)
+        data_section.add_layout(data_actions)
+        layout.addWidget(data_section)
         self.settings_detail = QLabel(
             "Exported archives include allowlisted preferences, channel/language user.ini files, and language packs."
         )
@@ -245,7 +349,105 @@ class SupportTab(QWidget):
         section.add_layout(actions)
         layout.addWidget(section)
         layout.addStretch(1)
+        self._refresh_data_location()
         return page
+
+    def _refresh_data_location(self) -> None:
+        location = resolve_data_location()
+        self.data_location_detail.setText(
+            f"Mode: {location.mode}\nCurrent root: {location.root}\n"
+            "A migration changes future launches only; the current session keeps its opened stores."
+        )
+        self.data_location_warning.setText(location.warning or "")
+        self.data_location_warning.setVisible(bool(location.warning))
+        environment_locked = location.mode == "environment"
+        self.choose_data_location_button.setEnabled(not environment_locked)
+        packaged = bool(getattr(sys, "frozen", False))
+        self.portable_mode_button.setEnabled(packaged and not environment_locked)
+        if environment_locked:
+            self.choose_data_location_button.setToolTip(
+                "STARCOMPANION_DATA controls this process; remove that environment setting first."
+            )
+        elif not packaged:
+            self.portable_mode_button.setToolTip(
+                "Beside-executable mode is enabled only in a packaged StarCompanion build."
+            )
+
+    def choose_data_location(self) -> None:
+        destination = QFileDialog.getExistingDirectory(
+            self, "Choose a new StarCompanion data directory"
+        )
+        if not destination or self._jobs:
+            return
+        self._plan_data_location(Path(destination), "custom")
+
+    def enable_portable_mode(self) -> None:
+        if self._jobs or not getattr(sys, "frozen", False):
+            return
+        self._plan_data_location(portable_data_root(), "portable")
+
+    def _plan_data_location(self, destination: Path, mode: str) -> None:
+        source = self._session_data_root
+        self._migration_plan = None
+        self.apply_data_location_button.setEnabled(False)
+        self._start_job(
+            lambda token, _reporter: (
+                token.checkpoint(),
+                plan_data_migration(source, destination, mode=mode),
+                token.checkpoint(),
+            )[1],
+            self._data_location_planned,
+        )
+
+    def _data_location_planned(self, plan: DataMigrationPlan) -> None:
+        self._migration_plan = plan
+        self.settings_preview.setPlainText(
+            "Data-directory migration preview\n"
+            f"Mode: {plan.mode}\n"
+            f"Source: {plan.source_root}\n"
+            f"Destination: {plan.destination_root}\n\n"
+            + "\n".join(
+                f"{item.outcome.upper():9} {item.relative_path} ({item.size:,} bytes)"
+                for item in plan.entries
+            )
+        )
+        self.apply_data_location_button.setEnabled(True)
+        self.status.set_tone(Tone.SUCCESS)
+        self.status.setText(
+            f"Reviewed {len(plan.entries):,} allowlisted files; {len(plan.changes):,} require copying."
+        )
+
+    def apply_data_location(self) -> None:
+        plan = self._migration_plan
+        if plan is None or self._jobs:
+            return
+        if QMessageBox.question(
+            self,
+            "Apply reviewed data-directory migration?",
+            f"Copy {len(plan.changes):,} file(s) to:\n{plan.destination_root}\n\n"
+            "The source is not deleted. The new location takes effect after restart.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        self._start_job(
+            lambda token, _reporter: (
+                token.checkpoint(),
+                apply_data_migration(plan, confirmed=True),
+            )[1],
+            lambda _result: self._data_location_applied(plan),
+        )
+
+    def _data_location_applied(self, plan: DataMigrationPlan) -> None:
+        self._migration_plan = None
+        self.apply_data_location_button.setEnabled(False)
+        # Freeze new stores on the open root until this process exits. The
+        # process-only override disappears before the next normal launch.
+        os.environ["STARCOMPANION_DATA"] = str(self._session_data_root)
+        self.status.set_tone(Tone.SUCCESS)
+        self.status.setText(
+            f"Data copied safely to {plan.destination_root}. Restart StarCompanion to use it; the original remains recoverable."
+        )
 
     def _diagnostics_page(self) -> QWidget:
         page = QWidget()
@@ -283,6 +485,89 @@ class SupportTab(QWidget):
         section.add_layout(actions)
         layout.addWidget(section, 1)
         return page
+
+    def _events_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        self.event_level = QComboBox()
+        self.event_level.addItem("All levels", None)
+        for level in LEVELS:
+            self.event_level.addItem(level.title(), level)
+        self.event_level.setAccessibleName("Application event level filter")
+        self.event_level.setAccessibleDescription(
+            "Filter the bounded in-memory redacted event list."
+        )
+        self.event_level.currentIndexChanged.connect(self._refresh_events)
+        self.event_view = QPlainTextEdit()
+        self.event_view.setReadOnly(True)
+        self.event_view.setAccessibleName("Redacted application event viewer")
+        self.event_view.setAccessibleDescription(
+            "Shows only bounded event codes and redacted summaries; raw game logs and strings are excluded."
+        )
+        self.clear_events_button = QPushButton("Clear in-memory events")
+        self.clear_events_button.setAccessibleName("Clear application events")
+        self.clear_events_button.setAccessibleDescription(
+            "Forget the bounded in-memory event ring without deleting or changing any files."
+        )
+        self.clear_events_button.clicked.connect(self.event_log.clear)
+        self.export_events_button = QPushButton("Export redacted events…")
+        self.export_events_button.setAccessibleName("Export redacted application events")
+        self.export_events_button.setAccessibleDescription(
+            "Write only the currently filtered bounded event records after choosing a destination."
+        )
+        self.export_events_button.clicked.connect(self.export_events)
+        actions = QHBoxLayout()
+        actions.addWidget(self.clear_events_button)
+        actions.addWidget(self.export_events_button)
+        actions.addStretch(1)
+        section = SectionCard(
+            "Bounded redacted event viewer",
+            "The ring stores at most 500 local interface events. It never ingests Game.log, localization values, ownership, or raw exception text.",
+        )
+        section.add_widget(self.event_level)
+        section.add_widget(self.event_view, 1)
+        section.add_layout(actions)
+        layout.addWidget(section, 1)
+        return page
+
+    def _refresh_events(self, *_args) -> None:
+        level = self.event_level.currentData()
+        lines = [
+            f"{item.timestamp}  {item.level.upper():7}  {item.event}"
+            + (f"  —  {item.detail}" if item.detail else "")
+            for item in self.event_log.entries(level)
+        ]
+        self.event_view.setPlainText("\n".join(lines))
+        self.export_events_button.setEnabled(bool(lines) and not self._jobs)
+
+    def export_events(self) -> None:
+        if self._jobs or not self.event_log.entries(self.event_level.currentData()):
+            return
+        destination, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export redacted application events",
+            "starcompanion-events.json",
+            "JSON (*.json)",
+        )
+        if not destination:
+            return
+        payload = self.event_log.export_bytes(self.event_level.currentData())
+        path = Path(destination)
+        self._start_job(
+            lambda token, _reporter: self._write_events(token, path, payload),
+            lambda written: self._events_exported(written),
+        )
+
+    @staticmethod
+    def _write_events(token, destination: Path, payload: bytes) -> Path:
+        token.checkpoint()
+        write_event_export(destination, payload)
+        token.checkpoint()
+        return destination
+
+    def _events_exported(self, destination: Path) -> None:
+        self.status.set_tone(Tone.SUCCESS)
+        self.status.setText(f"Exported the reviewed redacted event list to {destination}.")
 
     def _help_page(self) -> QWidget:
         page = QWidget()
@@ -557,6 +842,7 @@ class SupportTab(QWidget):
         job.start()
 
     def _job_failed(self, exc: Exception) -> None:
+        self.event_log.publish("error", "local-admin-operation-stopped")
         self.status.set_tone(Tone.DANGER)
         self.status.setText(f"Local administration operation stopped safely: {exc}")
 
@@ -578,6 +864,10 @@ class SupportTab(QWidget):
             not busy and self._import_plan is not None and bool(self._import_plan.changes)
         )
         self.export_diagnostics_button.setEnabled(not busy and self._diagnostics is not None)
+        self.clear_events_button.setEnabled(not busy)
+        self.export_events_button.setEnabled(
+            not busy and bool(self.event_log.entries(self.event_level.currentData()))
+        )
 
     def shutdown_jobs(self) -> None:
         if self._shutting_down:

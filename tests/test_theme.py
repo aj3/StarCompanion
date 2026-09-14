@@ -1,6 +1,6 @@
 """The design-token layer.
 
-The point of these is that the two themes stay in step and that colours do not
+The point of these is that all themes stay in step and that colours do not
 leak back into widget code, which is how a theme system rots.
 """
 
@@ -18,8 +18,13 @@ GUI_DIR = Path(theme.__file__).parent
 # --- palettes ----------------------------------------------------------------
 
 
-def test_both_themes_exist():
-    assert set(theme.PALETTES) == {"dark", "light"}
+def test_four_themes_exist():
+    assert set(theme.PALETTES) == {
+        "dark",
+        "light",
+        "midnight",
+        "high-contrast",
+    }
 
 
 def test_dark_is_the_default():
@@ -37,7 +42,7 @@ def test_theme_lookup_is_case_insensitive():
     assert theme.palette("LIGHT").name == "light"
 
 
-@pytest.mark.parametrize("name", ["dark", "light"])
+@pytest.mark.parametrize("name", theme.THEME_ORDER)
 def test_every_colour_is_a_valid_hex_value(name):
     colours = theme.palette(name)
     for token in theme.COLOUR_TOKENS:
@@ -45,11 +50,13 @@ def test_every_colour_is_a_valid_hex_value(name):
         assert re.fullmatch(r"#[0-9a-fA-F]{6}", value), f"{name}.{token} = {value!r}"
 
 
-def test_the_two_palettes_define_the_same_tokens():
-    """Neither theme may quietly gain or lose a colour."""
-    dark = {f: getattr(theme.DARK, f) for f in theme.COLOUR_TOKENS}
-    light = {f: getattr(theme.LIGHT, f) for f in theme.COLOUR_TOKENS}
-    assert set(dark) == set(light)
+def test_all_palettes_define_the_same_tokens():
+    """No theme may quietly gain or lose a colour."""
+    token_sets = [
+        {field: getattr(colours, field) for field in theme.COLOUR_TOKENS}
+        for colours in theme.PALETTES.values()
+    ]
+    assert all(set(values) == set(token_sets[0]) for values in token_sets)
 
 
 def test_the_themes_actually_differ():
@@ -71,21 +78,21 @@ def test_dark_is_dark_and_light_is_light():
 # --- stylesheet --------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", ["dark", "light"])
+@pytest.mark.parametrize("name", theme.THEME_ORDER)
 def test_stylesheet_is_produced(name):
     css = theme.stylesheet(theme.palette(name))
     assert len(css) > 2000
     assert "QPushButton" in css and "QTabBar::tab" in css
 
 
-@pytest.mark.parametrize("name", ["dark", "light"])
+@pytest.mark.parametrize("name", theme.THEME_ORDER)
 def test_stylesheet_has_no_unfilled_placeholders(name):
     css = theme.stylesheet(theme.palette(name))
     assert "{{" not in css and "}}" not in css
     assert "None" not in css
 
 
-@pytest.mark.parametrize("name", ["dark", "light"])
+@pytest.mark.parametrize("name", theme.THEME_ORDER)
 def test_every_colour_token_is_used(name):
     """An unused token is either dead weight or a forgotten style."""
     colours = theme.palette(name)
@@ -98,14 +105,12 @@ def test_every_colour_token_is_used(name):
     assert unused == [], f"tokens defined but never styled: {unused}"
 
 
-def test_the_two_themes_share_one_generator():
-    """Same rules, different values -- so light cannot drift from dark."""
-    dark = theme.stylesheet(theme.DARK)
-    light = theme.stylesheet(theme.LIGHT)
-
+def test_all_themes_share_one_generator():
+    """Same rules, different values keep every palette synchronized."""
     selectors = lambda css: re.findall(r"^([A-Z][^\n{]*)\{", css, re.MULTILINE)
-    assert selectors(dark) == selectors(light)
-    assert dark != light
+    stylesheets = [theme.stylesheet(colours) for colours in theme.PALETTES.values()]
+    assert all(selectors(css) == selectors(stylesheets[0]) for css in stylesheets)
+    assert len(set(stylesheets)) == len(stylesheets)
 
 
 def test_role_styles_exist_for_the_important_actions():
@@ -192,7 +197,7 @@ def _contrast(first: str, second: str) -> float:
     return (brighter + 0.05) / (darker + 0.05)
 
 
-@pytest.mark.parametrize("colours", [theme.DARK, theme.LIGHT])
+@pytest.mark.parametrize("colours", theme.PALETTES.values())
 def test_semantic_text_colours_meet_wcag_aa_contrast(colours):
     pairs = [
         (colours.text, colours.canvas),
@@ -210,7 +215,7 @@ def test_semantic_text_colours_meet_wcag_aa_contrast(colours):
     assert all(_contrast(foreground, background) >= 4.5 for foreground, background in pairs)
 
 
-@pytest.mark.parametrize("colours", [theme.DARK, theme.LIGHT])
+@pytest.mark.parametrize("colours", theme.PALETTES.values())
 def test_focus_ring_meets_non_text_contrast(colours):
     assert _contrast(colours.focus, colours.canvas) >= 3
     assert _contrast(colours.focus, colours.surface) >= 3

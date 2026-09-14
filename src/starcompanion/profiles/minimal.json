@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 6,
   "name": "minimal",
   "description": "Rep and blueprint flag in titles only; descriptions left as CIG wrote them.",
   "fields": {
@@ -27,6 +27,11 @@
     "labels": {},
     "reputation_separator": " / ",
     "thousands_separator": true
+  },
+  "mission_presentation": {
+    "facts": {},
+    "description_details": false,
+    "tags": {"enabled": false}
   },
   "templates": {},
   "injection": {

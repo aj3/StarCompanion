@@ -5,10 +5,14 @@ import pytest
 from starcompanion.model import (
     BlueprintPool,
     Contract,
+    ContractSet,
     Difficulty,
+    Evidence,
+    FactConfidence,
     Gate,
     GateKind,
     Org,
+    MissionDetail,
     Reward,
     ScenarioPoints,
     StringKind,
@@ -42,6 +46,32 @@ def render(contract, key="d", **opts):
     return Renderer(RenderOptions(**opts)).render_key(contract, key)
 
 
+def tactical_contract() -> Contract:
+    evidence = Evidence("local-tactical", "record", "mission.xml", "$.fact", 7)
+    return make_contract(
+        mission_details=[
+            MissionDetail(
+                "mission-type",
+                "Bounty",
+                FactConfidence.HIGH,
+                (evidence,),
+            ),
+            MissionDetail(
+                "hostile-spawns",
+                7,
+                FactConfidence.HIGH,
+                (evidence,),
+            ),
+            MissionDetail(
+                "ace-probability",
+                0.25,
+                FactConfidence.MEDIUM,
+                (evidence,),
+            ),
+        ]
+    )
+
+
 # --- output safety -----------------------------------------------------------
 
 
@@ -54,6 +84,17 @@ def test_template_newlines_become_literal_escapes():
 def test_rendered_output_always_passes_validation():
     value = render(make_contract())
     assert validate_value(value) == []
+
+
+def test_mission_detail_text_rejects_game_markup_injection():
+    evidence = Evidence("provider", "record", "path", "$.field", "value")
+    with pytest.raises(ValueError, match="unsafe"):
+        MissionDetail(
+            "mission-type",
+            "<EM4>Injected</EM4>",
+            FactConfidence.HIGH,
+            (evidence,),
+        )
 
 
 def test_renderer_preserves_cig_placeholder_tags_from_stock():
@@ -126,6 +167,56 @@ def test_template_cannot_reach_python_internals(expression):
 def test_reputation_toggle():
     assert "Reputation Awarded" in render(make_contract())
     assert "Reputation Awarded" not in render(make_contract(), show_reputation=False)
+
+
+def test_tactical_facts_render_only_through_explicit_independent_controls():
+    contract = tactical_contract()
+
+    assert "MISSION DETAILS" not in render(contract)
+    shown = render(
+        contract,
+        mission_fact_groups=frozenset({"mission_type", "hostile_spawns", "ace"}),
+        show_mission_details=True,
+    )
+
+    assert "MISSION DETAILS" in shown
+    assert "Mission type: Bounty" in shown
+    assert "Hostile spawns: 7" in shown
+    assert "Ace probability: 25% (confidence: medium)" in shown
+
+
+def test_tag_builder_is_typed_bounded_and_profile_controlled():
+    contract = tactical_contract()
+    options = {
+        "mission_fact_groups": frozenset({"mission_type", "hostile_spawns", "ace"}),
+        "tag_builder_enabled": True,
+        "tag_builder_fields": ("mission_type", "hostile_spawns", "ace"),
+        "tag_builder_placement": "prefix",
+    }
+
+    title = render(contract, "t", **options)
+    bounded = render(contract, "t", **{**options, "tag_builder_max_characters": 16})
+
+    assert title.startswith("[Bounty] [Hostiles 7] [ACE?] Do the thing.")
+    assert bounded.startswith("[Bounty] [ACE?] Do the thing.")
+    assert "Hostiles" not in bounded
+
+
+def test_tactical_provenance_is_emitted_only_for_rendered_fact_groups():
+    contract = tactical_contract()
+    contracts = ContractSet([contract], {contract.org.id: contract.org})
+
+    hidden = Renderer().render_all(contracts)
+    shown = Renderer(
+        RenderOptions(
+            mission_fact_groups=frozenset({"hostile_spawns"}),
+            show_mission_details=True,
+        )
+    ).render_all(contracts)
+
+    assert hidden.provenance["d"] == ()
+    assert len(shown.provenance["d"]) == 1
+    assert shown.provenance["d"][0].provider == "local-tactical"
 
 
 def test_blueprint_toggle():
@@ -243,6 +334,19 @@ def test_structured_number_formatting_is_applied():
         reputation_separator="/",
         thousands_separator=False,
     )
+
+
+def test_stat_block_can_be_placed_above_or_below_unchanged_stock_text():
+    contract = make_contract(reward=Reward(reputation=[100]))
+    below = render(contract, stat_block_placement="below")
+    above = render(contract, stat_block_placement="above")
+    assert below.index("Do the thing") < below.index("Reputation Awarded")
+    assert above.index("Reputation Awarded") < above.index("Do the thing")
+
+
+def test_invalid_stat_block_placement_is_rejected():
+    with pytest.raises(ValueError, match="stat-block placement"):
+        RenderOptions(stat_block_placement="middle")
 
 
 def test_render_options_reject_incomplete_section_order():

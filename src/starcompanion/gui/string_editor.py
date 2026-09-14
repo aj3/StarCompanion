@@ -28,6 +28,8 @@ COLUMN_FILTER_KEYS = (
 _COLUMN_FILTER_INDEX = {
     name: index for index, name in enumerate(COLUMN_FILTER_KEYS)
 }
+MAX_CLIPBOARD_ROWS = 50_000
+MAX_CLIPBOARD_CHARACTERS = 8 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -158,6 +160,7 @@ def build_string_snapshot(
     categories: dict[str, str] = {}
     organizations: dict[str, str] = {}
     families: dict[str, str] = {}
+    entity_evidence: dict[str, tuple[Evidence, ...]] = {}
     for contract in contracts.contracts:
         # Iterate the existing kind buckets directly. Contract.kind_of() is a
         # convenient single-key helper but using it once per row would turn a
@@ -168,6 +171,27 @@ def build_string_snapshot(
                 categories[key] = kind.value
                 organizations[key] = contract.org.name
                 families[key] = contract.family
+    for entity in contracts.entities:
+        key = entity.localization_key
+        stock[key] = entity.base_text
+        categories[key] = entity.kind
+        organizations[key] = "Local entity catalog"
+        families[key] = entity.kind
+        entity_evidence[key] = entity.evidence
+    for item in contracts.legacy_signatures:
+        key = item.localization_key
+        stock[key] = item.base_text
+        categories[key] = "legacy-mining"
+        organizations[key] = "Community legacy pack"
+        families[key] = item.supported_build
+        entity_evidence[key] = item.evidence
+    for item in contracts.legacy_presentations:
+        key = item.localization_key
+        stock[key] = item.base_text
+        categories[key] = "legacy-presentation"
+        organizations[key] = "Community legacy pack"
+        families[key] = item.supported_build
+        entity_evidence[key] = item.evidence
 
     generated_provenance = {
         key: tuple(_evidence_text(item) for item in rendered.provenance.get(key, ()))
@@ -212,7 +236,11 @@ def build_string_snapshot(
             merged=entry.value,
             winner=entry.winner,
             contributions=entry.contributions,
-            evidence=tuple(rendered.provenance.get(key, ())),
+            evidence=tuple(
+                dict.fromkeys(
+                    (*entity_evidence.get(key, ()), *rendered.provenance.get(key, ()))
+                )
+            ),
             operation=outcomes.get(key, "unchanged"),
             issues=tuple(issues.get(key, ())),
         )
@@ -509,12 +537,55 @@ class StringFilterProxyModel(QSortFilterProxyModel):
         return True
 
 
+def _clipboard_cell(value: str) -> str:
+    compact = value.replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    return "'" + compact if compact.startswith(("=", "+", "-", "@")) else compact
+
+
+def visible_rows_tsv(proxy: StringFilterProxyModel) -> str:
+    """Serialize the filtered projection without hidden provenance fields."""
+
+    model = proxy.sourceModel()
+    if not isinstance(model, StringTableModel):
+        return ""
+    count = proxy.rowCount()
+    if count > MAX_CLIPBOARD_ROWS:
+        raise ValueError(
+            f"filtered selection exceeds the {MAX_CLIPBOARD_ROWS:,}-row clipboard limit"
+        )
+    lines = ["Key\tCategory\tFinal value\tSource\tOutcome"]
+    total = len(lines[0])
+    for row in range(count):
+        source_index = proxy.mapToSource(proxy.index(row, 0))
+        record = model.record(source_index.row())
+        if record is None:
+            continue
+        line = "\t".join(
+            _clipboard_cell(value)
+            for value in (
+                record.key,
+                record.category,
+                record.merged,
+                f"{record.winner.source_id} ({record.winner.kind.value})",
+                record.operation,
+            )
+        )
+        total += len(line) + 1
+        if total > MAX_CLIPBOARD_CHARACTERS:
+            raise ValueError("filtered clipboard export exceeds the 8 MiB text limit")
+        lines.append(line)
+    return "\n".join(lines) + "\n"
+
+
 __all__ = [
     "COLUMN_FILTER_KEYS",
+    "MAX_CLIPBOARD_CHARACTERS",
+    "MAX_CLIPBOARD_ROWS",
     "StringEditorDocument",
     "StringEditorSnapshot",
     "StringFilterProxyModel",
     "StringRecord",
     "StringTableModel",
     "build_string_snapshot",
+    "visible_rows_tsv",
 ]

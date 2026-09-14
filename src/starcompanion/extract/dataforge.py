@@ -19,7 +19,7 @@ from pathlib import PurePosixPath
 from typing import Any, Protocol
 from uuid import UUID
 
-from .datacore import Record, StructDefinition
+from .datacore import DataType, Record, StructDefinition
 
 NULL_UUID = "00000000-0000-0000-0000-000000000000"
 PLACEHOLDER_LOCALE_KEYS = frozenset(
@@ -71,6 +71,7 @@ class CapabilityStatus(StrEnum):
 
 class ScalarKind(StrEnum):
     STRING = "string"
+    ENUM = "enum"
     INTEGER = "integer"
     FLOAT = "float"
     BOOLEAN = "boolean"
@@ -259,6 +260,12 @@ def convert_scalar(
     try:
         if kind is ScalarKind.STRING:
             converted = value if isinstance(value, str) else None
+        elif kind is ScalarKind.ENUM:
+            converted = (
+                value
+                if isinstance(value, (str, int)) and not isinstance(value, bool)
+                else None
+            )
         elif kind is ScalarKind.UUID:
             converted = normalize_uuid(value)
         elif kind is ScalarKind.LOCALE_KEY:
@@ -324,6 +331,8 @@ class DataForgeIndex:
         self.max_walk_depth = max_walk_depth
         self._payloads: OrderedDict[int, dict[str, Any]] = OrderedDict()
         self._instances: OrderedDict[tuple[int, int], dict[str, Any]] = OrderedDict()
+        self._selected_schema_cache: dict[tuple[int, frozenset[str]], bool] = {}
+        self._selected_type_cache: dict[tuple[int, frozenset[str]], bool] = {}
         self.by_guid: dict[str, list[RecordNode]] = defaultdict(list)
         self.by_path: dict[str, list[RecordNode]] = defaultdict(list)
         self.by_filename: dict[str, list[RecordNode]] = defaultdict(list)
@@ -479,6 +488,265 @@ class DataForgeIndex:
         """Stream nested fields with deterministic bounds and field paths."""
 
         yield from self.iter_value_fields(self.payload(node), key=key, diagnostic_node=node)
+
+    def iter_selected_fields(
+        self,
+        node: RecordNode,
+        keys: Sequence[str],
+        *,
+        max_pointer_hops: int | None = None,
+    ) -> Iterator[FieldValue]:
+        """Find reviewed leaves while skipping pointer schemas that cannot contain them."""
+
+        wanted = frozenset(item.casefold() for item in keys if item)
+        if not wanted:
+            return
+        pointer_limit = self.max_walk_depth if max_pointer_hops is None else max_pointer_hops
+        if not 0 <= pointer_limit <= self.max_walk_depth:
+            raise ValueError("selected pointer hops must fit within the walk depth")
+        stack: list[tuple[Any, str, int, int, frozenset[tuple[int, int]]]] = [
+            (self.payload(node), "$", 0, 0, frozenset())
+        ]
+        visited = 0
+        while stack:
+            value, path, depth, pointer_hops, pointer_chain = stack.pop()
+            visited += 1
+            if visited > self.max_walk_nodes:
+                self.diagnostics.append(
+                    Diagnostic(
+                        "record-walk-limit",
+                        f"Stopped after {self.max_walk_nodes:,} nested values",
+                        Severity.ERROR,
+                        node.id,
+                        node.normalized_path,
+                        path,
+                    )
+                )
+                return
+            if depth > self.max_walk_depth:
+                continue
+            if isinstance(value, Mapping):
+                struct_index = value.get("$struct")
+                instance_index = value.get("$instance")
+                if (
+                    isinstance(struct_index, int)
+                    and not isinstance(struct_index, bool)
+                    and isinstance(instance_index, int)
+                    and not isinstance(instance_index, bool)
+                ):
+                    pointer = (struct_index, instance_index)
+                    if (
+                        pointer_hops >= pointer_limit
+                        or pointer in pointer_chain
+                        or not self._struct_may_contain(struct_index, wanted)
+                    ):
+                        continue
+                    pointed = self._instance_payload(struct_index, instance_index)
+                    if pointed is not None:
+                        stack.append(
+                            (
+                                pointed,
+                                f"{path}->$[{struct_index}:{instance_index}]",
+                                depth + 1,
+                                pointer_hops + 1,
+                                pointer_chain | {pointer},
+                            )
+                        )
+                    continue
+                for child_key, child in reversed(list(value.items())):
+                    child_path = f"{path}.{child_key}"
+                    if str(child_key).casefold() in wanted:
+                        yield FieldValue(child_path, child)
+                    stack.append((child, child_path, depth + 1, pointer_hops, pointer_chain))
+            elif isinstance(value, Sequence) and not isinstance(
+                value, (str, bytes, bytearray)
+            ):
+                for index in range(len(value) - 1, -1, -1):
+                    stack.append(
+                        (value[index], f"{path}[{index}]", depth + 1, pointer_hops, pointer_chain)
+                    )
+
+    def iter_inline_fields(
+        self,
+        node: RecordNode,
+        keys: Sequence[str],
+    ) -> Iterator[FieldValue]:
+        """Find reviewed leaves in the root payload without following pointers."""
+
+        wanted = frozenset(item.casefold() for item in keys if item)
+        if not wanted:
+            return
+        stack: list[tuple[Any, str, int]] = [(self.payload(node), "$", 0)]
+        visited = 0
+        while stack:
+            value, path, depth = stack.pop()
+            visited += 1
+            if visited > self.max_walk_nodes:
+                self.diagnostics.append(
+                    Diagnostic(
+                        "record-walk-limit",
+                        f"Stopped after {self.max_walk_nodes:,} nested values",
+                        Severity.ERROR,
+                        node.id,
+                        node.normalized_path,
+                        path,
+                    )
+                )
+                return
+            if depth > self.max_walk_depth:
+                continue
+            if isinstance(value, Mapping):
+                if {"$struct", "$instance"}.issubset(value):
+                    continue
+                for child_key, child in reversed(list(value.items())):
+                    child_path = f"{path}.{child_key}"
+                    if str(child_key).casefold() in wanted:
+                        yield FieldValue(child_path, child)
+                    stack.append((child, child_path, depth + 1))
+            elif isinstance(value, Sequence) and not isinstance(
+                value, (str, bytes, bytearray)
+            ):
+                for index in range(len(value) - 1, -1, -1):
+                    stack.append((value[index], f"{path}[{index}]", depth + 1))
+
+    def _struct_may_contain(self, struct_index: int, wanted: frozenset[str]) -> bool:
+        reader = getattr(self.source, "properties_of", None)
+        if not callable(reader):
+            return True
+        cache_key = (struct_index, wanted)
+        cached = self._selected_schema_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        stack = [struct_index]
+        seen: set[int] = set()
+        while stack:
+            current = stack.pop()
+            if current in seen or not 0 <= current < len(self.source.structs):
+                continue
+            seen.add(current)
+            for prop in reader(current):
+                if prop.name.casefold() in wanted:
+                    self._selected_schema_cache[cache_key] = True
+                    return True
+                if prop.data_type in {
+                    DataType.CLASS,
+                    DataType.STRONG_POINTER,
+                    DataType.WEAK_POINTER,
+                }:
+                    stack.append(prop.struct_index)
+        self._selected_schema_cache[cache_key] = False
+        return False
+
+    def iter_typed_objects(
+        self,
+        node: RecordNode,
+        type_names: Sequence[str],
+    ) -> Iterator[FieldValue]:
+        """Find reviewed object types without expanding unrelated pointer graphs."""
+
+        wanted = frozenset(item.casefold() for item in type_names if item)
+        if not wanted:
+            return
+        stack: list[tuple[Any, str, int, frozenset[tuple[int, int]]]] = [
+            (self.payload(node), "$", 0, frozenset())
+        ]
+        visited = 0
+        while stack:
+            value, path, depth, pointer_chain = stack.pop()
+            visited += 1
+            if visited > self.max_walk_nodes:
+                self.diagnostics.append(
+                    Diagnostic(
+                        "record-walk-limit",
+                        f"Stopped after {self.max_walk_nodes:,} nested values",
+                        Severity.ERROR,
+                        node.id,
+                        node.normalized_path,
+                        path,
+                    )
+                )
+                return
+            if depth > self.max_walk_depth:
+                continue
+            if isinstance(value, Mapping):
+                struct_index = value.get("$struct")
+                instance_index = value.get("$instance")
+                if (
+                    isinstance(struct_index, int)
+                    and not isinstance(struct_index, bool)
+                    and isinstance(instance_index, int)
+                    and not isinstance(instance_index, bool)
+                ):
+                    pointer = (struct_index, instance_index)
+                    if pointer in pointer_chain or not self._struct_may_reach_type(
+                        struct_index, wanted
+                    ):
+                        continue
+                    pointed = self._instance_payload(struct_index, instance_index)
+                    if pointed is not None:
+                        pointer_path = f"{path}->$[{struct_index}:{instance_index}]"
+                        if str(pointed.get("$type", "")).casefold() in wanted:
+                            yield FieldValue(pointer_path, pointed)
+                        stack.append(
+                            (
+                                pointed,
+                                pointer_path,
+                                depth + 1,
+                                pointer_chain | {pointer},
+                            )
+                        )
+                    continue
+                if str(value.get("$type", "")).casefold() in wanted:
+                    yield FieldValue(path, value)
+                for child_key, child in reversed(list(value.items())):
+                    child_path = f"{path}.{child_key}"
+                    if str(child_key).casefold() in wanted:
+                        if isinstance(child, Mapping) and not {
+                            "$struct",
+                            "$instance",
+                        }.issubset(child):
+                            yield FieldValue(child_path, child)
+                        elif isinstance(child, Sequence) and not isinstance(
+                            child, (str, bytes, bytearray)
+                        ):
+                            for index, item in enumerate(child):
+                                if isinstance(item, Mapping) and not {
+                                    "$struct",
+                                    "$instance",
+                                }.issubset(item):
+                                    yield FieldValue(f"{child_path}[{index}]", item)
+                    stack.append((child, child_path, depth + 1, pointer_chain))
+            elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+                for index in range(len(value) - 1, -1, -1):
+                    stack.append((value[index], f"{path}[{index}]", depth + 1, pointer_chain))
+
+    def _struct_may_reach_type(self, struct_index: int, wanted: frozenset[str]) -> bool:
+        reader = getattr(self.source, "properties_of", None)
+        if not callable(reader):
+            return True
+        cache_key = (struct_index, wanted)
+        cached = self._selected_type_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        stack = [struct_index]
+        seen: set[int] = set()
+        while stack:
+            current = stack.pop()
+            if current in seen or not 0 <= current < len(self.source.structs):
+                continue
+            seen.add(current)
+            if self.source.structs[current].name.casefold() in wanted:
+                self._selected_type_cache[cache_key] = True
+                return True
+            for prop in reader(current):
+                if prop.data_type in {
+                    DataType.CLASS,
+                    DataType.STRONG_POINTER,
+                    DataType.WEAK_POINTER,
+                }:
+                    stack.append(prop.struct_index)
+        self._selected_type_cache[cache_key] = False
+        return False
 
     def iter_value_fields(
         self,
@@ -825,6 +1093,10 @@ class _RecordScope:
     fields: tuple[FieldValue, ...]
 
 
+# Public read-only view used by independent mission providers.
+MissionRecordScope = _RecordScope
+
+
 def _make_scope(
     index: DataForgeIndex,
     node: RecordNode,
@@ -862,21 +1134,15 @@ def _contract_scopes(index: DataForgeIndex, node: RecordNode) -> tuple[_RecordSc
     """Split generator files into their nested Career/List contract variants."""
 
     root_value = index.payload(node)
-    root_fields = tuple(index.iter_value_fields(root_value, diagnostic_node=node))
     scopes: list[_RecordScope] = []
-    for found in root_fields:
+    for found in index.iter_typed_objects(node, ("CareerContract", "Contract")):
         if not isinstance(found.value, Mapping):
             continue
-        property_name = _field_name(found.path)
-        type_name = str(found.value.get("$type", ""))
-        if property_name in {"CareerContract", "Contract"} or type_name in {
-            "CareerContract",
-            "Contract",
-        }:
-            scopes.append(_make_scope(index, node, found.path, found.value))
+        scopes.append(_make_scope(index, node, found.path, found.value))
     if scopes:
         # Path de-dup protects against schema aliases without merging variants.
         return tuple({scope.path: scope for scope in scopes}.values())
+    root_fields = tuple(index.iter_value_fields(root_value, diagnostic_node=node))
     return (_RecordScope("$", root_value, root_fields),)
 
 
@@ -1090,6 +1356,26 @@ def _contract_localization(
                 Evidence(node.id, node.normalized_path, f"{found.path}.{value[0]}", key)
             )
     return titles, descriptions, evidence
+
+
+def mission_contract_scopes(
+    index: DataForgeIndex,
+    node: RecordNode,
+) -> tuple[MissionRecordScope, ...]:
+    """Expose bounded contract variants without duplicating schema traversal."""
+
+    return _contract_scopes(index, node)
+
+
+def mission_contract_localization(
+    index: DataForgeIndex,
+    node: RecordNode,
+    scope: MissionRecordScope,
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[Evidence, ...]]:
+    """Return localization keys and their exact field evidence for one variant."""
+
+    titles, descriptions, evidence = _contract_localization(index, node, scope)
+    return tuple(titles), tuple(descriptions), tuple(evidence)
 
 
 def _mission_reputation(
@@ -1332,14 +1618,21 @@ def _mission_items(
     return items, evidence, diagnostics
 
 
-def extract_mission_facts(source: RecordSource) -> MissionExtractionResult:
+def extract_mission_facts(
+    source: RecordSource,
+    *,
+    index: DataForgeIndex | None = None,
+) -> MissionExtractionResult:
     """Extract contract-generator rewards while isolating schema drift.
 
     A failed optional provider degrades this report only.  It never prevents
     callers from using the existing MissionBrokerEntry/string extraction path.
     """
 
-    index = DataForgeIndex(source)
+    if index is None:
+        index = DataForgeIndex(source)
+    elif index.source is not source:
+        raise ValueError("mission fact index belongs to a different source")
     diagnostics = list(index.diagnostics)
     contract_nodes = index.records_under("records/contracts/contractgenerator")
     if not contract_nodes:

@@ -30,7 +30,7 @@ from starcompanion.config import Profile, load_builtin  # noqa: E402
 from starcompanion.gui import AppState, MainWindow  # noqa: E402
 from starcompanion.ini import BOM, LocalizationFile  # noqa: E402
 from starcompanion.inject import MergeMode, backup  # noqa: E402
-from starcompanion.model import StringKind  # noqa: E402
+from starcompanion.model import Evidence, LocalizedEntity, StringKind  # noqa: E402
 from starcompanion.portability import PreferencesStore  # noqa: E402
 from starcompanion.sources import contracts_ini  # noqa: E402
 
@@ -159,6 +159,19 @@ def test_shell_keeps_local_operating_context_visible(window):
     assert "WRITES REQUIRE CONFIRMATION" in window.shell.status_text.text()
 
 
+def test_shell_keeps_selected_and_active_language_visible(window, fake_game):
+    window.start.install = fake_game
+    window.start.selected_language = "french"
+    window.start.active_language = "english"
+    window.start.override_present = True
+    window.start.scopeStatusChanged.emit()
+
+    context = window.shell.game_badge.text()
+    assert "FRENCH SELECTED" in context
+    assert "ENGLISH ACTIVE" in context
+    assert "CUSTOM" in context
+
+
 def test_shell_preserves_the_legacy_tab_metadata_api(window):
     labels = [window.tabs.tabText(i) for i in range(window.tabs.count())]
     assert labels == [
@@ -205,10 +218,24 @@ def test_ui_preferences_migrate_and_preserve_other_portable_settings(qapp, tmp_p
 
     assert loaded.warning is None
     assert loaded.preferences.theme == "light"
-    assert stored["ui_schema"] == 1
+    assert stored["ui_schema"] == 3
     assert stored["last_page"] == "overview"
     assert stored["link_live_hotfix"] is True
     assert stored["default_channel"] == "LIVE"
+
+
+def test_selected_language_is_a_portable_ui_preference(qapp, tmp_path):
+    from starcompanion.gui.preferences import UiPreferencesStore
+
+    root = tmp_path / "preferences"
+    fresh = MainWindow(ui_preferences_store=UiPreferencesStore(root))
+    fresh.start._set_language_options(("english", "french"))
+    fresh.start.language_selector.setCurrentIndex(
+        fresh.start.language_selector.findData("french")
+    )
+
+    assert fresh.ui_preferences.default_language == "french"
+    assert PreferencesStore(root).load()["default_language"] == "french"
 
 
 def test_live_hotfix_scope_choice_is_a_portable_ui_preference(qapp, tmp_path):
@@ -251,6 +278,93 @@ def test_theme_toggle_persists_without_mutating_output_profile(qapp, tmp_path):
 
     assert PreferencesStore(root).load()["theme"] == "light"
     assert fresh.state.profile.appearance.theme == profile_theme
+
+
+def test_all_four_interface_themes_are_selectable_and_portable(qapp, tmp_path):
+    from starcompanion.gui.preferences import UiPreferencesStore
+
+    root = tmp_path / "preferences"
+    fresh = MainWindow(ui_preferences_store=UiPreferencesStore(root))
+
+    fresh.select_theme("high-contrast")
+
+    assert fresh.ui_preferences.theme == "high-contrast"
+    assert PreferencesStore(root).load()["theme"] == "high-contrast"
+    assert fresh.state.profile.appearance.theme == "dark"
+
+
+def test_simple_mode_is_persistent_and_confines_navigation_to_two_action_overview(
+    qapp, tmp_path
+):
+    from starcompanion.gui.preferences import UiPreferencesStore
+
+    root = tmp_path / "preferences"
+    fresh = MainWindow(ui_preferences_store=UiPreferencesStore(root))
+    fresh.shell.set_current_key("string-editor")
+    fresh.set_simple_mode(True)
+
+    assert fresh.shell.current_key() == "overview"
+    assert fresh.start.game_step.isHidden()
+    assert fresh.start.contract_step.isHidden()
+    assert fresh.start.data_step.isHidden()
+    assert fresh.start.look_step.isHidden()
+    assert not fresh.shell.set_current_key("string-editor")
+    assert sum(button.isHidden() for button in fresh.shell._nav_buttons[1:]) == 8
+    assert PreferencesStore(root).load()["simple_mode"] is True
+
+    fresh.shell._activate_navigation(1)
+    assert fresh.shell.current_key() == "overview"
+    fresh.set_simple_mode(False)
+    assert fresh.shell.set_current_key("string-editor")
+
+
+def test_interface_locale_is_offline_portable_and_independent_from_game_language(
+    qapp, tmp_path
+):
+    from starcompanion.gui.preferences import UiPreferencesStore
+
+    root = tmp_path / "preferences"
+    fresh = MainWindow(ui_preferences_store=UiPreferencesStore(root))
+    game_language = fresh.start.selected_language
+
+    fresh.set_interface_locale("fr-FR")
+
+    assert fresh.shell._nav_buttons[0].text() == "Aperçu"
+    assert fresh.start.selected_language == game_language
+    assert PreferencesStore(root).load()["interface_locale"] == "fr-FR"
+
+
+def test_guided_tour_is_replayable_and_completion_is_portable(qapp, tmp_path):
+    from starcompanion.gui.preferences import UiPreferencesStore
+
+    root = tmp_path / "preferences"
+    fresh = MainWindow(ui_preferences_store=UiPreferencesStore(root))
+    fresh.start_guided_tour()
+    tour = fresh._tour
+    assert tour is not None and tour.isVisible()
+    assert tour.progress.text().startswith("STEP 1 OF")
+    tour.finish()
+    qapp.processEvents()
+
+    assert PreferencesStore(root).load()["tutorial_completed"] is True
+    fresh.start_guided_tour()
+    assert fresh._tour is not None
+    target = fresh._tour.steps[0].target
+    fresh._tour.reject()
+    assert target.property("coachTarget") is False
+
+
+def test_event_viewer_filters_bounded_redacted_records(window):
+    window.events.publish("warning", "archive-review-warning", "safe aggregate")
+    window.events.publish("info", "workspace-ready")
+    window.support.event_level.setCurrentIndex(
+        window.support.event_level.findData("warning")
+    )
+
+    text = window.support.event_view.toPlainText()
+    assert "archive-review-warning" in text
+    assert "workspace-ready" not in text
+    assert window.support.export_events_button.isEnabled()
 
 
 def test_last_navigation_page_round_trips(qapp, tmp_path):
@@ -416,11 +530,122 @@ def test_every_toggle_is_bound(community_rewards, window):
 
 
 def test_contract_content_uses_summary_metrics_and_toggle_rows(window):
-    assert window.fields.enabled_metric.value.text() == "3 / 3"
+    assert window.fields.enabled_metric.value.text() == "3 / 10"
     assert all(
         row.property("component") == "toggle-row"
         for row in window.fields.rows.values()
     )
+
+
+def test_category_toggles_update_existing_typed_profile_fields(window):
+    tactical = window.fields.category_boxes["tactical"]
+    assert tactical.checkState().value == 0
+
+    tactical.click()
+    facts = window.state.profile.mission_presentation.facts
+    assert all(getattr(facts, name) for name in window.fields.mission_boxes)
+
+    routes = window.fields.category_boxes["routes"]
+    routes.click()
+    mission = window.state.profile.mission_presentation
+    assert mission.route_titles_enabled
+    assert mission.mining_signature_enabled
+
+
+def test_mission_fact_controls_update_profile_rendering_and_tag_preview(window):
+    from starcompanion.model import Evidence, FactConfidence, MissionDetail
+
+    contract = window.state.contracts.contracts[0]
+    evidence = Evidence(
+        "local-dataforge-mission-spawns",
+        "record",
+        "missions/spawn.xml",
+        "$.hostileCount",
+        7,
+    )
+    contract.mission_details.append(
+        MissionDetail("hostile-spawns", 7, FactConfidence.HIGH, (evidence,))
+    )
+    window.state.set_contracts(window.state.contracts)
+
+    assert not window.fields.mission_boxes["hostile_spawns"].isChecked()
+    window.fields.mission_boxes["hostile_spawns"].setChecked(True)
+    window.formatting.mission_details.setChecked(True)
+
+    assert "Hostile spawns: 7" in window.state.render().values["Org_x_desc"]
+    assert window.source.evidence_metric.value.text() == "1"
+
+    window.formatting.tag_builder_enabled.setChecked(True)
+    assert "[Hostiles 7]" in window.state.render().values["Org_x_title"]
+    assert "[Hostiles 7]" in window.formatting.tag_preview.text()
+
+
+def test_route_and_mining_controls_are_typed_and_profile_bound(window):
+    route = window.formatting.route_titles_enabled
+    mining = window.formatting.mining_signature_enabled
+    legacy = window.formatting.legacy_mining_pack_enabled
+    route.setChecked(True)
+    mining.setChecked(True)
+    legacy.setChecked(True)
+    window.formatting.route_title_mode.setCurrentIndex(
+        window.formatting.route_title_mode.findData("replace")
+    )
+    window.formatting.route_arrow.setCurrentIndex(
+        window.formatting.route_arrow.findData("to")
+    )
+    window.formatting.route_location_detail.setCurrentIndex(
+        window.formatting.route_location_detail.findData("name")
+    )
+
+    presentation = window.state.profile.mission_presentation
+    assert presentation.route_titles_enabled
+    assert presentation.mining_signature_enabled
+    assert presentation.legacy_mining_pack_enabled
+    assert presentation.route_title_mode == "replace"
+    assert presentation.route_arrow == "to"
+    assert presentation.route_location_detail == "name"
+    assert window.formatting.tag_metric.value.text() == "Enabled"
+    assert window.formatting.route_title_mode.accessibleName()
+    assert window.formatting.route_arrow.accessibleName()
+    assert window.formatting.route_location_detail.accessibleName()
+
+
+def test_entity_tag_controls_render_only_evidenced_local_entity_values(window):
+    from starcompanion.model import EntityAttribute, Evidence, LocalizedEntity
+
+    evidence = Evidence(
+        "local-dataforge-components",
+        "record",
+        "records/component.xml",
+        "$.itemSize",
+        2,
+    )
+    window.state.contracts.entities.append(
+        LocalizedEntity(
+            "localization:item_name_test",
+            "component",
+            "item_name_test",
+            "Test Component",
+            (EntityAttribute("size", 2, (evidence,)),),
+            (evidence,),
+        )
+    )
+    window.state.set_contracts(window.state.contracts)
+    window.formatting.entity_tag_builder_enabled.setChecked(True)
+
+    assert window.state.profile.mission_presentation.entity_tags.enabled
+    assert window.state.render().values["item_name_test"] == (
+        "[Component S2] Test Component"
+    )
+    assert "[Component S2]" in window.formatting.entity_tag_preview.text()
+
+    window.formatting.entity_kind_boxes["component"].setChecked(False)
+    assert "item_name_test" not in window.state.render().values
+
+    window.formatting.entity_tag_placement.setCurrentIndex(
+        window.formatting.entity_tag_placement.findData("suffix")
+    )
+    assert window.formatting.entity_tag_placement.accessibleName()
 
 
 # --- formatting tab ----------------------------------------------------------
@@ -538,6 +763,12 @@ def test_formatting_widgets_refresh_when_profile_is_replaced(window):
     assert window.formatting.max_items.value() == 12
 
 
+def test_stat_block_placement_control_updates_structured_profile(window):
+    combo = window.formatting.stat_block_placement
+    combo.setCurrentIndex(combo.findData("above"))
+    assert window.state.profile.wording.stat_block_placement == "above"
+
+
 def test_presentation_summary_tracks_existing_profile_controls(window):
     window.formatting.prefix.setCurrentIndex(window.formatting.prefix.findData("org"))
     window.formatting.max_items.setValue(9)
@@ -603,12 +834,15 @@ def test_structured_wording_order_uses_complete_validated_presets(window):
 def test_target_page_controls_have_screen_reader_names_and_descriptions(window):
     controls = [
         *window.fields.boxes.values(),
+        *window.fields.category_boxes.values(),
         window.formatting.default_tag,
         window.formatting.per_field_toggle,
         *window.formatting.field_tags.values(),
         window.formatting.prefix,
         window.formatting.bracket_rep,
         window.formatting.bracket_bp,
+        window.formatting.legacy_mining_pack_enabled,
+        window.formatting.stat_block_placement,
         window.formatting.wording_order,
         window.formatting.reputation_separator,
         window.formatting.thousands_separator,
@@ -636,12 +870,22 @@ def test_target_page_controls_have_screen_reader_names_and_descriptions(window):
         window.editor.rendered_view,
         window.editor.merged_editor,
         window.editor.provenance_view,
+        window.editor.favorite_button,
+        window.editor.unfavorite_button,
+        window.editor.asop_order,
+        window.editor.order_button,
+        window.editor.clear_order_button,
         window.editor.undo_button,
         window.editor.redo_button,
         window.editor.reset_button,
         window.editor.reload_button,
         window.editor.save_button,
+        window.editor.copy_visible_button,
         window.start.channel_selector,
+        window.start.language_selector,
+        window.start.discover_languages_button,
+        window.start.activate_language_button,
+        window.start.restore_stock_button,
         window.start.discover_channels_button,
         window.blueprints.search,
         window.blueprints.ownership_filter,
@@ -655,11 +899,20 @@ def test_target_page_controls_have_screen_reader_names_and_descriptions(window):
         window.support.profile_builtin,
         window.support.profile_open,
         window.support.profile_save,
+        window.support.interface_language,
+        window.support.replay_tour_button,
         window.support.settings_preview,
+        window.support.choose_data_location_button,
+        window.support.portable_mode_button,
+        window.support.apply_data_location_button,
         window.support.export_settings_button,
         window.support.import_settings_button,
         window.support.apply_settings_button,
         window.support.recover_settings_button,
+        window.support.event_level,
+        window.support.event_view,
+        window.support.clear_events_button,
+        window.support.export_events_button,
         window.support.diagnostics_view,
         window.support.build_diagnostics_button,
         window.support.export_diagnostics_button,
@@ -858,6 +1111,46 @@ def test_advanced_editor_debounces_edit_validation_and_supports_undo(window, qap
     assert record.key not in window.editor.document.values
 
 
+def test_advanced_editor_ship_favorite_and_asop_order_are_one_undoable_model_command(
+    window,
+    qapp,
+):
+    key = "vehicle_name_test"
+    window.state.contracts.entities.append(
+        LocalizedEntity(
+            f"localization:{key}",
+            "vehicle",
+            key,
+            "300i",
+            attributes=(),
+            evidence=(
+                Evidence(
+                    "local-dataforge-vehicles",
+                    "vehicle-id",
+                    "entities/spaceships/test.xml",
+                    "$.vehicleName",
+                    f"@{key}",
+                ),
+            ),
+        )
+    )
+    window.state.set_contracts(window.state.contracts)
+    window.editor.rebuild()
+    window.editor._restore_selection((key,))
+    qapp.processEvents()
+
+    assert window.editor.favorite_button.isEnabled()
+    window.editor.favorite_selected(True)
+    assert window.editor.document.values[key] == "*300i"
+    window.editor.asop_order.setValue(5)
+    window.editor.order_selected()
+    assert window.editor.document.values[key] == "*05-300i"
+    assert window.editor.document.commands[-1].label == "order selected ships for ASOP"
+
+    window.editor.undo()
+    assert window.editor.document.values[key] == "*300i"
+
+
 def test_advanced_editor_search_is_debounced_and_filterable(window, qapp):
     from PySide6.QtTest import QTest
 
@@ -875,6 +1168,20 @@ def test_advanced_editor_search_is_debounced_and_filterable(window, qapp):
         window.editor.state_filter.findData("modified")
     )
     assert window.editor.proxy.rowCount() == 1
+
+
+def test_clipboard_action_exports_only_the_filtered_projection(window, qapp):
+    key = window.editor.model.snapshot.records[0].key
+    window.editor.search.setText(key)
+    window.editor._apply_search()
+
+    window.editor.copy_visible_button.click()
+    payload = qapp.clipboard().text()
+
+    assert window.editor.proxy.rowCount() == 1
+    assert key in payload
+    assert "Evidence provider" not in payload
+    assert "Copied 1 visible row" in window.editor.status.text()
 
 
 def test_advanced_editor_multi_reset_is_one_undoable_command(window, qapp, monkeypatch):
@@ -1534,9 +1841,31 @@ def test_missing_language_setting_is_warned_about(window, fake_game):
 def test_language_warning_clears_once_configured(window, fake_game):
     fake_game.user_cfg.write_text("g_language = english\n")
     window.start.install = fake_game
-    window.start.refresh()
+    window.start._adopt_install()
+    assert window.start.wait_for_jobs()
 
     assert not window.start.language_warning.isVisibleTo(window.start)
+
+
+def test_language_activation_requires_archive_verified_selection(window, fake_game):
+    window.start.install = fake_game
+    window.start._set_language_options(("english", "french"))
+    window.start.language_selector.setCurrentIndex(
+        window.start.language_selector.findData("french")
+    )
+    assert window.start.wait_for_jobs()
+    window.start.active_language = "english"
+    window.start.verified_languages = ()
+    window.start.override_present = True
+    window.start.refresh()
+    assert not window.start.activate_language_button.isEnabled()
+    assert not window.start.restore_stock_button.isEnabled()
+
+    window.start.verified_languages = ("english", "french")
+    window.start.refresh()
+    assert window.start.activate_language_button.isEnabled()
+    assert window.start.restore_stock_button.isEnabled()
+    assert window.state.target == fake_game.localization("french")
 
 
 def test_choosing_a_label_style_sets_the_title_prefix(window):
@@ -1681,14 +2010,22 @@ def test_reading_again_bypasses_the_cache(qapp, fake_game, monkeypatch):
     fresh = MainWindow()
     fresh.start.install = fake_game
 
-    monkeypatch.setattr(store, "load", lambda install: pytest.fail("cache was used"))
+    monkeypatch.setattr(
+        store,
+        "load",
+        lambda install, language="english": pytest.fail("cache was used"),
+    )
     calls = []
     monkeypatch.setattr(
         start_module,
         "read_contracts",
-        lambda install, token, reporter: calls.append(install) or _empty_set(),
+        lambda install, language, token, reporter: calls.append(install) or _empty_set(),
     )
-    monkeypatch.setattr(store, "save", lambda install, contracts: None)
+    monkeypatch.setattr(
+        store,
+        "save",
+        lambda install, contracts, language="english": None,
+    )
 
     fresh.start.read_game(force=True)
     assert fresh.start.wait_for_jobs()
@@ -1712,7 +2049,7 @@ def test_cancelling_background_read_changes_nothing(qapp, fake_game, monkeypatch
     import time
     import starcompanion.gui.tabs.start as start_module
 
-    def cancellable_read(install, token, reporter):
+    def cancellable_read(install, language, token, reporter):
         while True:
             token.checkpoint()
             time.sleep(0.001)
@@ -1734,7 +2071,7 @@ def test_window_close_cancels_and_joins_worker(qapp, fake_game, monkeypatch):
     import time
     import starcompanion.gui.tabs.start as start_module
 
-    def cancellable_read(install, token, reporter):
+    def cancellable_read(install, language, token, reporter):
         while True:
             token.checkpoint()
             time.sleep(0.001)
@@ -1752,6 +2089,58 @@ def test_window_close_cancels_and_joins_worker(qapp, fake_game, monkeypatch):
     assert "stopped safely" in fresh.start.operation_status
 
 
+def test_unsaved_editor_changes_can_cancel_window_close(window, monkeypatch):
+    from PySide6.QtGui import QCloseEvent
+
+    key = window.editor.model.snapshot.records[0].key
+    window.editor.document.set_value(key, "unsaved")
+    window.show()
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Cancel,
+    )
+    event = QCloseEvent()
+
+    window.closeEvent(event)
+
+    assert not event.isAccepted()
+    assert window.editor.document.dirty
+    window.hide()
+    window.editor.document.load({})
+
+
+def test_unsaved_editor_changes_can_save_then_close(
+    window, qapp, tmp_path, monkeypatch
+):
+    from PySide6.QtGui import QCloseEvent
+    from starcompanion.user_edits import UserEditStore
+
+    target = tmp_path / "LIVE" / "data" / "Localization" / "english" / "global.ini"
+    window.state.set_target(target)
+    _wait_until(
+        qapp,
+        lambda: not window.editor._jobs and not window.editor.scope_timer.isActive(),
+    )
+    key = window.editor.model.snapshot.records[0].key
+    window.editor.document.set_value(key, "saved while closing")
+    window.editor.model.rebuild()
+    window.editor._after_model_change()
+    window.show()
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Save,
+    )
+    event = QCloseEvent()
+
+    window.closeEvent(event)
+    assert not event.isAccepted()
+    _wait_until(qapp, lambda: not window.isVisible(), timeout=10)
+
+    assert UserEditStore("LIVE", "english").load()[key] == "saved while closing"
+
+
 def test_slow_close_explains_that_it_is_waiting_safely(qapp, fake_game, monkeypatch):
     import threading
     import time
@@ -1760,7 +2149,7 @@ def test_slow_close_explains_that_it_is_waiting_safely(qapp, fake_game, monkeypa
 
     started = threading.Event()
 
-    def slow_checkpoint(install, token, reporter):
+    def slow_checkpoint(install, language, token, reporter):
         started.set()
         time.sleep(0.6)
         token.checkpoint()
@@ -2257,7 +2646,13 @@ def test_g2_settings_import_is_preview_first_then_reloads_verified_preferences(
 
     source = tmp_path / "source-settings"
     PreferencesStore(source).save(
-        {"theme": "light", "ui_schema": 1, "last_page": "support"}
+        {
+            "theme": "light",
+            "ui_schema": 1,
+                "last_page": "support",
+                "default_language": "french",
+                "interface_locale": "fr-FR",
+        }
     )
     archive = tmp_path / "incoming.zip"
     write_settings_archive(plan_settings_export(source), archive)
@@ -2290,6 +2685,8 @@ def test_g2_settings_import_is_preview_first_then_reloads_verified_preferences(
     _wait_for_jobs(qapp, window.support)
 
     assert window.ui_preferences.theme == "light"
+    assert window.start.selected_language == "french"
+    assert window.support.interface_language.currentData() == "fr-FR"
     assert window.support._import_plan is None
     assert load_threads and all(thread is not qapp.thread() for thread in load_threads)
 

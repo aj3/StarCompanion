@@ -28,6 +28,9 @@ it to append information the game does not surface:
 - **Blueprint pools** — what a contract can drop, and at which reputation rank
 - **Scenario progress points** for event contracts
 - **MG Scrip**, regional pool variants, and data caveats
+- **Optional tactical details** — mission type, difficulty dimensions, spawn
+  counts, ace status, turrets, and engagement facts when the local build
+  provides direct evidence
 
 It only ever changes text. No memory patching, no UI injection — that is the
 line CIG's community-localization allowance draws, and staying on the right side
@@ -78,11 +81,16 @@ It opens on **Overview**, which is the whole normal workflow:
 Then one button: **Update my game**. It says how many contracts will change,
 takes a backup, and there is an **Undo my last change** button beside it.
 
-It also warns if your `USER.cfg` is missing `g_language`, since without that
-setting the game ignores the override entirely and nothing appears to happen.
+It shows the selected and active game languages, discovers installed languages
+locally, and can preview/confirm a backup-first `USER.cfg` activation. One
+Restore stock action safely removes only the selected loose localization file.
 
-*Presentation* changes style, generated labels, information order, and number
-formatting through validated controls. *Custom wording* is an explicit advanced
+*Contract Content* independently enables each locally evidenced mission fact.
+*Presentation* changes style, generated labels, information order, number
+formatting, description details, bounded title tags, evidence-backed hauling
+routes, and Battaglia resource labels through validated controls. New tactical
+controls default off during profile migration, and a missing provider or stock
+token is never guessed. *Custom wording* is an explicit advanced
 mode for sandboxed templates, while the virtualized *String editor* handles
 individual reviewed values. *Blueprints* joins
 the local C4 catalog to channel-scoped ownership and incrementally scans local
@@ -92,8 +100,16 @@ game logs only after you request it.
 points and known interrupted operations. Its manual-plan tools cover rarer
 cases such as a separately selected localization file or rebuilding from a
 clean copy. *Settings & help* provides output profiles, preview-first portable
-settings, inspect-before-export redacted diagnostics, and bundled searchable
+settings, custom or packaged beside-executable data roots, synchronization
+warnings, inspect-before-export redacted diagnostics, and bundled searchable
 offline guidance.
+
+Simple mode reduces the visible workspace to the existing backup-first Update
+and Undo actions; Full mode restores every detailed page. A replayable guided
+tour changes only navigation and focus. The interface includes Dark, Light,
+Midnight, and High Contrast palettes plus a strict offline localization layer.
+The bounded event viewer stores only redacted application events—not game logs,
+game strings, ownership, or authored values.
 
 ### The command line
 
@@ -250,6 +266,18 @@ explicit older selection instead of silently switching sources.
 starcompanion channels list
 starcompanion languages list --install "Z:\RSI\StarCitizen\LIVE"
 
+# Preview first; --confirm applies the exact reviewed USER.cfg plan.
+starcompanion languages activate --install "Z:\RSI\StarCitizen\LIVE" \
+  --language french
+starcompanion languages activate --install "Z:\RSI\StarCitizen\LIVE" \
+  --language french --confirm
+
+# Preview/remove only french/global.ini so the archive's stock text is used.
+starcompanion languages restore-stock --install "Z:\RSI\StarCitizen\LIVE" \
+  --language french
+starcompanion languages restore-stock --install "Z:\RSI\StarCitizen\LIVE" \
+  --language french --confirm
+
 # Local-only language pack: preview, then persist in LIVE/french scope.
 starcompanion languages import --install "Z:\RSI\StarCitizen\LIVE" \
   --language french --file my-french.ini
@@ -288,9 +316,10 @@ protected manual release operation documented in
 | `minimal` | Rep and a blueprint flag in titles only; CIG's prose untouched |
 | `rank-first` | Giver and rank lead every title; rep emphasised above gate notes |
 
-Profiles are versioned JSON — save, share, and reload them. Version 1 profiles
-migrate safely to version 2: ordinary profiles use structured wording, while a
-profile containing custom templates retains them in explicit advanced mode.
+Profiles are versioned JSON — save, share, and reload them. Older profiles
+migrate safely to schema 6: ordinary profiles use structured wording, a profile
+containing custom templates retains explicit advanced mode, and new tactical,
+route, and mining controls remain off until the user enables them.
 
 ## Installing the result
 
@@ -363,15 +392,12 @@ explicit opt-ins nobody meets by accident.
 
 ## Current limitations
 
-- **Mission enhancements are the first local provider.** Ship, component,
-  weapon, commodity, and journal providers remain future C2 work. Unsupported
-  DataForge builds degrade independently and report diagnostics instead of
-  blocking stock contract rendering.
-- The application interface and generated enhancement templates are English
-  only. Installed game languages are discovered and isolated correctly, and
-  user-selected local language packs can be imported without a network source.
-  A visible GUI language selector and the preview/backup/confirmation workflow
-  that safely updates `USER.cfg` remain assigned to G7.
+- The application interface is English-first. Its strict offline catalog and
+  French shell preview are independent from installed game languages. Every
+  visible source message now has translator-review and pseudo-locale coverage;
+  full native-reviewed feature-page translations remain a contributor task.
+- Real HOTFIX archive validation remains blocked until HOTFIX is installed, and
+  the current LIVE archive must finish updating before the next local rerun.
 
 The reviewed Smart Citizen v2.3.1 and current legacy StarStrings outcomes,
 including every known remaining gap and its assigned phase, are tracked in
@@ -428,6 +454,15 @@ The INI is revalidated and transactionally normalized before the game override
 is committed. `--no-user-edits` is available for deliberate diagnostics.
 Undo history is a bounded, checksummed sidecar; if it is stale or damaged it is
 discarded without changing `user.ini`.
+
+The String editor also recognizes locally evidenced vehicle-name rows. Favorite
+and ASOP order actions create one undoable user-layer command, using `*` and an
+unambiguous two-digit `NN-` prefix so numeric ship names such as `300i` are not
+misread. Presentation settings separately expose default-off typed entity/stat
+tags and the exact-build legacy presentation pack; rendered provenance identifies
+the local DataForge fields or pinned community/stock source used for each value.
+Entity tags accept only reviewed localization-key families for their typed
+domain; generic UI labels, cross-domain names, and crafting outputs fail closed.
 
 ### Reviewed operation plans and recovery
 

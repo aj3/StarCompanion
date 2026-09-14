@@ -52,6 +52,17 @@ def test_customised_profile_round_trips_losslessly():
                 "title": {"prefix": "org_rank", "bracket_bp": False},
             },
             "templates": {"foxwell": {"title": "{{ base }}!"}},
+            "mission_presentation": {
+                "facts": {"mission_type": True, "hostile_spawns": True},
+                "description_details": True,
+                "tags": {
+                    "enabled": True,
+                    "fields": ["mission_type", "hostile_spawns"],
+                    "placement": "suffix",
+                    "separator": " • ",
+                    "max_characters": 48,
+                },
+            },
             "injection": {"mode": "overwrite", "backup": False},
         }
     )
@@ -102,6 +113,79 @@ def test_v1_profile_with_templates_preserves_them_in_advanced_mode():
     assert profile.templates["foxwell"].title == "CUSTOM"
 
 
+def test_v2_profile_migrates_with_mission_presentation_disabled():
+    profile = Profile.loads('{"schema_version": 2, "name": "v2"}')
+
+    assert profile.schema_version == SCHEMA_VERSION
+    assert profile.mission_presentation.facts.enabled() == frozenset()
+    assert not profile.mission_presentation.description_details
+    assert not profile.mission_presentation.tags.enabled
+
+
+def test_v3_profile_migrates_with_route_and_mining_presentation_disabled():
+    profile = Profile.loads('{"schema_version": 3, "name": "v3"}')
+
+    assert profile.schema_version == SCHEMA_VERSION
+    assert not profile.mission_presentation.route_titles_enabled
+    assert not profile.mission_presentation.mining_signature_enabled
+
+
+def test_v4_profile_migrates_with_entity_tags_disabled():
+    profile = Profile.loads('{"schema_version": 4, "name": "v4"}')
+
+    assert profile.schema_version == SCHEMA_VERSION
+    assert not profile.mission_presentation.entity_tags.enabled
+    assert not profile.mission_presentation.legacy_mining_pack_enabled
+
+
+def test_v5_profile_migrates_with_stock_first_stat_blocks():
+    profile = Profile.loads('{"schema_version": 5, "name": "v5"}')
+    assert profile.schema_version == SCHEMA_VERSION
+    assert profile.wording.stat_block_placement == "below"
+
+
+def test_route_and_mining_settings_flow_to_typed_render_options():
+    profile = Profile.model_validate(
+        {
+            "mission_presentation": {
+                "route_titles_enabled": True,
+                "route_title_mode": "replace",
+                "route_arrow": "to",
+                "route_location_detail": "name",
+                "mining_signature_enabled": True,
+                "legacy_mining_pack_enabled": True,
+                "entity_tags": {
+                    "enabled": True,
+                    "kinds": ["component", "missile"],
+                    "fields": ["kind", "size"],
+                    "placement": "suffix",
+                    "max_characters": 48,
+                },
+            }
+        }
+    )
+
+    options = profile.to_render_options()
+    assert options.route_titles_enabled
+    assert options.route_title_mode == "replace"
+    assert options.route_arrow == "to"
+    assert options.route_location_detail == "name"
+    assert options.mining_signature_enabled
+    assert options.legacy_mining_pack_enabled
+    assert options.entity_tag_builder_enabled
+    assert options.entity_tag_kinds == frozenset({"component", "missile"})
+    assert options.entity_tag_fields == ("kind", "size")
+    assert options.entity_tag_placement == "suffix"
+    assert options.entity_tag_max_characters == 48
+
+
+def test_stat_block_placement_flows_to_render_options():
+    profile = Profile.model_validate(
+        {"wording": {"stat_block_placement": "above"}}
+    )
+    assert profile.to_render_options().stat_block_placement == "above"
+
+
 def test_missing_schema_version_assumes_current():
     assert Profile.loads('{"name": "x"}').schema_version == SCHEMA_VERSION
 
@@ -135,6 +219,21 @@ def test_void_tag_is_not_a_valid_emphasis():
 def test_unknown_emphasis_field_is_rejected():
     with pytest.raises(ValidationError, match="unknown field"):
         Profile.model_validate({"formatting": {"by_field": {"nonsense": "EM4"}}})
+
+
+def test_tag_builder_rejects_duplicate_fields_and_unbounded_lengths():
+    with pytest.raises(ValidationError, match="must be unique"):
+        Profile.model_validate(
+            {
+                "mission_presentation": {
+                    "tags": {"fields": ["ace", "ace"]}
+                }
+            }
+        )
+    with pytest.raises(ValidationError):
+        Profile.model_validate(
+            {"mission_presentation": {"tags": {"max_characters": 500}}}
+        )
 
 
 def test_bad_tag_inside_by_field_is_rejected():

@@ -22,6 +22,16 @@
 {%- endif -%}
 {%- endmacro %}
 
+{% macro mission_detail_block(contract, opts, em) %}
+{% set lines = opts.mission_detail_lines(contract) %}
+{% if lines %}
+{{ em("MISSION DETAILS", "title") }}
+{% for line in lines %}
+{{ line }}
+{% endfor %}
+{% endif %}
+{% endmacro %}
+
 {# Non-rank gates ride in the header parenthetical; rank gates get their own
    line. Matches how the source data phrases them. #}
 {% macro gate_suffix(pool, GateKind) -%}

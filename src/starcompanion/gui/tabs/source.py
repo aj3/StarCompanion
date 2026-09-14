@@ -202,7 +202,7 @@ class SourceTab(QWidget):
             ):
                 metric.set_value("—")
         else:
-            evidence = sum(len(contract.evidence) for contract in contracts.contracts)
+            evidence = _evidence_count(contracts)
             self.contract_metric.set_value(f"{len(contracts.contracts):,}")
             self.org_metric.set_value(f"{len(contracts.orgs):,}")
             self.key_metric.set_value(f"{self.state.key_count:,}")
@@ -257,7 +257,7 @@ class SourceTab(QWidget):
         if contracts.unparsed:
             lines.append(f"{len(contracts.unparsed)} with no reward data found")
         lines.append(
-            f"{sum(len(contract.evidence) for contract in contracts.contracts):,} provenance evidence links"
+            f"{_evidence_count(contracts):,} provenance evidence links"
         )
         for capability in contracts.capabilities:
             lines.append(
@@ -294,3 +294,11 @@ class SourceTab(QWidget):
 
     def _warn(self, title: str, message: str) -> None:
         QMessageBox.warning(self, title, message)
+
+
+def _evidence_count(contracts) -> int:
+    return sum(
+        len(contract.evidence)
+        + sum(len(detail.evidence) for detail in contract.mission_details)
+        for contract in contracts.contracts
+    )

@@ -1,5 +1,6 @@
 from starcompanion.enhancements import (
     MissionEnhancementProvider,
+    MissionTacticalEnhancementProvider,
     apply_enhancements,
     unavailable_mission_enhancements,
 )
@@ -12,7 +13,19 @@ from starcompanion.extract.dataforge import (
     MissionExtractionResult,
     MissionFacts,
 )
-from starcompanion.model import Contract, ContractSet, Org, ProviderStatus, StringKind
+from starcompanion.model import (
+    Contract,
+    ContractSet,
+    Evidence,
+    Org,
+    ProviderStatus,
+    StringKind,
+)
+from starcompanion.extract.mission_tactical import (
+    MissionTacticalFacts,
+    MissionTacticalResult,
+    TacticalValue,
+)
 from starcompanion.render import Renderer
 
 
@@ -49,6 +62,35 @@ def mission_result(status=CapabilityStatus.AVAILABLE) -> MissionExtractionResult
         "dataforge-mission-facts", status, 8, 1, 1
     )
     return MissionExtractionResult((fact,), report)
+
+
+def tactical_result(
+    *,
+    provider="local-dataforge-mission-spawns",
+    values=None,
+    status=CapabilityStatus.AVAILABLE,
+) -> MissionTacticalResult:
+    values = values or (
+        TacticalValue(
+            "hostile-spawns",
+            7,
+            Confidence.HIGH,
+            (RawEvidence("spawn-guid", "missions/spawn.xml", "$.count", 7),),
+        ),
+    )
+    fact = MissionTacticalFacts(
+        "mission-guid",
+        ("Test_Title",),
+        ("Test_Desc",),
+        ("Test_Title", "Test_Desc"),
+        tuple(values),
+        ("mission-guid", "spawn-guid"),
+        Confidence.HIGH,
+    )
+    return MissionTacticalResult(
+        (fact,),
+        CapabilityReport(provider, status, "build-1", 1, 1),
+    )
 
 
 def test_mission_provider_merges_local_rewards_and_resolves_display_names():
@@ -117,6 +159,113 @@ def test_provider_is_deterministic_and_disabling_removes_only_its_output():
     assert disabled == base
     assert base.contracts[0].reward.is_empty
     assert not first.contracts[0].reward.is_empty
+
+
+def test_tactical_provider_merges_typed_details_with_independent_provenance():
+    source = tactical_result()
+    enhancement = MissionTacticalEnhancementProvider(
+        source.capability.provider,
+        "2",
+        lambda key: {"Test_Title": "Title", "Test_Desc": "Desc"}.get(key),
+    ).build(source)
+
+    result = apply_enhancements(contracts(), [enhancement])
+    detail = result.contracts[0].mission_detail("hostile-spawns")
+
+    assert detail.value == 7
+    assert detail.confidence.value == "high"
+    assert detail.evidence[0].provider == "local-dataforge-mission-spawns"
+    assert result.contracts[0].evidence == []
+    assert result.capabilities[0].contracts_enhanced == 1
+    assert result.capabilities[0].evidence_links == 1
+
+
+def test_duplicate_tactical_values_merge_all_evidence():
+    source = tactical_result()
+    first = MissionTacticalEnhancementProvider(
+        source.capability.provider,
+        "2",
+        lambda _key: "localized",
+    ).build(source)
+    duplicate = replace(
+        first.enhancements[0].mission_details[0],
+        evidence=(Evidence("second", "record-2", "path", "$.hostiles", 7),),
+    )
+    additions = replace(
+        first,
+        enhancements=(
+            first.enhancements[0],
+            replace(first.enhancements[0], mission_details=(duplicate,)),
+        ),
+    )
+
+    result = apply_enhancements(contracts(), [additions])
+
+    detail = result.contracts[0].mission_detail("hostile-spawns")
+    assert len(detail.evidence) == 2
+    assert result.capabilities[0].evidence_links == 2
+
+
+def test_conflicting_tactical_values_are_suppressed_and_degrade_provider():
+    source = tactical_result()
+    first = MissionTacticalEnhancementProvider(
+        source.capability.provider,
+        "2",
+        lambda _key: "localized",
+    ).build(source)
+    conflicting = replace(first.enhancements[0].mission_details[0], value=8)
+    additions = replace(
+        first,
+        enhancements=(
+            first.enhancements[0],
+            replace(first.enhancements[0], mission_details=(conflicting,)),
+        ),
+    )
+
+    result = apply_enhancements(contracts(), [additions])
+
+    assert result.contracts[0].mission_detail("hostile-spawns") is None
+    assert result.capabilities[0].status is ProviderStatus.DEGRADED
+    assert "mission-detail-conflict" in result.capabilities[0].diagnostics[-1]
+
+
+def test_tactical_mission_type_requires_real_localization_and_never_substitutes():
+    source = tactical_result(
+        provider="local-dataforge-mission-classification",
+        values=(
+            TacticalValue(
+                "mission-type",
+                "Missing_Type_Key",
+                Confidence.HIGH,
+                (
+                    RawEvidence(
+                        "mission-guid",
+                        "mission.xml",
+                        "$.LocalisedTypeName",
+                        "@Missing_Type_Key",
+                    ),
+                ),
+            ),
+            TacticalValue(
+                "difficulty",
+                "High",
+                Confidence.HIGH,
+                (RawEvidence("mission-guid", "mission.xml", "$.difficulty", "High"),),
+            ),
+        ),
+    )
+    enhancement = MissionTacticalEnhancementProvider(
+        source.capability.provider,
+        "2",
+        lambda key: "localized" if key in {"Test_Title", "Test_Desc"} else None,
+    ).build(source)
+
+    result = apply_enhancements(contracts(), [enhancement])
+
+    assert result.contracts[0].mission_detail("mission-type") is None
+    assert result.contracts[0].mission_detail("difficulty").value == "High"
+    assert enhancement.capability.status is ProviderStatus.DEGRADED
+    assert "mission-type-localization-missing" in enhancement.capability.diagnostics[-1]
 
 
 def test_unavailable_provider_fails_independently_without_mutating_contracts():
@@ -220,3 +369,4 @@ def test_local_reward_golden_render_and_per_key_provenance():
     )
     assert len(rendered.provenance["Test_Title"]) == 2
     assert len(rendered.provenance["Test_Desc"]) == 2
+from dataclasses import replace

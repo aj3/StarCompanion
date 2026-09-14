@@ -9,7 +9,8 @@ from pathlib import Path
 
 from .inject import DEFAULT_BACKUP_RETENTION, InjectionPlan, MergeMode, apply
 from .ini import LocalizationFile
-from .install import DEFAULT_LANGUAGE, GameInstall
+from .legacy_pack import attach_legacy_mining_pack, attach_legacy_presentation_pack
+from .install import DEFAULT_LANGUAGE, GameInstall, normalize_language
 from .model import ContractSet
 from .fallbacks import FallbackDocument
 from .prepare import PreparedLocalization, prepare_localization, stream_stock_localization
@@ -123,12 +124,27 @@ def _read_contracts_local(
 ) -> ContractSet:
     from .enhancements import (
         MissionEnhancementProvider,
+        MissionTacticalEnhancementProvider,
         apply_enhancements,
         unavailable_mission_enhancements,
+        unavailable_tactical_enhancements,
+    )
+    from .entity_presentation import (
+        attach_entity_presentation,
+        unavailable_entity_capabilities,
     )
     from .extract import datacore, dataforge
-    from .extract.p4k import P4KArchive, is_localization_entry
+    from .extract.entities import (
+        extract_entity_catalog,
+        presentation_entity_providers,
+    )
+    from .extract.mission_tactical import (
+        extract_mission_tactical_catalog,
+        mission_tactical_providers,
+    )
+    from .extract.p4k import P4KArchive
     from .fallbacks import apply_to_localization, record_usage
+    from .route_presentation import attach_nested_route_expansions
 
     owns_datacore = datacore_path is None
     if datacore_path is None:
@@ -168,9 +184,8 @@ def _read_contracts_local(
             )
             report(reporter, stage, message, combined, 1000)
 
-        wanted = lambda entry: (
-            is_localization_entry(entry)
-            or entry.filename.casefold() == data_entry.casefold()
+        localization_entry = (
+            f"Data/Localization/{normalize_language(language)}/global.ini"
         )
         with tempfile.SpooledTemporaryFile(max_size=1 << 20, mode="w+b") as stream:
             with P4KArchive(
@@ -178,7 +193,7 @@ def _read_contracts_local(
                 progress=index_progress,
                 entry_progress=entry_progress,
                 checkpoint=token.checkpoint,
-                entry_filter=wanted,
+                exact_entries=(localization_entry, data_entry),
             ) as archive:
                 archive.stream_localization(stream.write, language)
                 if data_entry in archive:
@@ -192,10 +207,35 @@ def _read_contracts_local(
         token.checkpoint()
 
         facts = None
+        tactical_catalog = None
+        entity_catalog = None
+        data_build = install.version or "unknown"
+        entity_capabilities = ()
+        enhancement_sets = []
+        tactical_specs = {
+            provider.spec.provider: provider.spec.version
+            for provider in mission_tactical_providers()
+        }
         if not has_datacore:
-            enhancement_set = unavailable_mission_enhancements(
+            reason = "Data/Game2.dcb is not present in this archive"
+            enhancement_sets.append(
+                unavailable_mission_enhancements(
+                    install.version or "unknown",
+                    reason,
+                )
+            )
+            enhancement_sets.extend(
+                unavailable_tactical_enhancements(
+                    provider,
+                    version,
+                    install.version or "unknown",
+                    reason,
+                )
+                for provider, version in tactical_specs.items()
+            )
+            entity_capabilities = unavailable_entity_capabilities(
                 install.version or "unknown",
-                "Data/Game2.dcb is not present in this archive",
+                reason,
             )
         else:
             try:
@@ -204,12 +244,41 @@ def _read_contracts_local(
                     OperationStage.PARSE_DATACORE,
                     "Resolving local mission reward records…",
                 )
-                facts = dataforge.extract_mission_facts(datacore.load(datacore_path))
+                core = datacore.load(datacore_path)
+                data_build = install.version or str(core.version)
+                index = dataforge.DataForgeIndex(core)
+                facts = dataforge.extract_mission_facts(core, index=index)
+                tactical_catalog = extract_mission_tactical_catalog(
+                    core,
+                    build_version=install.version,
+                    index=index,
+                )
+                entity_catalog = extract_entity_catalog(
+                    index,
+                    build_version=install.version,
+                    providers=presentation_entity_providers(),
+                )
                 token.checkpoint()
             except datacore.DataCoreError as exc:
-                enhancement_set = unavailable_mission_enhancements(
+                reason = f"Game2.dcb could not be read: {exc}"
+                enhancement_sets.append(
+                    unavailable_mission_enhancements(
+                        install.version or "unknown",
+                        reason,
+                    )
+                )
+                enhancement_sets.extend(
+                    unavailable_tactical_enhancements(
+                        provider,
+                        version,
+                        install.version or "unknown",
+                        reason,
+                    )
+                    for provider, version in tactical_specs.items()
+                )
+                entity_capabilities = unavailable_entity_capabilities(
                     install.version or "unknown",
-                    f"Game2.dcb could not be read: {exc}",
+                    reason,
                 )
         evidenced_groups = (
             tuple(
@@ -235,15 +304,41 @@ def _read_contracts_local(
             )
         report(reporter, OperationStage.PARSE_CONTRACTS, "Finding contract strings…")
         contracts = game_strings.parse(strings, evidenced_groups=evidenced_groups)
+        attach_nested_route_expansions(contracts, strings)
         token.checkpoint()
         if facts is not None:
-            enhancement_set = MissionEnhancementProvider(strings.get).build(facts)
+            enhancement_sets.append(
+                MissionEnhancementProvider(strings.get).build(facts)
+            )
+        if tactical_catalog is not None:
+            enhancement_sets.extend(
+                MissionTacticalEnhancementProvider(
+                    result.capability.provider,
+                    tactical_specs[result.capability.provider],
+                    strings.get,
+                ).build(result)
+                for result in tactical_catalog.provider_results
+            )
         report(
             reporter,
             OperationStage.APPLY_ENHANCEMENTS,
             "Merging local mission rewards…",
         )
-        contracts = apply_enhancements(contracts, [enhancement_set])
+        contracts = apply_enhancements(contracts, enhancement_sets)
+        if entity_catalog is not None:
+            attach_entity_presentation(contracts, entity_catalog, strings)
+        else:
+            contracts.capabilities.extend(entity_capabilities)
+        attach_legacy_mining_pack(
+            contracts,
+            strings,
+            data_build,
+        )
+        attach_legacy_presentation_pack(
+            contracts,
+            strings,
+            data_build,
+        )
         if applied_fallbacks is not None:
             record_usage(
                 contracts,

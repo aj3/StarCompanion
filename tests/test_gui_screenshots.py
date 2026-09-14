@@ -191,3 +191,40 @@ def test_workflow_pages_reflow_without_horizontal_clipping_at_minimum_size(page,
         assert metrics["rects"]["preview_section"][1] > metrics["rects"]["editor_section"][1]
     else:
         assert metrics["rects"]["recovery_section"][1] > metrics["rects"]["plan_view"][1]
+
+
+@pytest.mark.parametrize("scale", [1.0, 1.5, 2.0])
+def test_pseudo_locale_shell_renders_at_supported_scale_factors(scale, tmp_path):
+    output = tmp_path / f"g7-pseudo-{scale:g}x.png"
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "QT_QPA_PLATFORM": "offscreen",
+            "QT_SCALE_FACTOR": str(scale),
+            "STARCOMPANION_DATA": str(tmp_path / "data"),
+            "STARCOMPANION_CACHE": str(tmp_path / "cache"),
+            "STARCOMPANION_SCREENSHOT_LOCALE": "qps-ploc",
+            "PYTHONPATH": os.pathsep.join(
+                [str(ROOT / "src"), str(ROOT / "tests"), environment.get("PYTHONPATH", "")]
+            ),
+        }
+    )
+    completed = subprocess.run(
+        [sys.executable, str(PROBE), str(output)],
+        cwd=ROOT,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    metrics = json.loads(completed.stdout.strip().splitlines()[-1])
+
+    assert output.is_file() and output.stat().st_size > 10_000
+    assert metrics["interface_locale"] == "qps-ploc"
+    assert metrics["logical_size"] == [1280, 800]
+    assert metrics["physical_size"] == [round(1280 * scale), round(800 * scale)]
+    for name, (x, y, width, height) in metrics["rects"].items():
+        assert x >= 0 and y >= 0, name
+        assert width > 0 and height > 0, name
+        assert x + width <= 1280 and y + height <= 800, name

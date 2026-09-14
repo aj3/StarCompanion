@@ -37,8 +37,32 @@ that phase's **Resume prompt**.
 | | 9b. Mission XML layer | ✅ Done — reader shipped, premise disproved |
 | 4 · Ship | 10. Packaging & release | ✅ Done — 292 tests |
 
-The catch-up program has completed C0–C6 and G1–G4. **Sprint G4 — Ownership
-and Editor Completion** is complete: revision-bound manual ownership, complete
+The catch-up program has completed C0–C6 and G1–G6. **Sprint G7 — Experience
+Parity** is active. G5's synthetic-first catalog provides typed vehicle,
+component, ship/FPS weapon, medical, commodity, crafting, and journal
+extraction; per-value source evidence; independent capability/drift reports;
+overlap suppression; and exact-build corrections that fail closed while
+preserving the original value. Synthetic mission classification, spawn/ace,
+and engagement/turret providers now add bounded reference joins and suppress
+shared-description matching. G6's first completed slice carries the tactical
+facts through cache schema 10 into independent GUI controls, description
+details, bounded typed title tags, and rendered-only provenance. Its second
+slice adds exact-token hauling routes, title shortening, and Battaglia resource
+labels. The current slice adds nested token intersection, typed entity/item
+tags, user-layer ship favorites/ASOP ordering, and a source-attributed,
+exact-build legacy mining pack. All presentation features remain default-off.
+[G5_LOCAL_PROVIDERS.md](G5_LOCAL_PROVIDERS.md) and
+[G6_PRESENTATION.md](G6_PRESENTATION.md) record those contracts. G7's first
+slice adds visible language activation, safe `USER.cfg` and restore-to-stock
+plans, portable/custom data roots, bounded filtered clipboard export,
+unsaved-close protection, category controls, and stat-block placement. Its
+second slice adds dedicated Simple mode, a bounded redacted event viewer,
+replayable coach marks, four accessible themes, and a strict offline interface
+catalog with a French shell preview. Its final slice catalogs 1,323 GUI-facing
+messages, adds placeholder-safe pseudo-locale DPI gates, presents bounded
+entity statistics, and completes 19 exact legacy wording rules; see
+[G7_EXPERIENCE_PARITY.md](G7_EXPERIENCE_PARITY.md). **Sprint G4 — Ownership and Editor Completion**
+is complete: revision-bound manual ownership, complete
 tracker operations, exact foreign-name repair, ownership-aware rendering,
 per-key conflict reconciliation, authored-only delta packs, independent column
 filters, bounded rich previews, backup/user-edit retention, local-only layout
@@ -46,8 +70,8 @@ persistence, and visible freshest-install evidence.
 
 The project is not yet at complete Smart Citizen plus legacy StarStrings
 feature parity. [FEATURE_PARITY.md](FEATURE_PARITY.md) is the current baseline
-and defines the remaining G5–G7 work without weakening the verified C0–G4
-safety boundaries.
+and defines the remaining post-G7 product and external-validation work without
+weakening the verified C0–G7 safety boundaries.
 
 ---
 

@@ -24,13 +24,20 @@ STOCK = (
 )
 
 
-def make_install(tmp_path: Path, *, extra_entries: int = 0) -> GameInstall:
+def make_install(
+    tmp_path: Path,
+    *,
+    extra_entries: int = 0,
+    include_datacore: bool = False,
+) -> GameInstall:
     root = tmp_path / "LIVE"
     root.mkdir()
     builder = B.Builder().add(
         "Data/Localization/english/global.ini",
         STOCK.encode("utf-8"),
     )
+    if include_datacore:
+        builder.add("Data/Game2.dcb", b"synthetic DataCore boundary")
     for index in range(extra_entries):
         builder.add(f"Data/filler/{index:05}.bin", b"x")
     (root / "Data.p4k").write_bytes(builder.build())
@@ -62,6 +69,38 @@ def test_read_contracts_reports_ordered_stages(tmp_path, monkeypatch):
     assert stages[-1] is OperationStage.COMPLETE
     assert events[-1].fraction == 1
     assert list(tmp_path.glob("starcompanion-helper-*")) == []
+
+
+def test_local_read_merges_all_independent_tactical_capabilities(tmp_path, monkeypatch):
+    import starcompanion.operations as operations
+    from starcompanion.extract import datacore
+    from starcompanion.extract.mission_tactical import (
+        CLASSIFICATION_PROVIDER,
+        ENGAGEMENT_PROVIDER,
+        SPAWN_PROVIDER,
+    )
+    from test_mission_tactical import tactical_fixture
+
+    source = tactical_fixture()
+    source.entries[0][3]["title"] = "@Foxwell_Test_title"
+    source.entries[0][3]["description"] = "@Foxwell_Test_desc"
+    monkeypatch.setattr(datacore, "load", lambda _path: source)
+
+    contracts = operations._read_contracts_local(
+        make_install(tmp_path, include_datacore=True),
+        token=CancellationToken(),
+    )
+
+    assert {item.provider for item in contracts.capabilities} >= {
+        CLASSIFICATION_PROVIDER.provider,
+        SPAWN_PROVIDER.provider,
+        ENGAGEMENT_PROVIDER.provider,
+    }
+    details = {item.name: item.value for item in contracts.contracts[0].mission_details}
+    assert details["mission-type"] == "Bounty"
+    assert details["hostile-spawns"] == 7
+    assert details["turret-count"] == 3
+    assert all(item.evidence for item in contracts.contracts[0].mission_details)
 
 
 def test_cancellation_interrupts_central_directory_index(tmp_path):

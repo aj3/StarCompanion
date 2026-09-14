@@ -10,6 +10,11 @@ game content remain the property of their respective owners.
 Smart Citizen was used as a behavior and feature reference. No Smart Citizen
 implementation code is included in StarCompanion.
 
+The optional numeric mining-signature pack preserves factual values from
+MrKraken's historical StarStrings project (commit
+b83d58baedf71b090903b9ec34186520907271f9). It is community-authored data,
+disabled by default, and accepted only for an explicitly reviewed game build.
+
 The MIT-licensed dolkensp/unp4k project by Peter Dolkens was consulted as a
 DataForge/P4K format reference. No unp4k implementation code or binary is
 included in StarCompanion.

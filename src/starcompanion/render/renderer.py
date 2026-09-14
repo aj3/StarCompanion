@@ -22,12 +22,138 @@ from jinja2 import (
 )
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
-from ..model import BlueprintPool, Contract, ContractSet, Evidence, GateKind, StringKind
+from ..model import (
+    BlueprintPool,
+    Contract,
+    ContractSet,
+    Evidence,
+    GateKind,
+    LocalizedEntity,
+    MissionDetail,
+    StringKind,
+)
+from ..route_presentation import resource_signature, route_fragment, token_evidence
 from ..validate import EMPHASIS_TAGS, Issue, Severity, validate_value
 
 TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
 
 _REAL_NEWLINE = re.compile(r"[ \t]*\r?\n")
+
+MISSION_FACT_GROUPS = (
+    "mission_type",
+    "difficulty",
+    "friendly_spawns",
+    "hostile_spawns",
+    "ace",
+    "turrets",
+    "engagement",
+)
+ENTITY_TAG_KINDS = (
+    "vehicle",
+    "component",
+    "ship-weapon",
+    "fps-weapon",
+    "medical",
+    "commodity",
+    "missile",
+)
+DEFAULT_ENTITY_TAG_FIELDS = (
+    "kind",
+    "subtype",
+    "tracking-signal",
+    "size",
+    "grade",
+    "class",
+)
+ENTITY_TAG_FIELDS = (
+    *DEFAULT_ENTITY_TAG_FIELDS,
+    "mass",
+    "cargo-capacity",
+    "crew-min",
+    "crew-max",
+    "damage",
+    "rate-of-fire",
+    "projectile-speed",
+    "range",
+    "magazine-capacity",
+    "effective-range",
+    "health-restored",
+    "max-health-repair-rate",
+    "max-auto-dose",
+    "overdose-threshold",
+    "toxicity",
+    "base-price",
+    "shop-buy-price",
+    "shop-sell-price",
+)
+_ENTITY_KIND_LABELS = {
+    "vehicle": "Vehicle",
+    "component": "Component",
+    "ship-weapon": "Ship Weapon",
+    "fps-weapon": "FPS Weapon",
+    "medical": "Medical",
+    "commodity": "Commodity",
+    "missile": "Missile",
+}
+_ENTITY_FIELD_LABELS = {
+    "tracking-signal": "Tracking",
+    "mass": "Mass",
+    "cargo-capacity": "Cargo",
+    "crew-min": "Min crew",
+    "crew-max": "Max crew",
+    "damage": "Damage",
+    "rate-of-fire": "Rate",
+    "projectile-speed": "Velocity",
+    "range": "Range",
+    "magazine-capacity": "Magazine",
+    "effective-range": "Range",
+    "health-restored": "Heal",
+    "max-health-repair-rate": "Repair rate",
+    "max-auto-dose": "Auto dose",
+    "overdose-threshold": "Overdose",
+    "toxicity": "Toxicity",
+    "base-price": "Base price",
+    "shop-buy-price": "Buy price",
+    "shop-sell-price": "Sell price",
+}
+_ENTITY_FIELD_UNITS = {
+    "mass": "kg",
+    "cargo-capacity": "SCU",
+    "rate-of-fire": "RPM",
+    "projectile-speed": "m/s",
+    "range": "m",
+    "effective-range": "m",
+}
+_GROUP_FACTS = {
+    "mission_type": ("mission-type",),
+    "difficulty": (
+        "difficulty",
+        "difficulty-risk",
+        "difficulty-knowledge",
+        "difficulty-mental-load",
+        "difficulty-mechanical-skill",
+    ),
+    "friendly_spawns": ("friendly-spawns",),
+    "hostile_spawns": ("hostile-spawns",),
+    "ace": ("ace-pilot", "ace-probability"),
+    "turrets": ("turret-count",),
+    "engagement": ("engagement-type", "engagement-distance"),
+}
+_DETAIL_LABELS = {
+    "mission-type": "Mission type",
+    "difficulty": "Difficulty",
+    "difficulty-risk": "Risk of loss",
+    "difficulty-knowledge": "Game knowledge",
+    "difficulty-mental-load": "Mental load",
+    "difficulty-mechanical-skill": "Mechanical skill",
+    "friendly-spawns": "Friendly spawns",
+    "hostile-spawns": "Hostile spawns",
+    "ace-pilot": "Ace pilot",
+    "ace-probability": "Ace probability",
+    "turret-count": "Turrets",
+    "engagement-distance": "Engagement distance",
+    "engagement-type": "Engagement type",
+}
 
 
 def validate_wording_label(value: str) -> str:
@@ -140,6 +266,25 @@ class RenderOptions:
     labels: RenderLabels = field(default_factory=RenderLabels)
     reputation_separator: str = " / "
     thousands_separator: bool = True
+    stat_block_placement: str = "below"
+    mission_fact_groups: frozenset[str] = frozenset()
+    show_mission_details: bool = False
+    tag_builder_enabled: bool = False
+    tag_builder_fields: tuple[str, ...] = MISSION_FACT_GROUPS
+    tag_builder_placement: str = "prefix"
+    tag_builder_separator: str = " "
+    tag_builder_max_characters: int = 72
+    route_titles_enabled: bool = False
+    route_title_mode: str = "append"
+    route_arrow: str = ">"
+    route_location_detail: str = "address"
+    mining_signature_enabled: bool = False
+    legacy_mining_pack_enabled: bool = False
+    entity_tag_builder_enabled: bool = False
+    entity_tag_kinds: frozenset[str] = frozenset(ENTITY_TAG_KINDS)
+    entity_tag_fields: tuple[str, ...] = DEFAULT_ENTITY_TAG_FIELDS
+    entity_tag_placement: str = "prefix"
+    entity_tag_max_characters: int = 72
 
     def __post_init__(self):
         for tag in (self.emphasis, *self.emphasis_by_field.values()):
@@ -162,6 +307,37 @@ class RenderOptions:
             )
         if self.reputation_separator not in {" / ", "/", " • "}:
             raise ValueError("unsupported reputation separator")
+        if self.stat_block_placement not in {"below", "above"}:
+            raise ValueError("unsupported stat-block placement")
+        unknown_groups = set(self.mission_fact_groups) - set(MISSION_FACT_GROUPS)
+        unknown_tags = set(self.tag_builder_fields) - set(MISSION_FACT_GROUPS)
+        if unknown_groups or unknown_tags:
+            raise ValueError("unknown mission presentation group")
+        if len(self.tag_builder_fields) != len(set(self.tag_builder_fields)):
+            raise ValueError("tag builder fields must be unique")
+        if self.tag_builder_placement not in {"prefix", "suffix"}:
+            raise ValueError("unsupported tag builder placement")
+        if self.tag_builder_separator not in {" ", " • "}:
+            raise ValueError("unsupported tag builder separator")
+        if not 16 <= self.tag_builder_max_characters <= 160:
+            raise ValueError("tag builder length must be between 16 and 160")
+        if self.route_title_mode not in {"append", "replace"}:
+            raise ValueError("unsupported route title mode")
+        if self.route_arrow not in {">", "->", "to"}:
+            raise ValueError("unsupported route arrow")
+        if self.route_location_detail not in {"address", "name"}:
+            raise ValueError("unsupported route location detail")
+        if set(self.entity_tag_kinds) - set(ENTITY_TAG_KINDS):
+            raise ValueError("unsupported entity tag kind")
+        if (
+            set(self.entity_tag_fields) - set(ENTITY_TAG_FIELDS)
+            or len(self.entity_tag_fields) != len(set(self.entity_tag_fields))
+        ):
+            raise ValueError("invalid entity tag fields")
+        if self.entity_tag_placement not in {"prefix", "suffix"}:
+            raise ValueError("unsupported entity tag placement")
+        if not 16 <= self.entity_tag_max_characters <= 160:
+            raise ValueError("entity tag length must be between 16 and 160")
 
     def emphasis_for(self, field_name: str | None) -> str:
         return self.emphasis_by_field.get(field_name or "", self.emphasis)
@@ -173,6 +349,305 @@ class RenderOptions:
         return self.reputation_separator.join(
             self.format_number(value) for value in values
         )
+
+    def visible_mission_details(self, contract: Contract) -> tuple[MissionDetail, ...]:
+        allowed = {
+            name
+            for group in self.mission_fact_groups
+            for name in _GROUP_FACTS[group]
+        }
+        return tuple(item for item in contract.mission_details if item.name in allowed)
+
+    def mission_detail_lines(self, contract: Contract) -> tuple[str, ...]:
+        if not self.show_mission_details:
+            return ()
+        details = self.visible_mission_details(contract)
+        order = {
+            name: index
+            for index, group in enumerate(MISSION_FACT_GROUPS)
+            for name in _GROUP_FACTS[group]
+        }
+        return tuple(
+            f"{_DETAIL_LABELS[item.name]}: {self._format_mission_value(item)}"
+            + (
+                f" (confidence: {item.confidence.value})"
+                if item.confidence.value not in {"high", "none"}
+                else ""
+            )
+            for item in sorted(details, key=lambda value: order[value.name])
+        )
+
+    def title_fact_tags(self, contract: Contract) -> str:
+        parts = [text for text, _details in self._title_fact_parts(contract)]
+        return self.tag_builder_separator.join(parts)
+
+    def mission_title_suffix(self, contract: Contract) -> str:
+        parts: list[str] = []
+        current_length = len(self.title_fact_tags(contract))
+        if self.route_titles_enabled and self.route_title_mode == "append":
+            route = route_fragment(
+                contract,
+                arrow=self.route_arrow,
+                detail=self.route_location_detail,
+            )
+            if route:
+                current_length = self._append_bounded_title_part(
+                    parts, f"[{route}]", current_length
+                )
+        if self.mining_signature_enabled:
+            signature = resource_signature(contract)
+            if signature:
+                self._append_bounded_title_part(
+                    parts, f"[{signature}]", current_length
+                )
+        return self.tag_builder_separator.join(parts)
+
+    def mission_title_base(self, contract: Contract, base: str) -> str:
+        if self.route_titles_enabled and self.route_title_mode == "replace":
+            route = route_fragment(
+                contract,
+                arrow=self.route_arrow,
+                detail=self.route_location_detail,
+            )
+            current_length = len(self.title_fact_tags(contract))
+            added = len(route) + (
+                len(self.tag_builder_separator) if current_length else 0
+            )
+            if route and current_length + added <= self.tag_builder_max_characters:
+                return route
+        return base
+
+    def _append_bounded_title_part(
+        self,
+        parts: list[str],
+        text: str,
+        current_length: int,
+    ) -> int:
+        added = len(text) + (
+            len(self.tag_builder_separator) if current_length else 0
+        )
+        if current_length + added <= self.tag_builder_max_characters:
+            parts.append(text)
+            return current_length + added
+        return current_length
+
+    def mission_evidence(
+        self,
+        contract: Contract,
+        kind: StringKind,
+        rendered_value: str | None = None,
+    ) -> tuple[Evidence, ...]:
+        if kind is StringKind.DESC and self.show_mission_details:
+            details = self.visible_mission_details(contract)
+        elif kind is StringKind.TITLE and self.tag_builder_enabled:
+            details = tuple(
+                detail
+                for _text, selected in self._title_fact_parts(contract)
+                for detail in selected
+            )
+        else:
+            details = ()
+        evidence = list(
+            dict.fromkeys(
+                evidence for detail in details for evidence in detail.evidence
+            )
+        )
+        if kind is StringKind.TITLE:
+            route = ""
+            if self.route_titles_enabled:
+                candidate = route_fragment(
+                    contract,
+                    arrow=self.route_arrow,
+                    detail=self.route_location_detail,
+                )
+                if self.route_title_mode == "append":
+                    rendered = f"[{candidate}]" in self.mission_title_suffix(
+                        contract
+                    )
+                else:
+                    current_length = len(self.title_fact_tags(contract))
+                    added = len(candidate) + (
+                        len(self.tag_builder_separator) if current_length else 0
+                    )
+                    rendered = bool(candidate) and (
+                        current_length + added <= self.tag_builder_max_characters
+                    )
+                if rendered_value is not None and candidate not in rendered_value:
+                    rendered = False
+                if rendered:
+                    route = candidate
+            resource = ""
+            if self.mining_signature_enabled:
+                candidate = resource_signature(contract)
+                if (
+                    f"[{candidate}]" in self.mission_title_suffix(contract)
+                    and (rendered_value is None or candidate in rendered_value)
+                ):
+                    resource = candidate
+            evidence.extend(
+                token_evidence(
+                    contract,
+                    route_text=route,
+                    resource_text=resource,
+                )
+            )
+        return tuple(dict.fromkeys(evidence))
+
+    def _title_fact_parts(
+        self,
+        contract: Contract,
+    ) -> tuple[tuple[str, tuple[MissionDetail, ...]], ...]:
+        if not self.tag_builder_enabled:
+            return ()
+        enabled = set(self.mission_fact_groups)
+        parts: list[tuple[str, tuple[MissionDetail, ...]]] = []
+        current_length = 0
+        for group in self.tag_builder_fields:
+            if group not in enabled:
+                continue
+            selected = self._title_group_details(contract, group)
+            text = self._title_group_text(group, selected)
+            if not text:
+                continue
+            added = len(text) + (len(self.tag_builder_separator) if parts else 0)
+            if current_length + added > self.tag_builder_max_characters:
+                continue
+            parts.append((text, selected))
+            current_length += added
+        return tuple(parts)
+
+    @staticmethod
+    def _title_group_details(
+        contract: Contract,
+        group: str,
+    ) -> tuple[MissionDetail, ...]:
+        found = {
+            item.name: item
+            for item in contract.mission_details
+            if item.name in _GROUP_FACTS[group]
+        }
+        preferred = {
+            "difficulty": ("difficulty", "difficulty-risk"),
+            "ace": ("ace-pilot", "ace-probability"),
+            "engagement": ("engagement-type", "engagement-distance"),
+        }.get(group, _GROUP_FACTS[group])
+        return tuple(found[name] for name in preferred if name in found)[:1]
+
+    def _title_group_text(
+        self,
+        group: str,
+        details: tuple[MissionDetail, ...],
+    ) -> str:
+        if not details:
+            return ""
+        item = details[0]
+        value = self._format_mission_value(item, compact=True)
+        if group == "mission_type":
+            return f"[{value}]"
+        if group == "difficulty":
+            return f"[Difficulty {value}]"
+        if group == "friendly_spawns":
+            return f"[Allies {value}]"
+        if group == "hostile_spawns":
+            return f"[Hostiles {value}]"
+        if group == "ace":
+            if item.name == "ace-pilot":
+                return "[ACE]" if item.value is True else ""
+            return "[ACE?]" if isinstance(item.value, (int, float)) and item.value > 0 else ""
+        if group == "turrets":
+            return f"[Turrets {value}]"
+        return f"[{value}]"
+
+    def _format_mission_value(
+        self,
+        detail: MissionDetail,
+        *,
+        compact: bool = False,
+    ) -> str:
+        value = detail.value
+        if detail.name == "ace-probability" and isinstance(value, (int, float)):
+            return f"{value:.0%}"
+        if isinstance(value, bool):
+            return "Yes" if value else "No"
+        if isinstance(value, int):
+            return self.format_number(value)
+        if isinstance(value, float):
+            return f"{value:g}" if compact else f"{value:,.1f}"
+        return value
+
+    def entity_tag(
+        self,
+        entity: LocalizedEntity,
+    ) -> tuple[str, tuple[Evidence, ...]]:
+        """Build one bounded tag from typed, equal-across-record entity facts."""
+
+        if (
+            not self.entity_tag_builder_enabled
+            or entity.kind not in self.entity_tag_kinds
+        ):
+            return "", ()
+        parts: list[str] = []
+        evidence: list[Evidence] = []
+        current = 2
+        for field_name in self.entity_tag_fields:
+            if field_name == "kind":
+                text = _ENTITY_KIND_LABELS[entity.kind]
+                selected = entity.evidence
+            else:
+                attribute = entity.attribute(field_name)
+                if attribute is None:
+                    continue
+                text = self._format_entity_attribute(field_name, attribute.value)
+                if (
+                    field_name == "subtype"
+                    and text.casefold() == _ENTITY_KIND_LABELS[entity.kind].casefold()
+                ):
+                    continue
+                selected = attribute.evidence
+            added = len(text) + (1 if parts else 0)
+            if current + added > self.entity_tag_max_characters:
+                continue
+            parts.append(text)
+            current += added
+            evidence.extend(selected)
+        if not parts:
+            return "", ()
+        return f"[{' '.join(parts)}]", tuple(dict.fromkeys(evidence))
+
+    @staticmethod
+    def _format_entity_attribute(field_name: str, value: object) -> str:
+        if field_name == "size":
+            return f"S{value}"
+        if field_name == "grade":
+            return f"Grade {value}"
+        if field_name in {"class", "subtype"}:
+            return str(value)
+        if field_name == "tracking-signal":
+            return {
+                "CrossSection": "CS",
+                "Electromagnetic": "EM",
+                "Infrared": "IR",
+            }[str(value)]
+        if type(value) is int:
+            rendered = f"{value:,}"
+        elif type(value) is float:
+            rendered = f"{value:,.2f}".rstrip("0").rstrip(".")
+        else:
+            rendered = str(value)
+        label = _ENTITY_FIELD_LABELS[field_name]
+        unit = _ENTITY_FIELD_UNITS.get(field_name)
+        return f"{label} {rendered}{f' {unit}' if unit else ''}"
+
+    def render_entity(
+        self,
+        entity: LocalizedEntity,
+    ) -> tuple[str, tuple[Evidence, ...]] | None:
+        tag, evidence = self.entity_tag(entity)
+        if not tag:
+            return None
+        if self.entity_tag_placement == "prefix":
+            return f"{tag} {entity.base_text}", evidence
+        return f"{entity.base_text} {tag}", evidence
 
 
 @dataclass
@@ -286,8 +761,88 @@ class Renderer:
                     continue
 
                 result.values[key] = value
-                result.provenance[key] = tuple(contract.evidence)
+                kind = contract.kind_of(key) or StringKind.DESC
+                result.provenance[key] = tuple(
+                    dict.fromkeys(
+                        (
+                            *contract.evidence,
+                            *self.options.mission_evidence(contract, kind, value),
+                        )
+                    )
+                )
                 result.warnings.extend((key, i) for i in issues)
+
+        for entity in contracts.entities:
+            rendered = self.options.render_entity(entity)
+            if rendered is None:
+                continue
+            value, evidence = rendered
+            key = entity.localization_key
+            if key in result.values:
+                if result.values[key] != value:
+                    result.skipped.append(
+                        (key, "entity localization collides with a contract key")
+                    )
+                continue
+            issues = validate_value(value, trusted_source=entity.base_text)
+            source_warnings = {
+                issue
+                for issue in validate_value(entity.base_text)
+                if issue.severity is Severity.WARNING
+            }
+            issues = [
+                issue
+                for issue in issues
+                if not (
+                    issue.severity is Severity.WARNING and issue in source_warnings
+                )
+            ]
+            errors = [issue for issue in issues if issue.severity is Severity.ERROR]
+            if errors:
+                result.skipped.append((key, str(errors[0])))
+                continue
+            result.values[key] = value
+            result.provenance[key] = evidence
+            result.warnings.extend((key, issue) for issue in issues)
+
+        if self.options.legacy_mining_pack_enabled:
+            for item in contracts.legacy_signatures:
+                key = item.localization_key
+                value = f"{item.base_text} (RS {item.signature})"
+                if key in result.values:
+                    if result.values[key] != value:
+                        result.skipped.append(
+                            (key, "legacy localization collides with another generated key")
+                        )
+                    continue
+                issues = validate_value(value, trusted_source=item.base_text)
+                errors = [
+                    issue for issue in issues if issue.severity is Severity.ERROR
+                ]
+                if errors:
+                    result.skipped.append((key, str(errors[0])))
+                    continue
+                result.values[key] = value
+                result.provenance[key] = item.evidence
+                result.warnings.extend((key, issue) for issue in issues)
+
+            for item in contracts.legacy_presentations:
+                key = item.localization_key
+                value = item.replacement_text
+                if key in result.values:
+                    if result.values[key] != value:
+                        result.skipped.append(
+                            (key, "legacy presentation collides with another generated key")
+                        )
+                    continue
+                issues = validate_value(value)
+                errors = [issue for issue in issues if issue.severity is Severity.ERROR]
+                if errors:
+                    result.skipped.append((key, str(errors[0])))
+                    continue
+                result.values[key] = value
+                result.provenance[key] = item.evidence
+                result.warnings.extend((key, issue) for issue in issues)
 
         return result
 

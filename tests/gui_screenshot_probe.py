@@ -16,6 +16,7 @@ from starcompanion.gui.app import MainWindow
 from starcompanion.gui.theme import DARK
 from starcompanion.ini import BOM
 from starcompanion.model import BlueprintPool, Contract, ContractSet, Org, Reward
+from starcompanion.portability import PreferencesStore
 from starcompanion.sources import contracts_ini
 
 
@@ -33,6 +34,10 @@ def main() -> int:
         os.environ["STARCOMPANION_EXPERT"] = "1"
     install.find_default = lambda: None
     install.find_installs = lambda **_kwargs: []
+    interface_locale = os.environ.get("STARCOMPANION_SCREENSHOT_LOCALE", "en-US")
+    PreferencesStore(Path(os.environ["STARCOMPANION_DATA"])).save(
+        {"tutorial_completed": True, "interface_locale": interface_locale}
+    )
     app = QApplication([])
     window = MainWindow()
     if page in ("templates", "string-editor", "manual-apply"):
@@ -129,6 +134,7 @@ def main() -> int:
             {
                 "enabled_metric": window.fields.enabled_metric,
                 "coverage_metric": window.fields.coverage_metric,
+                "tactical_metric": window.fields.tactical_metric,
                 "core_section": window.fields.core_section,
             }
         )
@@ -136,8 +142,10 @@ def main() -> int:
         rect_widgets.update(
             {
                 "style_metric": window.formatting.style_metric,
+                "tag_metric": window.formatting.tag_metric,
                 "style_section": window.formatting.style_section,
                 "title_section": window.formatting.title_section,
+                "tag_builder_section": window.formatting.tag_builder_section,
             }
         )
     elif page == "presentation-wording":
@@ -199,6 +207,7 @@ def main() -> int:
 
     metrics = {
         "page": page,
+        "interface_locale": window.translator.locale,
         "logical_size": [window.width(), window.height()],
         "physical_size": [pixmap.width(), pixmap.height()],
         "device_pixel_ratio": pixmap.devicePixelRatio(),

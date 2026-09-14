@@ -1,7 +1,22 @@
-{% from "macros.j2" import reward_block %}
-{{- base }}
+{% from "macros.j2" import mission_detail_block, reward_block %}
+{% set details = mission_detail_block(contract, opts, em) | trim %}
 {% set block = reward_block(reward, pools, opts, em, GateKind) | trim %}
+{% if opts.stat_block_placement == "above" %}
+{% if details %}{{ details }}
+
+{% endif %}
+{% if block %}{{ block }}
+
+{% endif %}
+{{- base }}
+{% else %}
+{{- base }}
+{% if details %}
+
+{{ details }}
+{% endif %}
 {% if block %}
 
 {{ block }}
+{% endif %}
 {% endif %}

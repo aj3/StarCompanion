@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
@@ -34,6 +35,12 @@ from PySide6.QtWidgets import (
 from ... import install as installs
 from ... import store
 from ...features import community_rewards_enabled
+from ...game_files import (
+    GameFilePlan,
+    apply_game_file_plan,
+    plan_language_activation,
+    plan_restore_stock,
+)
 from ..labels import PREFIX_CAPTION, TITLE_PREFIXES
 from ...model import ProviderStatus
 from ...operations import PreparedUpdate, prepare_update, read_contracts
@@ -59,10 +66,25 @@ LOOKS = (
 )
 
 
+@dataclass(frozen=True)
+class GameScopeSnapshot:
+    contracts: object | None
+    configured_language: str | None
+    override_present: bool
+
+
 class StartTab(QWidget):
     recoveryRequested = Signal()
+    languageChanged = Signal(str)
+    scopeStatusChanged = Signal()
 
-    def __init__(self, state: AppState, parent: QWidget | None = None):
+    def __init__(
+        self,
+        state: AppState,
+        parent: QWidget | None = None,
+        *,
+        language: str = "english",
+    ):
         super().__init__(parent)
         self.state = state
         self.install: installs.GameInstall | None = None
@@ -70,13 +92,19 @@ class StartTab(QWidget):
         self.load_error: str | None = None
         self.operation_status: str | None = None
         self.selection_status: str | None = None
+        self.selected_language = installs.normalize_language(language)
+        self.available_languages: tuple[str, ...] = (self.selected_language,)
+        self.verified_languages: tuple[str, ...] = ()
+        self.active_language: str | None = None
+        self.override_present = False
         self._jobs: set[QtOperationJob] = set()
         self._busy = False
         self._shutting_down = False
-        self._pending_cache_install: installs.GameInstall | None = None
+        self._pending_cache_install: tuple[installs.GameInstall, str] | None = None
         self._pending_operation_after = None
         self._pending_prepared: PreparedUpdate | None = None
-        self._contracts_install_key: str | None = None
+        self._pending_game_file_plan: tuple[GameFilePlan, Path, TransactionJournal] | None = None
+        self._contracts_install_key: tuple[str, str] | None = None
         self._discovery_timer = QTimer(self)
         self._discovery_timer.setSingleShot(True)
         self._discovery_timer.timeout.connect(self.detect_game)
@@ -122,11 +150,14 @@ class StartTab(QWidget):
         cards.setVerticalSpacing(16)
         cards.setColumnStretch(0, 1)
         cards.setColumnStretch(1, 1)
-        cards.addWidget(self._build_game_step(), 0, 0)
-        cards.addWidget(self._build_contract_step(), 0, 1)
+        self.game_step = self._build_game_step()
+        self.contract_step = self._build_contract_step()
+        cards.addWidget(self.game_step, 0, 0)
+        cards.addWidget(self.contract_step, 0, 1)
         self.data_step = self._build_data_step()
         cards.addWidget(self.data_step, 1, 0)
-        cards.addWidget(self._build_look_step(), 1, 1)
+        self.look_step = self._build_look_step()
+        cards.addWidget(self.look_step, 1, 1)
         layout.addLayout(cards)
 
         layout.addStretch(1)
@@ -135,6 +166,10 @@ class StartTab(QWidget):
             self.go,
             self.undo,
             self.channel_selector,
+            self.language_selector,
+            self.discover_languages_button,
+            self.activate_language_button,
+            self.restore_stock_button,
             self.discover_channels_button,
             self.find_game_button,
             self.choose_game_button,
@@ -149,6 +184,17 @@ class StartTab(QWidget):
         state.userOverridesChanged.connect(self.refresh)
         self._discovery_timer.start(0)
         self.refresh()
+
+    def set_simple_mode(self, enabled: bool) -> None:
+        """Show only the existing safe Update and Undo workflow."""
+
+        for card in (
+            self.game_step,
+            self.contract_step,
+            self.data_step,
+            self.look_step,
+        ):
+            card.setVisible(not enabled)
 
     # --- step 1: the game ----------------------------------------------------
 
@@ -173,6 +219,34 @@ class StartTab(QWidget):
         self.channel_selector.currentIndexChanged.connect(self._channel_selected)
         card.add_widget(self.channel_selector)
 
+        self.language_selector = QComboBox()
+        self.language_selector.setAccessibleName("Installed game language")
+        self.language_selector.setAccessibleDescription(
+            "Select one language from the current channel; cache, user wording, and game override remain isolated to it."
+        )
+        self.language_selector.currentIndexChanged.connect(self._language_selected)
+        card.add_widget(self.language_selector)
+
+        self.discover_languages_button = QPushButton("Discover installed languages")
+        self.discover_languages_button.setAccessibleName("Discover installed languages")
+        self.discover_languages_button.setAccessibleDescription(
+            "Read only the archive index in a background worker and list installed localization languages."
+        )
+        self.discover_languages_button.clicked.connect(self.discover_languages)
+        self.activate_language_button = QPushButton("Activate selected language…")
+        self.activate_language_button.setAccessibleName("Activate selected game language")
+        self.activate_language_button.setAccessibleDescription(
+            "Preview and confirm a fingerprint-bound USER.cfg change that preserves unrelated settings."
+        )
+        self.activate_language_button.clicked.connect(self.activate_selected_language)
+        self.restore_stock_button = QPushButton("Restore stock localization…")
+        self.restore_stock_button.setProperty("role", "danger")
+        self.restore_stock_button.setAccessibleName("Restore selected localization to stock")
+        self.restore_stock_button.setAccessibleDescription(
+            "Back up and remove only the selected language's loose global.ini after confirmation."
+        )
+        self.restore_stock_button.clicked.connect(self.restore_stock_localization)
+
         self.discover_channels_button = QPushButton("Discover installed channels")
         self.discover_channels_button.setAccessibleName("Discover installed Star Citizen channels")
         self.discover_channels_button.setAccessibleDescription(
@@ -191,6 +265,9 @@ class StartTab(QWidget):
         )
         self.choose_game_button.clicked.connect(self.choose_game)
         card.add_action(self.discover_channels_button)
+        card.add_action(self.discover_languages_button)
+        card.add_action(self.activate_language_button)
+        card.add_action(self.restore_stock_button)
         card.add_action(self.find_game_button)
         card.add_action(self.choose_game_button)
 
@@ -232,6 +309,17 @@ class StartTab(QWidget):
         if install is None:
             return None
         return os.path.normcase(os.path.abspath(install.root))
+
+    def _selection_key(
+        self,
+        install: installs.GameInstall | None = None,
+        language: str | None = None,
+    ) -> tuple[str, str] | None:
+        selected = install or self.install
+        key = self._install_key(selected)
+        if key is None:
+            return None
+        return key, installs.normalize_language(language or self.selected_language)
 
     def discover_channels(self) -> None:
         """Run the potentially broad launcher-location scan outside Qt's UI thread."""
@@ -278,6 +366,8 @@ class StartTab(QWidget):
         self.channel_selector.setCurrentIndex(selected)
         self.channel_selector.blockSignals(False)
         self.install = self.installs[selected] if selected >= 0 else None
+        if previous != self._install_key(self.install):
+            self.verified_languages = ()
         retained = previous is not None and self._install_key(self.install) == previous
         self.selection_status = (
             f"Retained your previous selection. {self.install.freshness_evidence}"
@@ -300,6 +390,7 @@ class StartTab(QWidget):
         if not isinstance(item, installs.GameInstall):
             return
         self.install = item
+        self.verified_languages = ()
         self.selection_status = f"Selected explicitly. {item.freshness_evidence}"
         self._adopt_install()
         self.operation_status = (
@@ -307,6 +398,88 @@ class StartTab(QWidget):
             "Channel-scoped state is loading."
         )
         self.refresh()
+
+    def _set_language_options(self, languages) -> None:
+        normalized = []
+        for value in languages:
+            try:
+                value = installs.normalize_language(value)
+            except ValueError:
+                continue
+            if value not in normalized:
+                normalized.append(value)
+        if self.selected_language not in normalized:
+            normalized.append(self.selected_language)
+        if "english" not in normalized:
+            normalized.append("english")
+        self.available_languages = tuple(sorted(normalized))
+        self.language_selector.blockSignals(True)
+        self.language_selector.clear()
+        for value in self.available_languages:
+            self.language_selector.addItem(value.replace("_", " ").title(), value)
+        self.language_selector.setCurrentIndex(
+            max(0, self.language_selector.findData(self.selected_language))
+        )
+        self.language_selector.blockSignals(False)
+
+    def set_selected_language(self, language: str) -> None:
+        """Select a normalized language through the ordinary scope-change path."""
+
+        selected = installs.normalize_language(language)
+        self._set_language_options((*self.available_languages, selected))
+        self.language_selector.setCurrentIndex(
+            self.language_selector.findData(selected)
+        )
+
+    def discover_languages(self) -> None:
+        install = self.install
+        if install is None:
+            return
+        self._run_operation(
+            "Reading installed languages from the local archive…",
+            lambda token, _reporter: self._discover_languages(install, token),
+            on_success=lambda values: self._languages_discovered(install, values),
+            on_failure=lambda exc: QMessageBox.warning(
+                self, "Could not discover installed languages", str(exc)
+            ),
+        )
+
+    @staticmethod
+    def _discover_languages(install: installs.GameInstall, token) -> tuple[str, ...]:
+        token.checkpoint()
+        values = install.languages()
+        token.checkpoint()
+        return values
+
+    def _languages_discovered(
+        self,
+        install: installs.GameInstall,
+        values: tuple[str, ...],
+    ) -> None:
+        if self._install_key(install) != self._install_key(self.install):
+            return
+        self._set_language_options(values)
+        self.verified_languages = tuple(
+            installs.normalize_language(value) for value in values
+        )
+        self.operation_status = f"Found {len(values):,} installed language(s)."
+        self.refresh()
+
+    def _language_selected(self, index: int) -> None:
+        value = self.language_selector.itemData(index)
+        if not isinstance(value, str):
+            return
+        selected = installs.normalize_language(value)
+        if selected == self.selected_language:
+            return
+        self.selected_language = selected
+        self.languageChanged.emit(selected)
+        self._adopt_install()
+        self.operation_status = (
+            f"Selected {selected}. Language-scoped cache and user wording are loading."
+        )
+        self.refresh()
+        self.scopeStatusChanged.emit()
 
     def choose_game(self) -> None:
         chosen = QFileDialog.getExistingDirectory(
@@ -339,33 +512,46 @@ class StartTab(QWidget):
             self.state.set_contracts(None)
             return
 
-        selected_key = self._install_key(self.install)
+        self._set_language_options(self.available_languages)
+        selected_key = self._selection_key()
         if selected_key != self._contracts_install_key:
             self.state.set_contracts(None)
-        self.state.set_target(self.install.localization())
-        self._pending_cache_install = self.install
+            self.active_language = None
+            self.override_present = False
+        self.state.set_target(self.install.localization(self.selected_language))
+        self._pending_cache_install = (self.install, self.selected_language)
         if not self._jobs:
             self._start_pending_cache_load()
 
     def _start_pending_cache_load(self) -> None:
         if self._shutting_down or self._jobs or self._pending_cache_install is None:
             return
-        install = self._pending_cache_install
+        install, language = self._pending_cache_install
         self._pending_cache_install = None
         job = QtOperationJob(
             lambda token, _reporter: (
                 token.checkpoint(),
-                store.load(install),
+                GameScopeSnapshot(
+                    store.load(install, language),
+                    install.configured_language,
+                    install.localization(language).is_file(),
+                ),
                 token.checkpoint(),
             )[1],
             self,
         )
         self._jobs.add(job)
         self._busy = True
-        self.operation_status = f"Loading the {install.channel} local cache in the background…"
+        self.operation_status = (
+            f"Loading the {install.channel}/{language} local cache in the background…"
+        )
         self.refresh()
-        job.succeeded.connect(lambda cached: self._cache_loaded(install, cached))
-        job.failed.connect(lambda exc: self._cache_load_failed(install, exc))
+        job.succeeded.connect(
+            lambda snapshot: self._cache_loaded(install, language, snapshot)
+        )
+        job.failed.connect(
+            lambda exc: self._cache_load_failed(install, language, exc)
+        )
         job.cancelled.connect(
             lambda: setattr(
                 self, "operation_status", "Cache loading cancelled safely."
@@ -374,27 +560,39 @@ class StartTab(QWidget):
         job.finished.connect(lambda: self._operation_finished(job, None))
         job.start()
 
-    def _cache_loaded(self, install: installs.GameInstall, cached) -> None:
-        if self._install_key(install) != self._install_key(self.install):
+    def _cache_loaded(
+        self,
+        install: installs.GameInstall,
+        language: str,
+        snapshot: GameScopeSnapshot,
+    ) -> None:
+        if self._selection_key(install, language) != self._selection_key():
             return
-        if cached is not None:
-            self.state.set_contracts(cached)
-            self._contracts_install_key = self._install_key(install)
+        self.active_language = snapshot.configured_language
+        self.override_present = snapshot.override_present
+        self._set_language_options(
+            (*self.available_languages, *((snapshot.configured_language,) if snapshot.configured_language else ()))
+        )
+        if snapshot.contracts is not None:
+            self.state.set_contracts(snapshot.contracts)
+            self._contracts_install_key = self._selection_key(install, language)
             self.load_error = None
             self.operation_status = (
-                f"Loaded the verified {install.channel} contract cache in the background."
+                f"Loaded the verified {install.channel}/{language} contract cache in the background."
             )
         else:
             self.operation_status = (
                 f"No current {install.channel} cache was found. Read contracts to build it."
             )
+        self.scopeStatusChanged.emit()
 
     def _cache_load_failed(
         self,
         install: installs.GameInstall,
+        language: str,
         exc: Exception,
     ) -> None:
-        if self._install_key(install) != self._install_key(self.install):
+        if self._selection_key(install, language) != self._selection_key():
             return
         self.load_error = str(exc)
         self.operation_status = f"The {install.channel} cache could not be loaded safely: {exc}"
@@ -410,11 +608,14 @@ class StartTab(QWidget):
             return
 
         install = self.install
+        language = self.selected_language
 
         def loaded(contracts) -> None:
+            if self._selection_key(install, language) != self._selection_key():
+                return
             self.load_error = None
             self.state.set_contracts(contracts)
-            self._contracts_install_key = self._install_key(install)
+            self._contracts_install_key = self._selection_key(install, language)
             self._pending_operation_after = after
             if after is not None:
                 self._continuation_timer.start(0)
@@ -428,6 +629,7 @@ class StartTab(QWidget):
             "Reading your game files…",
             lambda token, reporter: self._load_or_read_contracts(
                 install,
+                language,
                 force=force,
                 token=token,
                 reporter=reporter,
@@ -439,6 +641,7 @@ class StartTab(QWidget):
     @staticmethod
     def _load_or_read_contracts(
         install: installs.GameInstall,
+        language: str,
         *,
         force: bool,
         token,
@@ -446,13 +649,18 @@ class StartTab(QWidget):
     ):
         token.checkpoint()
         if not force:
-            cached = store.load(install)
+            cached = store.load(install, language)
             token.checkpoint()
             if cached is not None:
                 return cached
-        contracts = read_contracts(install, token=token, reporter=reporter)
+        contracts = read_contracts(
+            install,
+            language=language,
+            token=token,
+            reporter=reporter,
+        )
         token.checkpoint()
-        store.save(install, contracts)
+        store.save(install, contracts, language)
         token.checkpoint()
         return contracts
 
@@ -597,6 +805,165 @@ class StartTab(QWidget):
             ),
         )
 
+    def activate_selected_language(self) -> None:
+        install = self.install
+        language = self.selected_language
+        if install is None:
+            return
+        if language not in self.verified_languages:
+            QMessageBox.information(
+                self,
+                "Verify installed languages first",
+                "Use Discover installed languages before changing USER.cfg. "
+                "StarCompanion will not activate an unverified archive language.",
+            )
+            return
+        self._run_operation(
+            "Preparing a safe USER.cfg language plan…",
+            lambda token, _reporter: (
+                token.checkpoint(),
+                plan_language_activation(install, language),
+                token.checkpoint(),
+            )[1],
+            on_success=lambda plan: self._confirm_game_file_plan(
+                install, language, plan
+            ),
+            on_failure=lambda exc: QMessageBox.warning(
+                self, "Could not prepare language activation", str(exc)
+            ),
+        )
+
+    def restore_stock_localization(self) -> None:
+        install = self.install
+        language = self.selected_language
+        if install is None:
+            return
+        if language not in self.verified_languages:
+            QMessageBox.information(
+                self,
+                "Verify installed languages first",
+                "Use Discover installed languages before restoring stock. "
+                "StarCompanion will not remove an override unless matching stock "
+                "localization is verified in the archive.",
+            )
+            return
+        self._run_operation(
+            "Preparing a restore-to-stock plan…",
+            lambda token, _reporter: (
+                token.checkpoint(),
+                plan_restore_stock(install, language),
+                token.checkpoint(),
+            )[1],
+            on_success=lambda plan: self._confirm_game_file_plan(
+                install, language, plan
+            ),
+            on_failure=lambda exc: QMessageBox.warning(
+                self, "Could not prepare restore to stock", str(exc)
+            ),
+        )
+
+    def _game_file_journal(
+        self,
+        plan: GameFilePlan,
+        backup_dir: Path,
+    ) -> TransactionJournal:
+        if plan.target.name.casefold() != "user.cfg":
+            return self._journal()
+        return TransactionJournal(
+            backup_dir / ".usercfg-journal.json",
+            backup_dir / "last-usercfg-operation.json",
+        )
+
+    def _confirm_game_file_plan(
+        self,
+        install: installs.GameInstall,
+        language: str,
+        plan: GameFilePlan,
+    ) -> None:
+        if self._selection_key(install, language) != self._selection_key():
+            self.operation_status = "The selected channel or language changed; the plan was discarded."
+            self.refresh()
+            return
+        if not plan.changed:
+            QMessageBox.information(
+                self,
+                "Nothing to change",
+                "The selected game control file already matches this reviewed outcome.",
+            )
+            return
+        if plan.operation == "activate-language":
+            detail = (
+                f"Language: {language}\nEncoding: {plan.encoding}\n"
+                f"Line endings: {plan.newline}\n\n{plan.summary}"
+            )
+            title = "Activate the selected game language?"
+        else:
+            detail = (
+                f"Language: {language}\nTarget: {plan.target.name}\n\n"
+                f"{plan.summary}\nA verified backup is created first."
+            )
+            title = "Restore stock localization?"
+        if QMessageBox.question(
+            self,
+            title,
+            detail,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        backup_dir = (
+            install.root / "backups"
+            if plan.target.name.casefold() == "user.cfg"
+            else self._backup_directory()
+        )
+        self._pending_game_file_plan = (
+            plan,
+            backup_dir,
+            self._game_file_journal(plan, backup_dir),
+        )
+        self._pending_operation_after = self._commit_pending_game_file_plan
+        self._continuation_timer.start(0)
+
+    def _commit_pending_game_file_plan(self) -> None:
+        pending = self._pending_game_file_plan
+        self._pending_game_file_plan = None
+        if pending is None:
+            return
+        plan, backup_dir, journal = pending
+        self._run_operation(
+            "Applying the reviewed game-file plan…",
+            lambda token, _reporter: (
+                token.checkpoint(),
+                apply_game_file_plan(
+                    plan,
+                    confirmed=True,
+                    backup_dir=backup_dir,
+                    journal=journal,
+                    backup_retention=self.state.profile.injection.backup_retention,
+                ),
+            )[1],
+            on_success=lambda result: self._game_file_plan_applied(plan, result),
+            on_failure=lambda exc: QMessageBox.critical(
+                self,
+                "Could not apply the game-file plan",
+                f"{exc}\n\nUnknown or externally changed state was left untouched.",
+            ),
+        )
+
+    def _game_file_plan_applied(self, plan: GameFilePlan, _result) -> None:
+        if plan.operation == "activate-language":
+            self.active_language = self.selected_language
+        else:
+            self.override_present = False
+        self.operation_status = (
+            "Selected game language activated safely."
+            if plan.operation == "activate-language"
+            else "Loose localization override removed; the game will load stock archive data."
+        )
+        self.refresh()
+        self.scopeStatusChanged.emit()
+        QMessageBox.information(self, "Done", self.operation_status)
+
     def _confirm_prepared_update(self, prepared: PreparedUpdate) -> None:
         if not self._use_prepared_update(prepared):
             prepared.cleanup()
@@ -682,7 +1049,9 @@ class StartTab(QWidget):
             )
 
     def _prepared_update_committed(self, written) -> None:
+        self.override_present = True
         self.refresh()
+        self.scopeStatusChanged.emit()
         QMessageBox.information(
             self,
             "Done",
@@ -718,12 +1087,24 @@ class StartTab(QWidget):
         self.refresh()
 
         job.progress.connect(lambda event: self._show_progress(dialog, event))
-        job.succeeded.connect(lambda value: (dialog.close(), on_success(value)))
-        job.failed.connect(lambda exc: (dialog.close(), on_failure(exc)))
+        job.succeeded.connect(
+            lambda value: (
+                dialog.close(),
+                None if self._shutting_down else on_success(value),
+            )
+        )
+        job.failed.connect(
+            lambda exc: (
+                dialog.close(),
+                None if self._shutting_down else on_failure(exc),
+            )
+        )
         job.cancelled.connect(
             lambda: (
                 dialog.close(),
-                setattr(
+                None
+                if self._shutting_down
+                else setattr(
                     self,
                     "operation_status",
                     "Cancelled safely. Nothing was changed.",
@@ -803,6 +1184,7 @@ class StartTab(QWidget):
         self._discovery_timer.stop()
         self._continuation_timer.stop()
         self._pending_cache_install = None
+        self._pending_game_file_plan = None
         pending_prepared = self._pending_prepared
         self._pending_prepared = None
         self._pending_operation_after = None
@@ -980,13 +1362,22 @@ class StartTab(QWidget):
             "Read my game again" if self.state.contracts else "Read contracts from my game"
         )
 
-        needs_language = self.install is not None and not self.install.language_configured
+        configured_language = self.active_language
+        needs_language = (
+            self.install is not None
+            and configured_language != self.selected_language
+        )
         self.language_warning.setVisible(needs_language)
         if needs_language:
+            verification = (
+                "Use Activate selected language to preview a safe, backup-first change."
+                if self.selected_language in self.verified_languages
+                else "Discover installed languages before activation; unverified names cannot be written."
+            )
             self.language_warning.setText(
-                "Your game needs one setting before it will show custom text.\n"
-                f"Add this line to {self.install.user_cfg.name} in your game folder:\n"
-                f"    g_language = english"
+                f"Selected localization: {self.selected_language}. "
+                f"Active g_language in USER.cfg: {configured_language or 'not configured'}.\n"
+                + verification
             )
 
         self.go.setEnabled(
@@ -996,7 +1387,22 @@ class StartTab(QWidget):
         )
         self.read_button.setEnabled(self.install is not None and not self._busy)
         self.channel_selector.setEnabled(bool(self.installs) and not self._busy)
+        self.language_selector.setEnabled(self.install is not None and not self._busy)
         self.discover_channels_button.setEnabled(not self._busy)
+        self.discover_languages_button.setEnabled(
+            self.install is not None and not self._busy
+        )
+        self.activate_language_button.setEnabled(
+            self.install is not None and needs_language and not self._busy
+            and self.selected_language in self.verified_languages
+        )
+        self.restore_stock_button.setEnabled(
+            self.install is not None
+            and self.state.target is not None
+            and self.override_present
+            and self.selected_language in self.verified_languages
+            and not self._busy
+        )
         self.undo.setEnabled(bool(self.state.backups()))
         self.footer.setText(
             self.operation_status
@@ -1014,11 +1420,13 @@ class StartTab(QWidget):
                 f"Use 'Choose folder…' and pick your LIVE folder."
             )
 
-        modified = " — already has custom text" if self.install.has_override else ""
+        modified = " — selected language has custom text" if self.override_present else ""
         version = f" {self.install.version}" if self.install.version else ""
+        active = self.active_language or "not configured"
         return (
             f"{OK} Found Star Citizen {self.install.channel}{version}{modified}\n"
             f"{self.install.root}\n"
+            f"Selected localization: {self.selected_language}; active game language: {active}.\n"
             f"{self.selection_status or installs.selection_evidence(self.install, self.installs or [self.install])}"
         )
 

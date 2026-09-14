@@ -17,7 +17,7 @@ def build(root: Path) -> tuple[Path, Path]:
     cache_path.write_text(
         json.dumps(
             {
-                "cache_version": 6,
+                "cache_version": 10,
                 "source": "game:LIVE:synthetic:english",
                 "generated": "2026-03-26T17:15:41+00:00",
                 "orgs": {

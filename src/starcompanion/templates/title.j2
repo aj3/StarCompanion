@@ -1,3 +1,7 @@
 {% from "macros.j2" import title_tags, title_prefix %}
 {%- set prefix = title_prefix(contract, opts) -%}
-{{- prefix }}{% if prefix %} {% endif %}{{ base }}{{ title_tags(contract, reward, opts, em) }}
+{%- set fact_tags = opts.title_fact_tags(contract) -%}
+{%- set title_base = opts.mission_title_base(contract, base) -%}
+{%- set mission_suffix = opts.mission_title_suffix(contract) -%}
+{% if fact_tags and opts.tag_builder_placement == "prefix" %}{{ fact_tags }} {% endif -%}
+{{- prefix }}{% if prefix %} {% endif %}{{ title_base }}{{ title_tags(contract, reward, opts, em) }}{% if fact_tags and opts.tag_builder_placement == "suffix" %} {{ fact_tags }}{% endif %}{% if mission_suffix %} {{ mission_suffix }}{% endif %}

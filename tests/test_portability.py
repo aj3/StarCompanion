@@ -82,14 +82,25 @@ def test_preferences_and_language_packs_are_strictly_scoped(tmp_path):
             "ui_schema": 1,
             "last_page": "provenance",
             "link_live_hotfix": False,
+            "simple_mode": True,
+            "tutorial_completed": True,
+            "interface_locale": "fr-FR",
         }
     )
     assert preferences.load()["default_channel"] == "PTU"
     assert preferences.load()["default_language"] == "german_(germany)"
+    assert preferences.load()["simple_mode"] is True
+    assert preferences.load()["interface_locale"] == "fr-FR"
+    preferences.save({"interface_locale": "qps-ploc"})
+    assert preferences.load()["interface_locale"] == "qps-ploc"
     with pytest.raises(PortabilityError, match="non-portable"):
         preferences.save({"last_install_path": "C:/private/game"})
     with pytest.raises(PortabilityError, match="last_page"):
         preferences.save({"last_page": "../../outside"})
+    with pytest.raises(PortabilityError, match="interface_locale"):
+        preferences.save({"interface_locale": "remote"})
+    with pytest.raises(PortabilityError, match="simple_mode"):
+        preferences.save({"simple_mode": "yes"})
 
     live_en = LanguagePackStore("LIVE", "english", data)
     live_fr = LanguagePackStore("LIVE", "french", data)
