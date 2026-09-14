@@ -1,8 +1,8 @@
 """Design tokens and the stylesheet built from them.
 
 Every colour, space and radius in the interface comes from here. Widget code
-never names a colour, so the two themes cannot drift apart: there is **one**
-stylesheet generator and two palettes fed through it.
+never names a colour, so the themes cannot drift apart: there is **one**
+stylesheet generator and four palettes fed through it.
 
 The dark palette is the intended look -- near-black blue-greys, a single cyan
 accent, amber reserved for warnings and a desaturated red for danger. The light
@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, fields
 from typing import Literal
 
-ThemeName = Literal["dark", "light"]
+ThemeName = Literal["dark", "light", "midnight", "high-contrast"]
 DEFAULT_THEME: ThemeName = "dark"
 
 
@@ -128,7 +128,60 @@ LIGHT = Palette(
     focus="#12787c",
 )
 
-PALETTES: dict[str, Palette] = {"dark": DARK, "light": LIGHT}
+MIDNIGHT = Palette(
+    name="midnight",
+    canvas="#080d1a",
+    surface="#10182a",
+    surface_raised="#17233a",
+    surface_hover="#20304d",
+    border="#38506f",
+    border_strong="#6684a8",
+    text="#f1f5ff",
+    text_muted="#b5c3d8",
+    text_inverted="#07111b",
+    accent="#6cc8ff",
+    accent_hover="#91d7ff",
+    accent_muted="#244f70",
+    success="#66d59a",
+    warning="#f3ba63",
+    danger="#ff7a75",
+    danger_hover="#ff9a96",
+    focus="#ffd166",
+)
+
+HIGH_CONTRAST = Palette(
+    name="high-contrast",
+    canvas="#000000",
+    surface="#0a0a0a",
+    surface_raised="#151515",
+    surface_hover="#252525",
+    border="#777777",
+    border_strong="#bdbdbd",
+    text="#ffffff",
+    text_muted="#d0d0d0",
+    text_inverted="#000000",
+    accent="#00ffff",
+    accent_hover="#aaffff",
+    accent_muted="#005f5f",
+    success="#70ff9f",
+    warning="#ffd75f",
+    danger="#ff7b7b",
+    danger_hover="#ffaaaa",
+    focus="#ffff00",
+)
+
+THEME_ORDER: tuple[ThemeName, ...] = (
+    "dark",
+    "light",
+    "midnight",
+    "high-contrast",
+)
+PALETTES: dict[str, Palette] = {
+    "dark": DARK,
+    "light": LIGHT,
+    "midnight": MIDNIGHT,
+    "high-contrast": HIGH_CONTRAST,
+}
 
 COLOUR_TOKENS = tuple(f.name for f in fields(Palette) if f.name != "name")
 
@@ -440,6 +493,10 @@ QPushButton[role="compact"] {{
 QPushButton[role="compact"]:hover {{
     color: {colours.text};
     border-color: {colours.accent_muted};
+}}
+
+QWidget[coachTarget="true"] {{
+    border: 3px solid {colours.focus};
 }}
 
 /* --- tabs ------------------------------------------------------------- */

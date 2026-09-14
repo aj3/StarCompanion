@@ -16,6 +16,7 @@ from starcompanion.gui.app import MainWindow
 from starcompanion.gui.theme import DARK
 from starcompanion.ini import BOM
 from starcompanion.model import BlueprintPool, Contract, ContractSet, Org, Reward
+from starcompanion.portability import PreferencesStore
 from starcompanion.sources import contracts_ini
 
 
@@ -33,6 +34,9 @@ def main() -> int:
         os.environ["STARCOMPANION_EXPERT"] = "1"
     install.find_default = lambda: None
     install.find_installs = lambda **_kwargs: []
+    PreferencesStore(Path(os.environ["STARCOMPANION_DATA"])).save(
+        {"tutorial_completed": True}
+    )
     app = QApplication([])
     window = MainWindow()
     if page in ("templates", "string-editor", "manual-apply"):

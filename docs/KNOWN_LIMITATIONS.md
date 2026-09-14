@@ -41,9 +41,10 @@
 - Frozen Windows and Ubuntu artifacts are built independently because native
   PyInstaller executables are not cross-platform. Ubuntu CI verifies its own
   artifact; desktop integration is not promised for every Linux distribution.
-- The GUI is localized in English. Installed Star Citizen localization
-  languages remain strictly isolated and supported as local data sources, but
-  application-interface translation is deferred.
+- The GUI is English-first. A strict offline catalog, independent locale
+  preference, and French shell preview are present, but complete feature-page
+  translations require native-language review. Installed Star Citizen
+  languages remain strictly isolated local data sources.
 - Structured wording labels are intentionally limited to 48 trimmed plain-text
   characters. Markup, escapes, controls, and bidirectional overrides are
   rejected; use the explicitly enabled sandboxed template editor only when the

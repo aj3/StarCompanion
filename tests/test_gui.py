@@ -218,7 +218,7 @@ def test_ui_preferences_migrate_and_preserve_other_portable_settings(qapp, tmp_p
 
     assert loaded.warning is None
     assert loaded.preferences.theme == "light"
-    assert stored["ui_schema"] == 2
+    assert stored["ui_schema"] == 3
     assert stored["last_page"] == "overview"
     assert stored["link_live_hotfix"] is True
     assert stored["default_channel"] == "LIVE"
@@ -278,6 +278,93 @@ def test_theme_toggle_persists_without_mutating_output_profile(qapp, tmp_path):
 
     assert PreferencesStore(root).load()["theme"] == "light"
     assert fresh.state.profile.appearance.theme == profile_theme
+
+
+def test_all_four_interface_themes_are_selectable_and_portable(qapp, tmp_path):
+    from starcompanion.gui.preferences import UiPreferencesStore
+
+    root = tmp_path / "preferences"
+    fresh = MainWindow(ui_preferences_store=UiPreferencesStore(root))
+
+    fresh.select_theme("high-contrast")
+
+    assert fresh.ui_preferences.theme == "high-contrast"
+    assert PreferencesStore(root).load()["theme"] == "high-contrast"
+    assert fresh.state.profile.appearance.theme == "dark"
+
+
+def test_simple_mode_is_persistent_and_confines_navigation_to_two_action_overview(
+    qapp, tmp_path
+):
+    from starcompanion.gui.preferences import UiPreferencesStore
+
+    root = tmp_path / "preferences"
+    fresh = MainWindow(ui_preferences_store=UiPreferencesStore(root))
+    fresh.shell.set_current_key("string-editor")
+    fresh.set_simple_mode(True)
+
+    assert fresh.shell.current_key() == "overview"
+    assert fresh.start.game_step.isHidden()
+    assert fresh.start.contract_step.isHidden()
+    assert fresh.start.data_step.isHidden()
+    assert fresh.start.look_step.isHidden()
+    assert not fresh.shell.set_current_key("string-editor")
+    assert sum(button.isHidden() for button in fresh.shell._nav_buttons[1:]) == 8
+    assert PreferencesStore(root).load()["simple_mode"] is True
+
+    fresh.shell._activate_navigation(1)
+    assert fresh.shell.current_key() == "overview"
+    fresh.set_simple_mode(False)
+    assert fresh.shell.set_current_key("string-editor")
+
+
+def test_interface_locale_is_offline_portable_and_independent_from_game_language(
+    qapp, tmp_path
+):
+    from starcompanion.gui.preferences import UiPreferencesStore
+
+    root = tmp_path / "preferences"
+    fresh = MainWindow(ui_preferences_store=UiPreferencesStore(root))
+    game_language = fresh.start.selected_language
+
+    fresh.set_interface_locale("fr-FR")
+
+    assert fresh.shell._nav_buttons[0].text() == "Aperçu"
+    assert fresh.start.selected_language == game_language
+    assert PreferencesStore(root).load()["interface_locale"] == "fr-FR"
+
+
+def test_guided_tour_is_replayable_and_completion_is_portable(qapp, tmp_path):
+    from starcompanion.gui.preferences import UiPreferencesStore
+
+    root = tmp_path / "preferences"
+    fresh = MainWindow(ui_preferences_store=UiPreferencesStore(root))
+    fresh.start_guided_tour()
+    tour = fresh._tour
+    assert tour is not None and tour.isVisible()
+    assert tour.progress.text().startswith("STEP 1 OF")
+    tour.finish()
+    qapp.processEvents()
+
+    assert PreferencesStore(root).load()["tutorial_completed"] is True
+    fresh.start_guided_tour()
+    assert fresh._tour is not None
+    target = fresh._tour.steps[0].target
+    fresh._tour.reject()
+    assert target.property("coachTarget") is False
+
+
+def test_event_viewer_filters_bounded_redacted_records(window):
+    window.events.publish("warning", "archive-review-warning", "safe aggregate")
+    window.events.publish("info", "workspace-ready")
+    window.support.event_level.setCurrentIndex(
+        window.support.event_level.findData("warning")
+    )
+
+    text = window.support.event_view.toPlainText()
+    assert "archive-review-warning" in text
+    assert "workspace-ready" not in text
+    assert window.support.export_events_button.isEnabled()
 
 
 def test_last_navigation_page_round_trips(qapp, tmp_path):
@@ -812,6 +899,8 @@ def test_target_page_controls_have_screen_reader_names_and_descriptions(window):
         window.support.profile_builtin,
         window.support.profile_open,
         window.support.profile_save,
+        window.support.interface_language,
+        window.support.replay_tour_button,
         window.support.settings_preview,
         window.support.choose_data_location_button,
         window.support.portable_mode_button,
@@ -820,6 +909,10 @@ def test_target_page_controls_have_screen_reader_names_and_descriptions(window):
         window.support.import_settings_button,
         window.support.apply_settings_button,
         window.support.recover_settings_button,
+        window.support.event_level,
+        window.support.event_view,
+        window.support.clear_events_button,
+        window.support.export_events_button,
         window.support.diagnostics_view,
         window.support.build_diagnostics_button,
         window.support.export_diagnostics_button,
@@ -2556,8 +2649,9 @@ def test_g2_settings_import_is_preview_first_then_reloads_verified_preferences(
         {
             "theme": "light",
             "ui_schema": 1,
-            "last_page": "support",
-            "default_language": "french",
+                "last_page": "support",
+                "default_language": "french",
+                "interface_locale": "fr-FR",
         }
     )
     archive = tmp_path / "incoming.zip"
@@ -2592,6 +2686,7 @@ def test_g2_settings_import_is_preview_first_then_reloads_verified_preferences(
 
     assert window.ui_preferences.theme == "light"
     assert window.start.selected_language == "french"
+    assert window.support.interface_language.currentData() == "fr-FR"
     assert window.support._import_plan is None
     assert load_threads and all(thread is not qapp.thread() for thread in load_threads)
 

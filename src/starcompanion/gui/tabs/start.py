@@ -150,11 +150,14 @@ class StartTab(QWidget):
         cards.setVerticalSpacing(16)
         cards.setColumnStretch(0, 1)
         cards.setColumnStretch(1, 1)
-        cards.addWidget(self._build_game_step(), 0, 0)
-        cards.addWidget(self._build_contract_step(), 0, 1)
+        self.game_step = self._build_game_step()
+        self.contract_step = self._build_contract_step()
+        cards.addWidget(self.game_step, 0, 0)
+        cards.addWidget(self.contract_step, 0, 1)
         self.data_step = self._build_data_step()
         cards.addWidget(self.data_step, 1, 0)
-        cards.addWidget(self._build_look_step(), 1, 1)
+        self.look_step = self._build_look_step()
+        cards.addWidget(self.look_step, 1, 1)
         layout.addLayout(cards)
 
         layout.addStretch(1)
@@ -181,6 +184,17 @@ class StartTab(QWidget):
         state.userOverridesChanged.connect(self.refresh)
         self._discovery_timer.start(0)
         self.refresh()
+
+    def set_simple_mode(self, enabled: bool) -> None:
+        """Show only the existing safe Update and Undo workflow."""
+
+        for card in (
+            self.game_step,
+            self.contract_step,
+            self.data_step,
+            self.look_step,
+        ):
+            card.setVisible(not enabled)
 
     # --- step 1: the game ----------------------------------------------------
 

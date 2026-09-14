@@ -36,6 +36,9 @@ PREFERENCE_KEYS = frozenset(
         "ui_schema",
         "last_page",
         "link_live_hotfix",
+        "simple_mode",
+        "tutorial_completed",
+        "interface_locale",
     }
 )
 
@@ -124,12 +127,18 @@ def validate_preferences(value: object) -> dict[str, object]:
         raise PortabilityError("profile must be a portable profile name, not a path")
     if result.get("merge_mode") not in (None, "merge", "overwrite"):
         raise PortabilityError("merge_mode must be merge or overwrite")
-    if result.get("theme") not in (None, "light", "dark"):
-        raise PortabilityError("theme must be light or dark")
-    if "ui_schema" in result and (
-        type(result["ui_schema"]) is not int or result["ui_schema"] not in {1, 2}
+    if result.get("theme") not in (
+        None,
+        "light",
+        "dark",
+        "midnight",
+        "high-contrast",
     ):
-        raise PortabilityError("ui_schema must be 1 or 2")
+        raise PortabilityError("theme is not a supported interface palette")
+    if "ui_schema" in result and (
+        type(result["ui_schema"]) is not int or result["ui_schema"] not in {1, 2, 3}
+    ):
+        raise PortabilityError("ui_schema must be 1, 2, or 3")
     if "last_page" in result and (
         not isinstance(result["last_page"], str)
         or not result["last_page"]
@@ -142,6 +151,13 @@ def validate_preferences(value: object) -> dict[str, object]:
         raise PortabilityError("last_page must be a portable interface page key")
     if "link_live_hotfix" in result and type(result["link_live_hotfix"]) is not bool:
         raise PortabilityError("link_live_hotfix must be true or false")
+    for key in ("simple_mode", "tutorial_completed"):
+        if key in result and type(result[key]) is not bool:
+            raise PortabilityError(f"{key} must be true or false")
+    if "interface_locale" in result:
+        locale = result["interface_locale"]
+        if not isinstance(locale, str) or locale not in {"en-US", "fr-FR"}:
+            raise PortabilityError("interface_locale is not a bundled locale")
     return result
 
 

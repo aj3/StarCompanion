@@ -99,7 +99,7 @@ does not execute or silently download either project's code or generated data.
 | Reference outcome | StarCompanion status | Evidence or remaining work |
 |---|---|---|
 | Guided install/channel onboarding | **Complete** | Overview discovers channels in a worker and explains readiness, trust, and next actions. |
-| Two-button simple mode | **Partial** | Overview is the simplified workflow, but G7 still needs a dedicated minimal mode. |
+| Two-button simple mode | **Complete** | G7 hides all detailed cards/pages and disables their shortcuts, leaving the existing Update and Undo actions plus a persistent exit to Full mode. |
 | Backup browser and guarded restore | **Complete** | Target-scoped listing, fingerprint recheck, recovery backup, journal, and final verification. |
 | Portable settings backup | **Safe equivalent** | Manifest- and SHA-256-verified ZIP for portable preferences and edits. Ownership has its own explicit JSON/CSV transfer instead of leaking into a general settings bundle. |
 | Portable ZIP mode with beside-executable data | **Complete** | Packaged builds can preview and activate a fixed beside-executable marker/data root; installed defaults remain unchanged and cache is rebuilt locally. |
@@ -108,10 +108,10 @@ does not execute or silently download either project's code or generated data.
 | Searchable offline FAQ/help and privacy explanation | **Complete** | Bundled help plus redacted diagnostics preview/export. |
 | Unsaved-change warning on close | **Complete** | G7 offers save/discard/cancel, flushes pending debounced text before background save, and leaves the window open on save failure. |
 | Active-localization indication | **Complete** | The persistent shell context and Overview warning show selected language, effective `g_language`, and stock/custom override state. |
-| Replayable coach-mark tutorial | **Planned** | G7 adds this only after the final workflow and controls stabilize. |
-| Redacted real-time application log viewer | **Planned** | Diagnostics exist; G7 adds a bounded in-memory event log with level filter and redacted export. |
-| Localized application interface | **Planned** | Game-language handling exists; G7 bundles and reviews UI translations rather than fetching them silently. |
-| Four visual themes | **Partial** | Accessible dark and light themes exist; G7 adds two reviewed variants without weakening contrast/focus gates. |
+| Replayable coach-mark tutorial | **Complete** | A non-modal focus/navigation tour is replayable from Help and Settings; completion is portable and no tour step reads or writes data. |
+| Redacted real-time application log viewer | **Complete** | A 500-record local ring accepts fixed events, filters levels, redacts identifiers, caps details/exports, and explicitly excludes raw logs, strings, ownership, and exception text. |
+| Localized application interface | **Partial** | G7 now has strict complete offline catalogs, English fallback, an independent portable locale, and a French shell preview. Full feature-page translations require separate native-language review. |
+| Four visual themes | **Complete** | Dark, Light, Midnight, and High Contrast share one semantic stylesheet and all pass text/focus contrast gates. |
 | High-DPI, keyboard, focus, contrast, and screen-reader coverage | **Complete** | Structural screenshots at 100/150/200 percent and accessibility regressions. |
 | Windows installer and signed release path | **Partial** | Reproducible Windows/Linux artifacts and SignPath-ready signing workflow exist; certificate approval/signing remains an external release condition. |
 
@@ -152,9 +152,10 @@ localization key.
 4. **G7 — Experience parity (active):** language selection/activation,
    restore-to-stock, portable/custom data roots, synchronization warnings,
    filtered clipboard export, close protection, active-localization context,
-   category toggles, and stat placement are complete. Dedicated simple mode,
-   localized UI, coach marks, a redacted event viewer, and two optional themes
-   remain separately tracked.
+   category toggles, stat placement, dedicated simple mode, coach marks, a
+   redacted event viewer, and four themes are complete. The strict offline
+   localization architecture and French shell preview are complete; full
+   native-reviewed feature-page translation remains separately tracked.
 
 G4 began only after G3's complete local and hosted gate was green. G5 must not
 start until G4's complete local gate and review are green. Later phases may

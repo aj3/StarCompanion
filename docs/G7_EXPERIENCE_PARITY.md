@@ -61,11 +61,34 @@ explicit concurrency warning.
 - Typed stat-block placement supports only `above` or `below`; rendered values
   still pass the existing validator.
 
+## Focused and accessible experience
+
+- Dedicated Simple mode hides every detailed page and Overview card, leaving
+  the existing Update and Undo actions. Hidden navigation and shortcuts are
+  disabled, while the persistent Full mode button always provides an exit.
+- A replayable non-modal coach tour moves only navigation and keyboard focus.
+  Completion is a portable interface preference; the tour never
+  starts extraction, changes a profile, or writes a game file.
+- Dark, Light, Midnight, and High Contrast palettes share the same semantic
+  stylesheet. Every text/surface pair and focus ring passes the existing WCAG
+  regression matrix.
+- The event viewer is a 500-record in-memory ring. It accepts only fixed event
+  keys and levels, redacts usernames, paths, email addresses, long tokens, and
+  controls, and caps each detail and the JSON export. Raw exceptions, game
+  logs, game strings, ownership, and user-authored values never enter it.
+- The offline interface-localization layer validates complete bounded catalogs,
+  falls back to bundled English, performs no discovery or download, and stays
+  independent from the selected game language. English is complete; the French
+  shell preview proves live catalog switching while full feature-page translation
+  remains a separately reviewed content task.
+
 ## Verification boundary
 
 Synthetic tests cover hostile control-file encodings, external replacement,
 crash recovery after intended deletion, migration conflicts and link insertion,
 clipboard formula injection, channel/language isolation, accessibility metadata,
-close cancellation, and 100/150/200-percent structural screenshots. No local
+close cancellation, event redaction/caps, catalog completeness, simple-mode
+navigation confinement, four-theme contrast, and 100/150/200-percent structural
+screenshots. No local
 game strings, logs, ownership data, absolute diagnostics paths, or signing
 material are committed.

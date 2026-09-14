@@ -104,6 +104,13 @@ settings, custom or packaged beside-executable data roots, synchronization
 warnings, inspect-before-export redacted diagnostics, and bundled searchable
 offline guidance.
 
+Simple mode reduces the visible workspace to the existing backup-first Update
+and Undo actions; Full mode restores every detailed page. A replayable guided
+tour changes only navigation and focus. The interface includes Dark, Light,
+Midnight, and High Contrast palettes plus a strict offline localization layer.
+The bounded event viewer stores only redacted application events—not game logs,
+game strings, ownership, or authored values.
+
 ### The command line
 
 ```bash
@@ -385,12 +392,11 @@ explicit opt-ins nobody meets by accident.
 
 ## Current limitations
 
-- The application interface and generated enhancement templates are English
-  only. Installed game languages are discovered, visibly selected, isolated,
-  and activated safely without a network source. Application-interface
-  translation remains future G7 work.
-- Richer entity stat blocks, the optional simple mode, coach marks, a redacted
-  event viewer, and two additional themes remain tracked in the parity ledger.
+- The application interface is English-first. Its strict offline catalog and
+  French shell preview are independent from installed game languages; full
+  native-reviewed feature-page translation remains.
+- Richer entity stat blocks and remaining legacy presentation rules remain
+  tracked in the parity ledger.
 
 The reviewed Smart Citizen v2.3.1 and current legacy StarStrings outcomes,
 including every known remaining gap and its assigned phase, are tracked in

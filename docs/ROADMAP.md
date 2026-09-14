@@ -55,7 +55,10 @@ exact-build legacy mining pack. All presentation features remain default-off.
 [G6_PRESENTATION.md](G6_PRESENTATION.md) record those contracts. G7's first
 slice adds visible language activation, safe `USER.cfg` and restore-to-stock
 plans, portable/custom data roots, bounded filtered clipboard export,
-unsaved-close protection, category controls, and stat-block placement; see
+unsaved-close protection, category controls, and stat-block placement. Its
+second slice adds dedicated Simple mode, a bounded redacted event viewer,
+replayable coach marks, four accessible themes, and a strict offline interface
+catalog with a French shell preview; see
 [G7_EXPERIENCE_PARITY.md](G7_EXPERIENCE_PARITY.md). **Sprint G4 — Ownership and Editor Completion**
 is complete: revision-bound manual ownership, complete
 tracker operations, exact foreign-name repair, ownership-aware rendering,
