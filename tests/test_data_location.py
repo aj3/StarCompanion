@@ -13,6 +13,14 @@ from starcompanion.data_location import (
 )
 
 
+@pytest.fixture(autouse=True)
+def isolate_platform_data_root(tmp_path, monkeypatch):
+    """Keep bootstrap state inside each test on Windows and POSIX."""
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
+
+
 def test_environment_root_has_priority_and_is_validated(tmp_path, monkeypatch):
     selected = tmp_path / "selected"
     monkeypatch.setenv("STARCOMPANION_DATA", str(selected))
